@@ -1,0 +1,11 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Temporary
+tmp/
+temp/
+
+# Build output
+dist/
