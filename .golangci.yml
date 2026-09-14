@@ -6,34 +6,126 @@ run:
 linters:
   default: none
   enable:
+    # Core correctness.
     - govet
     - errcheck
     - ineffassign
     - staticcheck
     - unused
     - modernize
-    - bodyclose
-    - godoclint
-    - godot
+    - gocritic
+    - gocheckcompilerdirectives
+    - forcetypeassert
+    - predeclared
+    - unconvert
+    - wastedassign
+    - copyloopvar
+    - mirror
+    - bidichk
+
+    # Error handling.
     - errorlint
     - nilerr
     - nilnesserr
+    - nilnil
+    - errname
+    - wrapcheck
+
+    # Context propagation.
+    - noctx
+    - contextcheck
+    - containedctx
+    - fatcontext
+
+    # HTTP clients and servers.
+    - bodyclose
+    - canonicalheader
+    - nosprintfhostport
+    - usestdlibvars
+
+    # JSON encoding and API payloads.
+    - musttag
+    - errchkjson
+
+    # Security: os/exec, files, crypto, network.
+    - gosec
+
+    # Logging.
+    - sloglint
+    - loggercheck
+
+    # Performance.
+    - perfsprint
     - durationcheck
     - makezero
-    - noctx
+
+    # Style, documentation and text.
+    - godoclint
+    - godot
+    - goconst
+    - recvcheck
+    - reassign
+    - misspell
+    - dupword
     - nolintlint
-    - sloglint
+
+    # Tests.
+    - usetesting
+
+    # Dependency guardrails.
+    - depguard
   settings:
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: io/ioutil$
+              desc: use the os and io packages instead
+            - pkg: log$
+              desc: use log/slog instead
+            - pkg: math/rand$
+              desc: use math/rand/v2 instead
+            - pkg: github.com/pkg/errors
+              desc: use the standard errors and fmt packages instead
+            - pkg: github.com/sirupsen/logrus
+              desc: use log/slog instead
+            - pkg: go.uber.org/zap
+              desc: use log/slog instead
+            - pkg: github.com/rs/zerolog
+              desc: use log/slog instead
+
+    goconst:
+      # Test data is often intentionally repeated literal strings.
+      ignore-tests: true
+
+    misspell:
+      locale: US
+
     nolintlint:
-      # Enable to require an explanation of nonzero length after each nolint directive.
+      # Require an explanation of nonzero length after each nolint directive.
       require-explanation: true
-      settings:
+      # Require nolint directives to mention the specific linter being suppressed.
+      require-specific: true
+      # Report nolint directives that are no longer needed.
+      allow-unused: false
+
+    recvcheck:
+      # Keep the built-in exclusions (MarshalJSON, UnmarshalJSON, GobEncode, ...)
+      # so encoding/json and friends do not force inconsistent receivers.
+      disable-builtin: false
+
     sloglint:
       context: "all"
       msg-style: "lowercased"
       key-naming-case: "snake"
       static-msg: true
       attr-only: true
+
+    usestdlibvars:
+      # Prefer http.MethodGet, http.StatusOK, time.DateOnly, etc.
+      http-method: true
+      http-status-code: true
+      time-layout: true
 
 formatters:
   enable:
@@ -46,3 +138,8 @@ formatters:
         group-params: true
         clothe-returns: true
         balance-calls: true
+    goimports:
+      local-prefixes:
+        - github.com/varavelio/rienda
+    golines:
+      max-len: 100
