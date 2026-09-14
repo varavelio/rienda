@@ -1,0 +1,41 @@
+{
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "target": "devcontainer"
+  },
+  "remoteUser": "root",
+  "postCreateCommand": "bash ./.devcontainer/post-create.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "dprint.dprint"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "dprint.dprint",
+
+        "[go]": {
+          "editor.defaultFormatter": "golang.go"
+        },
+        "go.useLanguageServer": true,
+        "go.testFlags": ["-v"],
+
+        // https://golangci-lint.run/docs/welcome/integrations/#visual-studio-code
+        "go.lintTool": "golangci-lint",
+        "go.lintFlags": [
+          "--path-mode=abs",
+          "--fast-only"
+        ],
+        "go.formatTool": "custom",
+        "go.alternateTools": {
+          "customFormatter": "golangci-lint"
+        },
+        "go.formatFlags": [
+          "fmt",
+          "--stdin"
+        ]
+      }
+    }
+  }
+}
