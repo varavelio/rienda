@@ -25,8 +25,9 @@ type Message struct {
 
 // ReasoningConfig controls the reasoning effort of a model that supports it.
 type ReasoningConfig struct {
-	// Effort selects a named reasoning level (for example "low", "medium" or
-	// "high") for providers with effort-based APIs.
+	// Effort selects a named reasoning level for providers with effort-based
+	// APIs, for example "minimal", "low", "medium" or "high". The accepted
+	// values are provider and model specific.
 	Effort string
 
 	// BudgetTokens reserves a token budget for reasoning for providers with
@@ -50,7 +51,8 @@ const (
 
 // ToolChoice constrains tool usage for a request.
 type ToolChoice struct {
-	// Mode selects how the model may use the declared tools.
+	// Mode selects how the model may use the declared tools. The zero value
+	// behaves like ToolChoiceAuto.
 	Mode ToolChoiceMode
 
 	// ToolName selects the tool when Mode is ToolChoiceTool.
@@ -65,8 +67,13 @@ type Tool struct {
 	// Description explains what the tool does and when the model should use it.
 	Description string
 
-	// Parameters holds the JSON Schema describing the tool arguments.
+	// Parameters holds the JSON Schema describing the tool arguments. Tools
+	// that take no arguments declare an empty schema object ("{}").
 	Parameters json.RawMessage
+
+	// Strict asks the provider to enforce strict JSON Schema adherence for the
+	// tool arguments. Support depends on the provider and model.
+	Strict bool
 }
 
 // Request is a provider-neutral generation request.
@@ -85,6 +92,10 @@ type Request struct {
 
 	// ToolChoice is nil for the provider default behavior.
 	ToolChoice *ToolChoice
+
+	// ParallelToolCalls allows the model to request several tool calls in one
+	// turn. It is nil to leave the provider default untouched.
+	ParallelToolCalls *bool
 
 	// MaxTokens caps generated tokens. Some providers require it; a zero
 	// value lets the provider client apply its own default.

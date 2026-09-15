@@ -10,6 +10,9 @@ const (
 	BlockText BlockType = "text"
 	// BlockThinking carries model reasoning in Thinking and ThinkingSignature.
 	BlockThinking BlockType = "thinking"
+	// BlockRedactedThinking carries provider-redacted reasoning in
+	// ThinkingRedactedData. The data is opaque and must be replayed verbatim.
+	BlockRedactedThinking BlockType = "redacted_thinking"
 	// BlockToolCall represents a model request to invoke a tool.
 	// ToolCallID, ToolCallName and ToolCallArguments are populated.
 	BlockToolCall BlockType = "tool_call"
@@ -36,6 +39,10 @@ type Block struct {
 	// others (for example OpenAI Responses) when the block is sent back in
 	// a later turn.
 	ThinkingSignature string
+
+	// ThinkingRedactedData holds the opaque provider data of a
+	// BlockRedactedThinking block.
+	ThinkingRedactedData string
 
 	// ToolCallID is the provider-assigned identifier of a BlockToolCall.
 	ToolCallID string

@@ -11,6 +11,9 @@ const (
 	// StreamThinkingDelta carries incremental reasoning in Thinking, with the
 	// latest provider signature fragment in ThinkingSignature when available.
 	StreamThinkingDelta StreamEventType = "thinking_delta"
+	// StreamThinkingRedacted carries the opaque data of a redacted reasoning
+	// block in ThinkingRedactedData.
+	StreamThinkingRedacted StreamEventType = "thinking_redacted"
 	// StreamToolCallStart announces a new tool call. ToolCallID and ToolCallName
 	// are populated.
 	StreamToolCallStart StreamEventType = "tool_call_start"
@@ -37,8 +40,10 @@ type StreamEvent struct {
 
 	// Thinking carries StreamThinkingDelta fragments. ThinkingSignature carries
 	// the latest provider signature fragment when the provider streams one.
-	Thinking          string
-	ThinkingSignature string
+	// ThinkingRedactedData carries the data of a StreamThinkingRedacted event.
+	Thinking             string
+	ThinkingSignature    string
+	ThinkingRedactedData string
 
 	// ToolCallID identifies the tool call for StreamToolCallStart and
 	// StreamToolCallArgsDelta events. ToolCallName names the call on start and

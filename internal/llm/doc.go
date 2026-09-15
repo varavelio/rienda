@@ -5,6 +5,7 @@
 //
 // Field naming follows the role each field plays, so a flat struct stays
 // self-describing: fields of a tool call are prefixed ToolCall, fields of a
-// tool result are prefixed ToolResult, and fields describing a tool definition
-// are prefixed Tool only (for example Tool.Name).
+// tool result are prefixed ToolResult, fields of a thinking block are prefixed
+// Thinking, and fields describing a tool definition are prefixed Tool only
+// (for example Tool.Name).
 package llm
