@@ -21,7 +21,6 @@ type frontmatter struct {
 	Temperature           *float64 `yaml:"temperature"`
 	TopP                  *float64 `yaml:"top_p"`
 	MaxTokens             int      `yaml:"max_tokens"`
-	Stop                  []string `yaml:"stop"`
 	ReasoningEffort       string   `yaml:"reasoning_effort"`
 	ReasoningBudgetTokens int      `yaml:"reasoning_budget_tokens"`
 }
@@ -65,7 +64,6 @@ func Parse(id string, data []byte) (Agent, error) {
 		Temperature:           meta.Temperature,
 		TopP:                  meta.TopP,
 		MaxTokens:             meta.MaxTokens,
-		Stop:                  meta.Stop,
 		ReasoningEffort:       meta.ReasoningEffort,
 		ReasoningBudgetTokens: meta.ReasoningBudgetTokens,
 		SystemPrompt:          strings.TrimSpace(string(body)),
@@ -128,13 +126,6 @@ func (m *frontmatter) normalize() error {
 	}
 	if m.MaxTokens < 0 {
 		return fmt.Errorf("max_tokens %d must not be negative", m.MaxTokens)
-	}
-
-	for i, stop := range m.Stop {
-		m.Stop[i] = strings.TrimSpace(stop)
-		if m.Stop[i] == "" {
-			return errors.New("stop must not contain empty sequences")
-		}
 	}
 
 	m.ReasoningEffort = strings.ToLower(strings.TrimSpace(m.ReasoningEffort))

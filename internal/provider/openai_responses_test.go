@@ -78,7 +78,6 @@ func TestOpenAIResponsesGenerate(t *testing.T) {
 			ToolChoice:        &llm.ToolChoice{Mode: llm.ToolChoiceRequired},
 			ParallelToolCalls: &parallel,
 			Tools:             []llm.Tool{{Name: "read", Description: "Read a file", Strict: true}},
-			StopSequences:     []string{"END"},
 			Messages: []llm.Message{
 				{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Read a.go"}}},
 				{Role: llm.RoleAssistant, Blocks: []llm.Block{
@@ -133,7 +132,6 @@ func TestOpenAIResponsesGenerate(t *testing.T) {
 				},
 			},
 		}, fixture.requestBody)
-		require.NotContains(t, fixture.requestBody, "stop")
 		require.Equal(t, &llm.Response{
 			ID:    "resp_1",
 			Model: "gpt-test",

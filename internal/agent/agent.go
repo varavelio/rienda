@@ -44,9 +44,6 @@ type Agent struct {
 	// MaxTokens overrides the response token limit when greater than zero.
 	MaxTokens int
 
-	// Stop holds the sequences that end generation.
-	Stop []string
-
 	// ReasoningEffort selects the reasoning effort level, empty when the
 	// agent leaves it to the model default.
 	ReasoningEffort string

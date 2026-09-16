@@ -94,17 +94,16 @@ func (c *anthropicClient) Stream(ctx context.Context, req *llm.Request) (llm.Str
 
 // anthropicRequest is the wire payload for POST /v1/messages.
 type anthropicRequest struct {
-	Model         string               `json:"model"`
-	MaxTokens     int                  `json:"max_tokens"`
-	System        string               `json:"system,omitempty"`
-	Messages      []anthropicMessage   `json:"messages"`
-	Tools         []anthropicTool      `json:"tools,omitempty"`
-	ToolChoice    *anthropicToolChoice `json:"tool_choice,omitempty"`
-	Temperature   *float64             `json:"temperature,omitempty"`
-	TopP          *float64             `json:"top_p,omitempty"`
-	StopSequences []string             `json:"stop_sequences,omitempty"`
-	Thinking      *anthropicThinking   `json:"thinking,omitempty"`
-	Stream        bool                 `json:"stream,omitempty"`
+	Model       string               `json:"model"`
+	MaxTokens   int                  `json:"max_tokens"`
+	System      string               `json:"system,omitempty"`
+	Messages    []anthropicMessage   `json:"messages"`
+	Tools       []anthropicTool      `json:"tools,omitempty"`
+	ToolChoice  *anthropicToolChoice `json:"tool_choice,omitempty"`
+	Temperature *float64             `json:"temperature,omitempty"`
+	TopP        *float64             `json:"top_p,omitempty"`
+	Thinking    *anthropicThinking   `json:"thinking,omitempty"`
+	Stream      bool                 `json:"stream,omitempty"`
 }
 
 // anthropicMessage is a single wire conversation turn.
@@ -236,7 +235,6 @@ func anthropicRequestFrom(req *llm.Request, stream bool) (*anthropicRequest, err
 		wire.Temperature = req.Temperature
 	}
 	wire.TopP = req.TopP
-	wire.StopSequences = req.StopSequences
 	return wire, nil
 }
 

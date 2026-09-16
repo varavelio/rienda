@@ -25,10 +25,9 @@ const wireItemReasoning = "reasoning"
 //
 // Conversations are stateless: every turn replays the full history through
 // input items. Thinking blocks replay only when they carry Signature (sent as
-// encrypted_content); signature-less thinking, redacted thinking, stop
-// sequences and bare BudgetTokens values have no wire equivalent and are
-// dropped. Responses are created with store disabled so the provider retains
-// nothing server-side.
+// encrypted_content); signature-less thinking, redacted thinking and bare
+// BudgetTokens values have no wire equivalent and are dropped. Responses are
+// created with store disabled so the provider retains nothing server-side.
 type openAIResponsesClient struct {
 	http    *http.Client
 	baseURL string

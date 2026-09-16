@@ -80,7 +80,6 @@ func TestOpenAIChatGenerate(t *testing.T) {
 			Reasoning:         &llm.ReasoningConfig{Effort: effort},
 			ToolChoice:        &llm.ToolChoice{Mode: llm.ToolChoiceAuto},
 			ParallelToolCalls: &parallel,
-			StopSequences:     []string{"END"},
 			Tools:             []llm.Tool{{Name: "read", Description: "Read a file", Strict: true}},
 			Messages: []llm.Message{
 				{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Read a.go"}}},
@@ -109,7 +108,6 @@ func TestOpenAIChatGenerate(t *testing.T) {
 			"reasoning_effort":      "low",
 			"tool_choice":           "auto",
 			"parallel_tool_calls":   false,
-			"stop":                  []any{"END"},
 			"tools": []any{
 				map[string]any{
 					"type": "function",

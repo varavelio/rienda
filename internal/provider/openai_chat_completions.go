@@ -100,7 +100,6 @@ type openAIChatCompletionsRequest struct {
 	MaxCompletionTokens int                                 `json:"max_completion_tokens,omitempty"`
 	Temperature         *float64                            `json:"temperature,omitempty"`
 	TopP                *float64                            `json:"top_p,omitempty"`
-	Stop                []string                            `json:"stop,omitempty"`
 	ReasoningEffort     string                              `json:"reasoning_effort,omitempty"`
 	Stream              bool                                `json:"stream,omitempty"`
 	StreamOptions       *openAIChatCompletionsStreamOptions `json:"stream_options,omitempty"`
@@ -222,7 +221,6 @@ func openAIChatCompletionsRequestFrom(req *llm.Request, stream bool) *openAIChat
 		MaxCompletionTokens: req.MaxTokens,
 		Temperature:         req.Temperature,
 		TopP:                req.TopP,
-		Stop:                req.StopSequences,
 		Stream:              stream,
 	}
 	if req.Reasoning != nil {

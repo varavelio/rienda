@@ -109,9 +109,6 @@ type Request struct {
 	// untouched.
 	TopP *float64
 
-	// StopSequences ends generation when the model produces any of them.
-	StopSequences []string
-
 	// Reasoning configures extended reasoning. It is nil to send no explicit
 	// reasoning configuration.
 	Reasoning *ReasoningConfig

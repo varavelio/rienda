@@ -17,8 +17,6 @@ tools:
 temperature: 0.2
 top_p: 0.9
 max_tokens: 4096
-stop:
-  - END
 reasoning_effort: High
 reasoning_budget_tokens: 2048
 ---
@@ -35,7 +33,6 @@ You are a senior Go engineer.
 			Temperature:           new(0.2),
 			TopP:                  new(0.9),
 			MaxTokens:             4096,
-			Stop:                  []string{"END"},
 			ReasoningEffort:       "high",
 			ReasoningBudgetTokens: 2048,
 			SystemPrompt:          "You are a senior Go engineer.",
@@ -168,9 +165,9 @@ You are a senior Go engineer.
 				"max_tokens",
 			},
 			{
-				"empty stop sequence",
-				"---\ndescription: A\nmodel: a/b\nstop: ['']\n---\n",
-				"stop must not contain empty sequences",
+				"removed stop key",
+				"---\ndescription: A\nmodel: a/b\nstop: [END]\n---\n",
+				"invalid frontmatter",
 			},
 			{
 				"negative reasoning budget",
