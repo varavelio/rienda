@@ -23,10 +23,12 @@ type Agent struct {
 	// was parsed from memory.
 	Path string
 
-	// Description explains what the agent does and when to use it.
+	// Description explains what the agent does and when to use it. It is
+	// required.
 	Description string
 
 	// Model is the model reference the agent runs, in provider/model form.
+	// It is required.
 	Model string
 
 	// Tools lists the names of the tools available to the agent. An empty

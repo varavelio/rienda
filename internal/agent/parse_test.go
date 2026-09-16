@@ -123,7 +123,13 @@ You are a senior Go engineer.
 				"single YAML document",
 			},
 			{"missing description", "---\nmodel: a/b\n---\n", "description is required"},
-			{"missing model", "---\ndescription: A\n---\n", "must have the form provider/model"},
+			{
+				"blank description",
+				"---\ndescription: '   '\nmodel: a/b\n---\n",
+				"description is required",
+			},
+			{"missing model", "---\ndescription: A\n---\n", "model is required"},
+			{"blank model", "---\ndescription: A\nmodel: '   '\n---\n", "model is required"},
 			{
 				"model without provider",
 				"---\ndescription: A\nmodel: kimi-k2\n---\n",
@@ -132,6 +138,11 @@ You are a senior Go engineer.
 			{
 				"model without name",
 				"---\ndescription: A\nmodel: openrouter/\n---\n",
+				"must have the form provider/model",
+			},
+			{
+				"model without provider name",
+				"---\ndescription: A\nmodel: /kimi-k2\n---\n",
 				"must have the form provider/model",
 			},
 			{

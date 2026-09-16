@@ -101,6 +101,11 @@ func (m *frontmatter) normalize() error {
 		return errors.New("description is required")
 	}
 
+	m.Model = strings.TrimSpace(m.Model)
+	if m.Model == "" {
+		return errors.New("model is required")
+	}
+
 	providerName, modelName, found := strings.Cut(m.Model, "/")
 	providerName, modelName = strings.TrimSpace(providerName), strings.TrimSpace(modelName)
 	if !found || providerName == "" || modelName == "" {
