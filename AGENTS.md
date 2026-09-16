@@ -21,7 +21,7 @@ Keep this file current and minimal. Update it only when repository-wide workflow
 
 Whenever possible, write tests that verify the expected behavior of the code being implemented. You must follow the following rules regarding testing:
 
-- Write the unit tests close to the code they are testing; for example, if you have the file foo.go, you have to put all the unit tests inside foo_test.go
+- Mirror the implementation layout: tests for foo.go belong in a sibling foo_test.go in the same directory and package. Never dump tests for multiple files into a single test file or move them into a separate test directory. Keep test helpers in the same _test.go file as their only consumers
 - When creating tests for Go, use the testify package which is already installed in the project. Prioritize using "require" whenever possible instead of "assert" so that the tests fail quickly when something is wrong
 - Write high-value tests, focus on critical logic and relevant edge cases. Quality beats quantity; don't write tests just to inflate coverage; make sure every test adds real value.
 - Treat tests as our primary tool to catch regressions. Write every test to guarantee long-term stability, correctness, functionality, and maintainability as the codebase evolves
