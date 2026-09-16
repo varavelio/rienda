@@ -11,9 +11,9 @@ type Protocol string
 const (
 	// ProtocolAnthropic is the Anthropic Messages API.
 	ProtocolAnthropic Protocol = "anthropic"
-	// ProtocolOpenAIChat is the OpenAI Chat Completions API and its compatible
+	// ProtocolOpenAIChatCompletions is the OpenAI Chat Completions API and its compatible
 	// implementations.
-	ProtocolOpenAIChat Protocol = "openai_chat"
+	ProtocolOpenAIChatCompletions Protocol = "openai_chat_completions"
 	// ProtocolOpenAIResponses is the OpenAI Responses API.
 	ProtocolOpenAIResponses Protocol = "openai_responses"
 )
@@ -22,7 +22,7 @@ const (
 func Protocols() []Protocol {
 	return []Protocol{
 		ProtocolAnthropic,
-		ProtocolOpenAIChat,
+		ProtocolOpenAIChatCompletions,
 		ProtocolOpenAIResponses,
 	}
 }

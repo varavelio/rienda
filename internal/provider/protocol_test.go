@@ -10,7 +10,7 @@ func TestProtocols(t *testing.T) {
 	t.Run("returns the supported protocols in a stable order", func(t *testing.T) {
 		require.Equal(t, []Protocol{
 			ProtocolAnthropic,
-			ProtocolOpenAIChat,
+			ProtocolOpenAIChatCompletions,
 			ProtocolOpenAIResponses,
 		}, Protocols())
 	})
@@ -31,7 +31,7 @@ func TestParseProtocol(t *testing.T) {
 
 		require.Error(t, err)
 		require.ErrorContains(t, err, `unknown protocol "gemini"`)
-		require.ErrorContains(t, err, "anthropic, openai_chat, openai_responses")
+		require.ErrorContains(t, err, "anthropic, openai_chat_completions, openai_responses")
 	})
 
 	t.Run("rejects an empty name", func(t *testing.T) {

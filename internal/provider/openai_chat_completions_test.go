@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// openAIChatTestServer records the request it receives and replays canned responses.
-type openAIChatTestServer struct {
+// openAIChatCompletionsTestServer records the request it receives and replays canned responses.
+type openAIChatCompletionsTestServer struct {
 	server      *httptest.Server
 	requestBody map[string]any
 	response    string
@@ -22,9 +22,9 @@ type openAIChatTestServer struct {
 	streamBody  string
 }
 
-func newOpenAIChatTestServer(t *testing.T) *openAIChatTestServer {
+func newOpenAIChatTestServer(t *testing.T) *openAIChatCompletionsTestServer {
 	t.Helper()
-	fixture := &openAIChatTestServer{status: http.StatusOK}
+	fixture := &openAIChatCompletionsTestServer{status: http.StatusOK}
 	fixture.server = httptest.NewServer(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			require.Equal(t, "/chat/completions", r.URL.Path)
@@ -46,8 +46,8 @@ func newOpenAIChatTestServer(t *testing.T) *openAIChatTestServer {
 	return fixture
 }
 
-func (f *openAIChatTestServer) client() llm.Client {
-	return NewOpenAIChat(Config{APIKey: "test-key", BaseURL: f.server.URL})
+func (f *openAIChatCompletionsTestServer) client() llm.Client {
+	return NewOpenAIChatCompletions(Config{APIKey: "test-key", BaseURL: f.server.URL})
 }
 
 func TestOpenAIChatGenerate(t *testing.T) {
@@ -314,7 +314,7 @@ func TestOpenAIChatStream(t *testing.T) {
 	})
 
 	t.Run("wraps read failures", func(t *testing.T) {
-		client := NewOpenAIChat(Config{
+		client := NewOpenAIChatCompletions(Config{
 			APIKey:     "key",
 			BaseURL:    "https://example.com",
 			HTTPClient: &http.Client{Transport: failingTransport{readErr: errors.New("boom")}},
@@ -375,7 +375,7 @@ func TestOpenAIChatErrors(t *testing.T) {
 
 		var providerErr *llm.Error
 		require.ErrorAs(t, err, &providerErr)
-		require.Equal(t, "openai-chat", providerErr.Provider)
+		require.Equal(t, "openai-chat-completions", providerErr.Provider)
 		require.Equal(t, http.StatusTooManyRequests, providerErr.StatusCode)
 		require.Equal(t, "rate_limit", providerErr.Type)
 		require.Equal(t, "slow down", providerErr.Message)
@@ -392,7 +392,7 @@ func TestOpenAIChatErrors(t *testing.T) {
 	})
 
 	t.Run("wraps network failures", func(t *testing.T) {
-		client := NewOpenAIChat(Config{
+		client := NewOpenAIChatCompletions(Config{
 			APIKey:     "key",
 			BaseURL:    "https://example.com",
 			HTTPClient: &http.Client{Transport: errorTransport{err: errors.New("boom")}},
@@ -417,7 +417,7 @@ func TestOpenAIChatErrors(t *testing.T) {
 	})
 
 	t.Run("uses the status text when the failure body cannot be read", func(t *testing.T) {
-		client := NewOpenAIChat(Config{
+		client := NewOpenAIChatCompletions(Config{
 			APIKey:  "key",
 			BaseURL: "https://example.com",
 			HTTPClient: &http.Client{Transport: failingTransport{
@@ -448,7 +448,13 @@ func TestOpenAIChatStopReasons(t *testing.T) {
 			"":               llm.StopReasonEndTurn,
 		}
 		for wire, expected := range cases {
-			require.Equal(t, expected, openAIChatStopReasonTo(wire), "wire reason %q", wire)
+			require.Equal(
+				t,
+				expected,
+				openAIChatCompletionsStopReasonTo(wire),
+				"wire reason %q",
+				wire,
+			)
 		}
 	})
 }

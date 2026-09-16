@@ -12,8 +12,8 @@ func New(protocol Protocol, cfg Config) (llm.Client, error) {
 	switch protocol {
 	case ProtocolAnthropic:
 		return NewAnthropic(cfg), nil
-	case ProtocolOpenAIChat:
-		return NewOpenAIChat(cfg), nil
+	case ProtocolOpenAIChatCompletions:
+		return NewOpenAIChatCompletions(cfg), nil
 	case ProtocolOpenAIResponses:
 		return NewOpenAIResponses(cfg), nil
 	default:

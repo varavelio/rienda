@@ -168,7 +168,7 @@ func TestErrorKind(t *testing.T) {
 func TestAPIError(t *testing.T) {
 	t.Run("maps a nested error object", func(t *testing.T) {
 		err := apiError(
-			openAIChatProviderName,
+			openAIChatCompletionsProviderName,
 			http.StatusTooManyRequests,
 			[]byte(
 				`{"error":{"message":"slow down","type":"rate_limit_error","code":"rate_limit_exceeded"}}`,
@@ -177,7 +177,7 @@ func TestAPIError(t *testing.T) {
 
 		var providerErr *llm.Error
 		require.ErrorAs(t, err, &providerErr)
-		require.Equal(t, openAIChatProviderName, providerErr.Provider)
+		require.Equal(t, openAIChatCompletionsProviderName, providerErr.Provider)
 		require.Equal(t, http.StatusTooManyRequests, providerErr.StatusCode)
 		require.Equal(t, llm.ErrorKindRateLimit, providerErr.Kind)
 		require.Equal(t, "rate_limit_error", providerErr.Type)
