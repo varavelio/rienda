@@ -67,7 +67,7 @@ func (c *anthropicClient) Generate(ctx context.Context, req *llm.Request) (*llm.
 		ctx,
 		c.http,
 		anthropicProviderName,
-		c.baseURL+"/v1/messages",
+		c.baseURL+"/messages",
 		wire,
 		&raw,
 	); err != nil {
@@ -85,14 +85,14 @@ func (c *anthropicClient) Stream(ctx context.Context, req *llm.Request) (llm.Str
 	if err != nil {
 		return nil, err
 	}
-	body, err := postStream(ctx, c.http, anthropicProviderName, c.baseURL+"/v1/messages", wire)
+	body, err := postStream(ctx, c.http, anthropicProviderName, c.baseURL+"/messages", wire)
 	if err != nil {
 		return nil, err
 	}
 	return &anthropicStream{scanner: transport.NewSSEScanner(body), body: body}, nil
 }
 
-// anthropicRequest is the wire payload for POST /v1/messages.
+// anthropicRequest is the wire payload for POST /messages.
 type anthropicRequest struct {
 	Model       string               `json:"model"`
 	MaxTokens   int                  `json:"max_tokens"`
