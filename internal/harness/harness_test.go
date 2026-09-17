@@ -80,7 +80,9 @@ func (p *scriptedProvider) serve(w http.ResponseWriter, r *http.Request) {
 
 	var response strings.Builder
 	for _, chunk := range p.scripts[index] {
-		response.WriteString("data: " + chunk + "\n\n")
+		response.WriteString("data: ")
+		response.WriteString(chunk)
+		response.WriteString("\n\n")
 	}
 	response.WriteString("data: [DONE]\n\n")
 
