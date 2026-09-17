@@ -1,0 +1,145 @@
+package tui
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/varavelio/rienda/internal/engine"
+)
+
+// TestTranscript verifies event folding.
+func TestTranscript(t *testing.T) {
+	t.Run("folds a run with a tool call", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.addUser("list the files")
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "Let me "})
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "check."})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+			Arguments:  json.RawMessage(`{"command":"ls"}`),
+		})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolOutput,
+			ToolCallID: "call_1",
+			Output:     "a.txt\n",
+		})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolResult,
+			ToolCallID: "call_1",
+			Text:       "a.txt",
+		})
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "Done."})
+
+		require.Len(t, conversation.entries, 4)
+		require.Equal(t, entryUser, conversation.entries[0].kind)
+		require.Equal(t, "list the files", conversation.entries[0].text)
+		require.Equal(t, entryAssistant, conversation.entries[1].kind)
+		require.Equal(t, "Let me check.", conversation.entries[1].text)
+
+		invocation := conversation.entries[2]
+		require.Equal(t, entryTool, invocation.kind)
+		require.Equal(t, "shell", invocation.toolName)
+		require.Equal(t, `{"command":"ls"}`, invocation.toolArguments)
+		require.Equal(t, "a.txt\n", invocation.text)
+		require.True(t, invocation.toolDone)
+		require.False(t, invocation.toolError)
+
+		require.Equal(t, entryAssistant, conversation.entries[3].kind)
+		require.Equal(t, "Done.", conversation.entries[3].text)
+	})
+
+	t.Run("separates thinking from the answer", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
+		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: " yes"})
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "hello"})
+
+		require.Len(t, conversation.entries, 2)
+		require.Equal(t, entryThinking, conversation.entries[0].kind)
+		require.Equal(t, "hmm yes", conversation.entries[0].text)
+		require.Equal(t, entryAssistant, conversation.entries[1].kind)
+	})
+
+	t.Run("keeps a result that did not stream", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+		})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolResult,
+			ToolCallID: "call_1",
+			Text:       "boom",
+			IsError:    true,
+		})
+
+		invocation := conversation.entries[0]
+		require.True(t, invocation.toolDone)
+		require.True(t, invocation.toolError)
+		require.Equal(t, "boom", invocation.text)
+	})
+
+	t.Run("caps the tool output", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+		})
+
+		chunk := strings.Repeat("x", maxToolOutput/2)
+		for range 4 {
+			conversation.apply(engine.Event{
+				Type:       engine.EventToolOutput,
+				ToolCallID: "call_1",
+				Output:     chunk,
+			})
+		}
+		conversation.apply(engine.Event{Type: engine.EventToolOutput, ToolCallID: "call_1"})
+
+		invocation := conversation.entries[0]
+		require.Len(t, invocation.text, maxToolOutput)
+		require.True(t, invocation.truncated)
+	})
+
+	t.Run("records errors and notices", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventError, Error: "boom"})
+		conversation.addNotice("the run was interrupted")
+
+		require.Len(t, conversation.entries, 2)
+		require.Equal(t, entryError, conversation.entries[0].kind)
+		require.Equal(t, "boom", conversation.entries[0].text)
+		require.Equal(t, entryNotice, conversation.entries[1].kind)
+	})
+
+	t.Run("ignores output of unknown calls", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(
+			engine.Event{Type: engine.EventToolOutput, ToolCallID: "ghost", Output: "x"},
+		)
+		conversation.apply(
+			engine.Event{Type: engine.EventToolResult, ToolCallID: "ghost", Text: "x"},
+		)
+
+		require.Empty(t, conversation.entries)
+	})
+}
+
+// TestCutRunes verifies rune-safe truncation.
+func TestCutRunes(t *testing.T) {
+	t.Run("keeps short texts", func(t *testing.T) {
+		require.Equal(t, "hello", cutRunes("hello", 10))
+	})
+
+	t.Run("never splits a rune", func(t *testing.T) {
+		require.Equal(t, "añ", cutRunes("añejo", 3))
+		require.Equal(t, "a", cutRunes("añejo", 2))
+	})
+}
