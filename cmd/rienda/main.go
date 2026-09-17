@@ -58,7 +58,7 @@ Commands:
   run    Run an agent once and print its answer
 
 Flags of the interactive interface:
-  -a, --agent     Agent to run, skipping the agent picker
+  -a, --agent     Agent to run, skipping the start menu and the agent picker
   -C, --workdir   Directory sessions run in
       --config    Path of the configuration file
 
