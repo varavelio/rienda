@@ -35,14 +35,20 @@ type StreamEvent struct {
 	ID    string
 	Model string
 
+	// ItemID identifies the output message item that carried the response text
+	// for StreamMessageEnd events, when the provider assigns identifiers.
+	ItemID string
+
 	// Text carries StreamTextDelta fragments.
 	Text string
 
 	// Thinking carries StreamThinkingDelta fragments. ThinkingSignature carries
 	// the latest provider signature fragment when the provider streams one.
+	// ThinkingID identifies the reasoning item the signature belongs to.
 	// ThinkingRedactedData carries the data of a StreamThinkingRedacted event.
 	Thinking             string
 	ThinkingSignature    string
+	ThinkingID           string
 	ThinkingRedactedData string
 
 	// ToolCallID identifies the tool call for StreamToolCallStart and

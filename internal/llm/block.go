@@ -40,6 +40,11 @@ type Block struct {
 	// a later turn.
 	ThinkingSignature string
 
+	// ThinkingID is the provider-assigned identifier of the reasoning item
+	// that carried a BlockThinking block. Providers that require the
+	// identifier, like OpenAI Responses, set it so the block can be replayed.
+	ThinkingID string
+
 	// ThinkingRedactedData holds the opaque provider data of a
 	// BlockRedactedThinking block.
 	ThinkingRedactedData string

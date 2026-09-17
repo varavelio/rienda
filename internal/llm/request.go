@@ -21,6 +21,11 @@ type Message struct {
 
 	// Blocks is the ordered content of the message.
 	Blocks []Block
+
+	// ItemID is the provider-assigned identifier of the output message item
+	// that carried an assistant message. Providers that require the
+	// identifier to replay the conversation, like OpenAI Responses, set it.
+	ItemID string
 }
 
 // ReasoningConfig controls the reasoning effort of a model that supports it.
