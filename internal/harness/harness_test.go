@@ -292,6 +292,10 @@ func TestPrepare(t *testing.T) {
 		_, err := os.Stat(path)
 		require.NoError(t, err)
 
+		require.Equal(t, "coder", prepared.Info().Agent)
+		require.Equal(t, "fake/test-model", prepared.Info().Model)
+		require.Equal(t, env.workdir, prepared.Info().Workdir)
+
 		stored, err := session.Open(filepath.Dir(path), prepared.ID(), id.NewIDGenerator())
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, stored.Close()) })

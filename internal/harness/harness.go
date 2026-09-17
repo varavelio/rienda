@@ -139,6 +139,11 @@ func (s *Session) ID() string {
 	return s.store.ID()
 }
 
+// Info returns the session metadata.
+func (s *Session) Info() session.Info {
+	return s.store.Info()
+}
+
 // Run starts a run of the session and returns the channel carrying its
 // events. A non-empty prompt starts a new turn; an empty prompt continues the
 // conversation from its active leaf.
