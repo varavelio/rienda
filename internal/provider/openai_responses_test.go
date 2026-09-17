@@ -50,6 +50,55 @@ func (f *openAIResponsesTestServer) client() llm.Client {
 	return NewOpenAIResponses(Config{APIKey: "test-key", BaseURL: f.server.URL})
 }
 
+// requireStrictInput validates the translated input items the way strict
+// Responses API implementations do. The wire schema marks id and summary as
+// required on reasoning items, and id, status, annotations and logprobs as
+// required on assistant output messages, even though the OpenAI endpoint
+// tolerates their absence.
+func requireStrictInput(t *testing.T, body map[string]any) {
+	t.Helper()
+
+	input, ok := body["input"].([]any)
+	require.True(t, ok, "the request has no input items")
+
+	for i, raw := range input {
+		item, ok := raw.(map[string]any)
+		require.True(t, ok, "input[%d] is not an object", i)
+
+		switch item["type"] {
+		case "reasoning":
+			_, hasID := item["id"]
+			_, hasSummary := item["summary"]
+			require.Truef(t, hasID, "input[%d]: the reasoning item is missing id", i)
+			require.Truef(t, hasSummary, "input[%d]: the reasoning item is missing summary", i)
+		case "message":
+			if item["role"] != "assistant" {
+				continue
+			}
+			_, hasID := item["id"]
+			_, hasStatus := item["status"]
+			require.Truef(t, hasID, "input[%d]: the assistant message is missing id", i)
+			require.Truef(t, hasStatus, "input[%d]: the assistant message is missing status", i)
+
+			content, ok := item["content"].([]any)
+			require.Truef(t, ok, "input[%d]: the assistant message has no content", i)
+			for j, raw := range content {
+				part, ok := raw.(map[string]any)
+				require.Truef(t, ok, "input[%d] content[%d] is not an object", i, j)
+				if part["type"] != "output_text" {
+					continue
+				}
+				_, hasAnnotations := part["annotations"]
+				_, hasLogprobs := part["logprobs"]
+				require.Truef(t, hasAnnotations,
+					"input[%d] content[%d]: the output text is missing annotations", i, j)
+				require.Truef(t, hasLogprobs,
+					"input[%d] content[%d]: the output text is missing logprobs", i, j)
+			}
+		}
+	}
+}
+
 func TestOpenAIResponsesGenerate(t *testing.T) {
 	t.Run("maps a full turn request and response", func(t *testing.T) {
 		fixture := newOpenAIResponsesTestServer(t)
@@ -80,9 +129,12 @@ func TestOpenAIResponsesGenerate(t *testing.T) {
 			Tools:             []llm.Tool{{Name: "read", Description: "Read a file", Strict: true}},
 			Messages: []llm.Message{
 				{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Read a.go"}}},
-				{Role: llm.RoleAssistant, Blocks: []llm.Block{
+				{Role: llm.RoleAssistant, ItemID: "msg_0", Blocks: []llm.Block{
 					{Type: llm.BlockText, Text: "On it"},
-					{Type: llm.BlockThinking, Thinking: "plan", ThinkingSignature: "enc-0"},
+					{
+						Type: llm.BlockThinking, Thinking: "plan",
+						ThinkingSignature: "enc-0", ThinkingID: "rs_0",
+					},
 					{Type: llm.BlockThinking, Thinking: "unsigned"},
 					{
 						Type: llm.BlockToolCall, ToolCallID: "call_0", ToolCallName: "read",
@@ -119,10 +171,20 @@ func TestOpenAIResponsesGenerate(t *testing.T) {
 					"content": []any{map[string]any{"type": "input_text", "text": "Read a.go"}},
 				},
 				map[string]any{
-					"type": "message", "role": "assistant",
-					"content": []any{map[string]any{"type": "output_text", "text": "On it"}},
+					"type": "message", "id": "msg_0", "role": "assistant", "status": "completed",
+					"content": []any{map[string]any{
+						"type": "output_text", "text": "On it",
+						"annotations": []any{}, "logprobs": []any{},
+					}},
 				},
-				map[string]any{"type": "reasoning", "encrypted_content": "enc-0"},
+				map[string]any{
+					"type": "reasoning",
+					"id":   "rs_0",
+					"summary": []any{
+						map[string]any{"type": "summary_text", "text": "plan"},
+					},
+					"encrypted_content": "enc-0",
+				},
 				map[string]any{
 					"type": "function_call", "call_id": "call_0", "name": "read",
 					"arguments": `{"path":"a.go"}`,
@@ -132,11 +194,16 @@ func TestOpenAIResponsesGenerate(t *testing.T) {
 				},
 			},
 		}, fixture.requestBody)
+		requireStrictInput(t, fixture.requestBody)
 		require.Equal(t, &llm.Response{
-			ID:    "resp_1",
-			Model: "gpt-test",
+			ID:     "resp_1",
+			Model:  "gpt-test",
+			ItemID: "msg_1",
 			Blocks: []llm.Block{
-				{Type: llm.BlockThinking, Thinking: "Thinking", ThinkingSignature: "enc-1"},
+				{
+					Type: llm.BlockThinking, Thinking: "Thinking",
+					ThinkingSignature: "enc-1", ThinkingID: "rs_1",
+				},
 				{Type: llm.BlockText, Text: "Reading"},
 				{
 					Type: llm.BlockToolCall, ToolCallID: "call_1", ToolCallName: "read",
@@ -149,6 +216,37 @@ func TestOpenAIResponsesGenerate(t *testing.T) {
 				CacheReadTokens: 5, CacheWriteTokens: 1,
 			},
 		}, resp)
+	})
+
+	t.Run("replays reasoning without summary text as an empty list", func(t *testing.T) {
+		fixture := newOpenAIResponsesTestServer(t)
+		fixture.response = `{"id": "r", "model": "m", "status": "completed", "output": [],
+			"usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+			"output_tokens_details": {"reasoning_tokens": 0}}}`
+
+		_, err := fixture.client().Generate(t.Context(), &llm.Request{
+			Model: "m",
+			Messages: []llm.Message{
+				{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "hi"}}},
+				{Role: llm.RoleAssistant, ItemID: "msg_0", Blocks: []llm.Block{
+					{
+						Type: llm.BlockThinking,
+						// Signature and id replay the reasoning item, but the
+						// provider streamed no summary text for it.
+						ThinkingSignature: "enc-0",
+						ThinkingID:        "rs_0",
+					},
+				}},
+			},
+		})
+		require.NoError(t, err)
+
+		input, ok := fixture.requestBody["input"].([]any)
+		require.True(t, ok)
+		require.Equal(t, map[string]any{
+			"type": "reasoning", "id": "rs_0", "summary": []any{}, "encrypted_content": "enc-0",
+		}, input[1])
+		requireStrictInput(t, fixture.requestBody)
 	})
 
 	t.Run("maps incomplete and failed statuses", func(t *testing.T) {
@@ -223,6 +321,10 @@ func TestOpenAIResponsesStream(t *testing.T) {
 			`data: {"type":"response.function_call_arguments.done","item_id":"fc_1",` +
 			`"output_index":2,"arguments":"{\"path\":\"a\"}"}` + "\n\n" +
 			"event: response.output_item.done\n" +
+			`data: {"type":"response.output_item.done","output_index":0,` +
+			`"item":{"type":"message","id":"msg_1","role":"assistant","status":"completed",` +
+			`"content":[{"type":"output_text","text":"Hi","annotations":[]}]}}` + "\n\n" +
+			"event: response.output_item.done\n" +
 			`data: {"type":"response.output_item.done","output_index":1,` +
 			`"item":{"type":"reasoning","id":"rs_1","encrypted_content":"enc-9"}}` + "\n\n" +
 			"event: response.completed\n" +
@@ -241,16 +343,17 @@ func TestOpenAIResponsesStream(t *testing.T) {
 		require.Equal(t, []llm.StreamEvent{
 			{Type: llm.StreamMessageStart, ID: "resp_1", Model: "gpt-test"},
 			{Type: llm.StreamTextDelta, Text: "Hi"},
-			{Type: llm.StreamThinkingDelta, Thinking: "Hmm"},
+			{Type: llm.StreamThinkingDelta, Thinking: "Hmm", ThinkingID: "rs_1"},
 			{Type: llm.StreamToolCallStart, ToolCallID: "call_1", ToolCallName: "read"},
 			{
 				Type:              llm.StreamToolCallArgsDelta,
 				ToolCallID:        "call_1",
 				ToolCallArgsDelta: `{"path":`,
 			},
-			{Type: llm.StreamThinkingDelta, ThinkingSignature: "enc-9"},
+			{Type: llm.StreamThinkingDelta, ThinkingSignature: "enc-9", ThinkingID: "rs_1"},
 			{
 				Type:       llm.StreamMessageEnd,
+				ItemID:     "msg_1",
 				StopReason: llm.StopReasonToolUse,
 				Usage: llm.Usage{
 					InputTokens: 30, OutputTokens: 12, ReasoningTokens: 4,
@@ -259,6 +362,42 @@ func TestOpenAIResponsesStream(t *testing.T) {
 			},
 		}, events)
 		require.Equal(t, true, fixture.requestBody["stream"])
+	})
+
+	t.Run("recovers item identifiers from other events", func(t *testing.T) {
+		fixture := newOpenAIResponsesTestServer(t)
+		fixture.streamBody = "event: response.created\n" +
+			`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}` + "\n\n" +
+			"event: response.output_text.delta\n" +
+			`data: {"type":"response.output_text.delta","delta":"Hi"}` + "\n\n" +
+			"event: response.reasoning_summary_text.delta\n" +
+			`data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","delta":"Hmm"}` + "\n\n" +
+			"event: response.output_item.done\n" +
+			`data: {"type":"response.output_item.done","output_index":0}` + "\n\n" +
+			"event: response.output_item.done\n" +
+			`data: {"type":"response.output_item.done","output_index":0,` +
+			`"item":{"type":"message","id":"msg_1","role":"assistant","status":"completed",` +
+			`"content":[{"type":"output_text","text":"Hi","annotations":[]}]}}` + "\n\n" +
+			"event: response.completed\n" +
+			`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test",` +
+			`"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,` +
+			`"total_tokens":2,"output_tokens_details":{"reasoning_tokens":1}}}}` + "\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "gpt-test"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		require.Equal(t, []llm.StreamEvent{
+			{Type: llm.StreamMessageStart, ID: "resp_1", Model: "gpt-test"},
+			{Type: llm.StreamTextDelta, Text: "Hi"},
+			{Type: llm.StreamThinkingDelta, Thinking: "Hmm", ThinkingID: "rs_1"},
+			{
+				Type:       llm.StreamMessageEnd,
+				ItemID:     "msg_1",
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 1, OutputTokens: 1, ReasoningTokens: 1},
+			},
+		}, collect(t, stream))
 	})
 
 	t.Run("surfaces failed responses", func(t *testing.T) {

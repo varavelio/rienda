@@ -48,6 +48,10 @@ const (
 // the provider APIs require JSON objects.
 var emptyJSONObject = json.RawMessage("{}")
 
+// emptyJSONArray replaces absent list payloads the provider APIs require, like
+// the annotations of an output text part.
+var emptyJSONArray = json.RawMessage("[]")
+
 // normalizeBaseURL drops any trailing slash so endpoint paths can be
 // appended safely. It applies no default; callers must supply a base URL.
 func normalizeBaseURL(base string) string {

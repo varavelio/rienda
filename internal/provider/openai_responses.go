@@ -18,16 +18,25 @@ const (
 	openAIResponsesPath         = "/responses"
 )
 
-// wireItemReasoning is the Responses reasoning item type.
-const wireItemReasoning = "reasoning"
+const (
+	// wireItemReasoning is the Responses reasoning item type.
+	wireItemReasoning = "reasoning"
+	// wireItemMessage is the Responses message item type.
+	wireItemMessage = "message"
+	// wireSummaryText is the Responses reasoning summary part type.
+	wireSummaryText = "summary_text"
+	// wireStatusCompleted marks a finished output item.
+	wireStatusCompleted = "completed"
+)
 
 // openAIResponsesClient is an llm.Client for the OpenAI Responses API.
 //
 // Conversations are stateless: every turn replays the full history through
-// input items. Thinking blocks replay only when they carry Signature (sent as
-// encrypted_content); signature-less thinking, redacted thinking and bare
-// BudgetTokens values have no wire equivalent and are dropped. Responses are
-// created with store disabled so the provider retains nothing server-side.
+// input items. Thinking blocks replay only when they carry Signature, sent as
+// the encrypted content of a reasoning item together with its identifier and
+// summary; signature-less thinking, redacted thinking and bare BudgetTokens
+// values have no wire equivalent and are dropped. Responses are created with
+// store disabled so the provider retains nothing server-side.
 type openAIResponsesClient struct {
 	http    *http.Client
 	baseURL string
@@ -107,21 +116,28 @@ type openAIResponsesRequest struct {
 // openAIResponsesInputItem is one typed input item. Only the fields valid for
 // Type are populated.
 type openAIResponsesInputItem struct {
-	Type             string                       `json:"type"`
-	Role             string                       `json:"role,omitempty"`
-	Content          []openAIResponsesContentPart `json:"content,omitempty"`
-	CallID           string                       `json:"call_id,omitempty"`
-	Name             string                       `json:"name,omitempty"`
-	Arguments        string                       `json:"arguments,omitempty"`
-	Output           string                       `json:"output,omitempty"`
-	EncryptedContent string                       `json:"encrypted_content,omitempty"`
-	Summary          []openAIResponsesSummaryPart `json:"summary,omitempty"`
+	Type             string                        `json:"type"`
+	ID               string                        `json:"id,omitempty"`
+	Role             string                        `json:"role,omitempty"`
+	Status           string                        `json:"status,omitempty"`
+	Content          []openAIResponsesContentPart  `json:"content,omitempty"`
+	CallID           string                        `json:"call_id,omitempty"`
+	Name             string                        `json:"name,omitempty"`
+	Arguments        string                        `json:"arguments,omitempty"`
+	Output           string                        `json:"output,omitempty"`
+	EncryptedContent string                        `json:"encrypted_content,omitempty"`
+	Summary          *[]openAIResponsesSummaryPart `json:"summary,omitempty"`
 }
 
 // openAIResponsesContentPart is a message content part.
 type openAIResponsesContentPart struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+
+	// Annotations and Logprobs are required by output text parts. They are
+	// left nil, and therefore omitted, by input text parts.
+	Annotations json.RawMessage `json:"annotations,omitempty"`
+	Logprobs    json.RawMessage `json:"logprobs,omitempty"`
 }
 
 // openAIResponsesSummaryPart is a reasoning summary fragment.
@@ -245,35 +261,49 @@ func openAIResponsesRequestFrom(req *llm.Request, stream bool) *openAIResponsesR
 // Text accumulates into a single message item; tool calls, reasoning and tool
 // outputs become standalone items preserving order.
 func openAIResponsesItemsFrom(message llm.Message) []openAIResponsesInputItem {
+	assistant := message.Role == llm.RoleAssistant
 	role := wireRoleUser
 	partType := "input_text"
-	if message.Role == llm.RoleAssistant {
+	if assistant {
 		role = wireRoleAssistant
 		partType = "output_text"
 	}
 	var out []openAIResponsesInputItem
 	var parts []openAIResponsesContentPart
 	flush := func() {
-		if len(parts) > 0 {
-			out = append(out, openAIResponsesInputItem{Type: "message", Role: role, Content: parts})
-			parts = nil
+		if len(parts) == 0 {
+			return
 		}
+		item := openAIResponsesInputItem{Type: wireItemMessage, Role: role, Content: parts}
+		if assistant {
+			item.ID = message.ItemID
+			item.Status = wireStatusCompleted
+		}
+		out = append(out, item)
+		parts = nil
 	}
 	for _, block := range message.Blocks {
 		switch block.Type {
 		case llm.BlockText:
-			parts = append(parts, openAIResponsesContentPart{Type: partType, Text: block.Text})
+			part := openAIResponsesContentPart{Type: partType, Text: block.Text}
+			if assistant {
+				part.Annotations = emptyJSONArray
+				part.Logprobs = emptyJSONArray
+			}
+			parts = append(parts, part)
 		case llm.BlockThinking:
-			if message.Role != llm.RoleAssistant || block.ThinkingSignature == "" {
+			if !assistant || block.ThinkingSignature == "" {
 				continue
 			}
 			flush()
 			out = append(out, openAIResponsesInputItem{
 				Type:             wireItemReasoning,
+				ID:               block.ThinkingID,
 				EncryptedContent: block.ThinkingSignature,
+				Summary:          reasoningSummary(block.Thinking),
 			})
 		case llm.BlockToolCall:
-			if message.Role != llm.RoleAssistant {
+			if !assistant {
 				continue
 			}
 			flush()
@@ -288,7 +318,7 @@ func openAIResponsesItemsFrom(message llm.Message) []openAIResponsesInputItem {
 				Arguments: args,
 			})
 		case llm.BlockToolResult:
-			if message.Role == llm.RoleAssistant {
+			if assistant {
 				continue
 			}
 			flush()
@@ -301,6 +331,17 @@ func openAIResponsesItemsFrom(message llm.Message) []openAIResponsesInputItem {
 	}
 	flush()
 	return out
+}
+
+// reasoningSummary builds the summary parts of a reasoning input item. The
+// field is required by the wire schema, so an absent summary becomes an empty
+// list instead of being omitted.
+func reasoningSummary(text string) *[]openAIResponsesSummaryPart {
+	parts := make([]openAIResponsesSummaryPart, 0, 1)
+	if text != "" {
+		parts = append(parts, openAIResponsesSummaryPart{Type: wireSummaryText, Text: text})
+	}
+	return &parts
 }
 
 // openAIResponsesResponseTo translates a completed wire response into canonical
@@ -317,7 +358,10 @@ func openAIResponsesResponseTo(raw *openAIResponsesResponse) (*llm.Response, err
 	}
 	for _, item := range raw.Output {
 		switch item.Type {
-		case "message":
+		case wireItemMessage:
+			if resp.ItemID == "" {
+				resp.ItemID = item.ID
+			}
 			for _, part := range item.Content {
 				if part.Type == "output_text" && part.Text != "" {
 					resp.Blocks = append(
@@ -336,6 +380,7 @@ func openAIResponsesResponseTo(raw *openAIResponsesResponse) (*llm.Response, err
 					Type:              llm.BlockThinking,
 					Thinking:          thinking.String(),
 					ThinkingSignature: item.EncryptedContent,
+					ThinkingID:        item.ID,
 				})
 			}
 		case wireFunctionCall:
@@ -399,12 +444,13 @@ func openAIResponsesUsageTo(raw openAIResponsesUsage) llm.Usage {
 
 // openAIResponsesStream is a pull-based llm.Stream over a Responses SSE response.
 type openAIResponsesStream struct {
-	scanner *transport.SSEScanner
-	body    io.ReadCloser
-	calls   map[string]string
-	ended   bool
-	failed  error
-	closed  bool
+	scanner       *transport.SSEScanner
+	body          io.ReadCloser
+	calls         map[string]string
+	messageItemID string
+	ended         bool
+	failed        error
+	closed        bool
 }
 
 var _ llm.Stream = (*openAIResponsesStream)(nil)
@@ -494,9 +540,18 @@ func (s *openAIResponsesStream) translate(
 			}, false, nil
 		}
 	case "response.output_text.delta":
+		// Track the message item the text belongs to, so the identifier is
+		// available even when the stream carries no output_item.done event.
+		if s.messageItemID == "" {
+			s.messageItemID = envelope.ItemID
+		}
 		return &llm.StreamEvent{Type: llm.StreamTextDelta, Text: envelope.Delta}, false, nil
 	case "response.reasoning_summary_text.delta":
-		return &llm.StreamEvent{Type: llm.StreamThinkingDelta, Thinking: envelope.Delta}, false, nil
+		return &llm.StreamEvent{
+			Type:       llm.StreamThinkingDelta,
+			Thinking:   envelope.Delta,
+			ThinkingID: envelope.ItemID,
+		}, false, nil
 	case "response.function_call_arguments.delta":
 		return &llm.StreamEvent{
 			Type:              llm.StreamToolCallArgsDelta,
@@ -504,13 +559,26 @@ func (s *openAIResponsesStream) translate(
 			ToolCallArgsDelta: envelope.Delta,
 		}, false, nil
 	case "response.output_item.done":
-		if envelope.Item != nil && envelope.Item.Type == wireItemReasoning &&
-			envelope.Item.EncryptedContent != "" {
-			// Surface encrypted reasoning so consumers can replay it.
-			return &llm.StreamEvent{
-				Type:              llm.StreamThinkingDelta,
-				ThinkingSignature: envelope.Item.EncryptedContent,
-			}, false, nil
+		if envelope.Item == nil {
+			return nil, false, nil
+		}
+		switch envelope.Item.Type {
+		case wireItemReasoning:
+			if envelope.Item.EncryptedContent != "" {
+				// Surface the encrypted reasoning so consumers can replay it
+				// together with the identifier of its item.
+				return &llm.StreamEvent{
+					Type:              llm.StreamThinkingDelta,
+					ThinkingSignature: envelope.Item.EncryptedContent,
+					ThinkingID:        envelope.Item.ID,
+				}, false, nil
+			}
+		case wireItemMessage:
+			// Surface the identifier of the message item, which must travel
+			// with the text so the message can be replayed.
+			if s.messageItemID == "" {
+				s.messageItemID = envelope.Item.ID
+			}
 		}
 	case "response.completed", "response.incomplete":
 		if envelope.Response == nil {
@@ -518,6 +586,7 @@ func (s *openAIResponsesStream) translate(
 		}
 		return &llm.StreamEvent{
 			Type:       llm.StreamMessageEnd,
+			ItemID:     s.messageItemID,
 			StopReason: openAIResponsesStopReason(envelope.Response),
 			Usage:      openAIResponsesUsageTo(envelope.Response.Usage),
 		}, true, nil
