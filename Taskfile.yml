@@ -30,6 +30,12 @@ tasks:
     desc: Build the project
     cmd: go build -o ./dist/rienda ./cmd/rienda/.
 
+  run:
+    desc: Build and run the project
+    deps:
+      - build
+    cmd: ./dist/rienda {{.CLI_ARGS}}
+
   format:
     desc: Format all code
     cmds:
