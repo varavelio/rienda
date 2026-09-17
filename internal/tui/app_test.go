@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/varavelio/rienda/internal/agent"
+	"github.com/varavelio/rienda/internal/session"
 )
 
 // writeAgent writes a minimal agent definition into dir.
@@ -90,6 +91,21 @@ func TestSelectAgent(t *testing.T) {
 		require.ErrorContains(t, err, `unknown agent "ghost"`)
 		require.ErrorContains(t, err, "coder, writer")
 	})
+}
+
+// TestResumable verifies which stored sessions the interface offers.
+func TestResumable(t *testing.T) {
+	definitions := []agent.Agent{{ID: "coder"}}
+	infos := []session.Info{
+		{ID: "session-1", Agent: "coder", Title: "hello"},
+		{ID: "session-2", Agent: "writer", Title: "hello"},
+		{ID: "session-3", Agent: "coder"},
+	}
+
+	kept := resumable(infos, definitions)
+
+	require.Len(t, kept, 1)
+	require.Equal(t, "session-1", kept[0].ID)
 }
 
 // TestRun verifies the entry point of the interface.

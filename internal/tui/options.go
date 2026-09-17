@@ -13,7 +13,8 @@ var errHelp = errors.New("tui: help requested")
 
 // options holds the parsed command line options of the interactive interface.
 type options struct {
-	// AgentID preselects the agent to run, skipping the agent picker.
+	// AgentID preselects the agent to run, skipping the start menu and the
+	// agent picker.
 	AgentID string
 
 	// Workdir is the directory sessions run in.
@@ -59,7 +60,7 @@ func usage(w io.Writer) {
   rienda [flags]
 
 Flags:
-  -a, --agent     Agent to run, skipping the agent picker
+  -a, --agent     Agent to run, skipping the start menu and the agent picker
   -C, --workdir   Directory sessions run in
       --config    Path of the configuration file
 `)

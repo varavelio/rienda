@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"strings"
 	"unicode/utf8"
 
 	"github.com/varavelio/rienda/internal/engine"
+	"github.com/varavelio/rienda/internal/llm"
 )
 
 // maxToolOutput caps the tool output retained per invocation.
@@ -57,6 +59,68 @@ func (t *transcript) addNotice(text string) {
 	t.entries = append(t.entries, entry{kind: entryNotice, text: text})
 }
 
+// load seeds the transcript with the messages of a stored conversation,
+// oldest first.
+func (t *transcript) load(messages []llm.Message) {
+	for _, message := range messages {
+		t.appendMessage(message)
+	}
+}
+
+// appendMessage folds one stored message into the transcript.
+func (t *transcript) appendMessage(message llm.Message) {
+	textKind := entryAssistant
+	if message.Role == llm.RoleUser {
+		textKind = entryUser
+	}
+
+	for _, block := range message.Blocks {
+		switch block.Type {
+		case llm.BlockText:
+			t.appendText(textKind, block.Text)
+		case llm.BlockThinking:
+			t.appendText(entryThinking, block.Thinking)
+		case llm.BlockToolCall:
+			t.addTool(block.ToolCallID, block.ToolCallName, string(block.ToolCallArguments))
+		case llm.BlockToolResult:
+			t.finishTool(block.ToolResultCallID, block.ToolResultIsError, textOf(block.ToolResult))
+		}
+	}
+}
+
+// addTool appends a tool invocation to the transcript.
+func (t *transcript) addTool(callID, name, arguments string) {
+	t.entries = append(t.entries, entry{
+		kind:          entryTool,
+		toolCallID:    callID,
+		toolName:      name,
+		toolArguments: arguments,
+	})
+}
+
+// finishTool marks a tool invocation as finished, keeping the result text when
+// nothing streamed before it.
+func (t *transcript) finishTool(callID string, isError bool, result string) {
+	tool := t.tool(callID)
+	if tool == nil {
+		return
+	}
+	tool.toolDone = true
+	tool.toolError = isError
+	if tool.text == "" {
+		tool.appendOutput(result)
+	}
+}
+
+// textOf concatenates the text of the given blocks.
+func textOf(blocks []llm.Block) string {
+	var text strings.Builder
+	for _, block := range blocks {
+		text.WriteString(block.Text)
+	}
+	return text.String()
+}
+
 // apply folds one engine event into the transcript.
 func (t *transcript) apply(event engine.Event) {
 	switch event.Type {
@@ -65,24 +129,13 @@ func (t *transcript) apply(event engine.Event) {
 	case engine.EventThinkingDelta:
 		t.appendText(entryThinking, event.Text)
 	case engine.EventToolCall:
-		t.entries = append(t.entries, entry{
-			kind:          entryTool,
-			toolCallID:    event.ToolCallID,
-			toolName:      event.ToolName,
-			toolArguments: string(event.Arguments),
-		})
+		t.addTool(event.ToolCallID, event.ToolName, string(event.Arguments))
 	case engine.EventToolOutput:
 		if tool := t.tool(event.ToolCallID); tool != nil {
 			tool.appendOutput(event.Output)
 		}
 	case engine.EventToolResult:
-		if tool := t.tool(event.ToolCallID); tool != nil {
-			tool.toolDone = true
-			tool.toolError = event.IsError
-			if tool.text == "" && event.Text != "" {
-				tool.text = event.Text
-			}
-		}
+		t.finishTool(event.ToolCallID, event.IsError, event.Text)
 	case engine.EventError:
 		t.entries = append(t.entries, entry{kind: entryError, text: event.Error})
 	}

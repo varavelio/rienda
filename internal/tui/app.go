@@ -7,15 +7,16 @@ import (
 	"io"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/varavelio/rienda/internal/agent"
 	"github.com/varavelio/rienda/internal/harness"
+	"github.com/varavelio/rienda/internal/session"
 )
 
-// Run starts the interactive interface. It parses the options, lists the
-// agent definitions available to it and drives the session of the chosen
-// agent until the user quits.
+// Run starts the interactive interface. It parses the options, offers the
+// previous sessions of the workspace to continue and the agent definitions to
+// start a new one, and drives the chosen session until the user quits.
 func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 	opts, err := parseOptions(args)
 	if err != nil {
@@ -39,16 +40,33 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 
+	// Sessions that cannot be read are skipped so that a single corrupt
+	// session file never blocks the interface.
+	sessions, _ := harness.Sessions(harness.Options{
+		Workdir:    opts.Workdir,
+		ConfigPath: opts.ConfigPath,
+	})
+
+	prepare := func(sessionID, agentID string) (Session, error) {
+		return harness.Prepare(context.Background(), harness.Options{
+			AgentID:    agentID,
+			SessionID:  sessionID,
+			AgentsDir:  agentsDir,
+			Workdir:    opts.Workdir,
+			ConfigPath: opts.ConfigPath,
+		})
+	}
+
 	app := newModel(modelConfig{
-		agents:   definitions,
-		selected: selected,
+		agents:    definitions,
+		selected:  selected,
+		requested: opts.AgentID != "",
+		sessions:  resumable(sessions, definitions),
 		newSession: func(agentID string) (Session, error) {
-			return harness.Prepare(context.Background(), harness.Options{
-				AgentID:    agentID,
-				AgentsDir:  agentsDir,
-				Workdir:    opts.Workdir,
-				ConfigPath: opts.ConfigPath,
-			})
+			return prepare("", agentID)
+		},
+		resumeSession: func(sessionID string) (Session, error) {
+			return prepare(sessionID, "")
 		},
 		newRunContext: func() (context.Context, context.CancelFunc) {
 			return context.WithCancel(context.Background())
@@ -56,12 +74,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 	})
 	defer app.Close()
 
-	program := tea.NewProgram(
-		app,
-		tea.WithAltScreen(),
-		tea.WithInput(stdin),
-		tea.WithOutput(stdout),
-	)
+	program := tea.NewProgram(app, tea.WithInput(stdin), tea.WithOutput(stdout))
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("tui: run interface: %w", err)
 	}
@@ -82,6 +95,23 @@ func loadAgents(dir string) ([]agent.Agent, error) {
 		)
 	}
 	return definitions, nil
+}
+
+// resumable keeps the sessions the interface can open: those whose agent
+// definition is still available and that hold a conversation.
+func resumable(infos []session.Info, definitions []agent.Agent) []session.Info {
+	available := make(map[string]bool, len(definitions))
+	for _, definition := range definitions {
+		available[definition.ID] = true
+	}
+
+	kept := make([]session.Info, 0, len(infos))
+	for _, info := range infos {
+		if available[info.Agent] && info.Title != "" {
+			kept = append(kept, info)
+		}
+	}
+	return kept
 }
 
 // selectAgent returns the index of the agent to run, or -1 when the user must

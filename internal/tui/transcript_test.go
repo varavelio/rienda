@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/varavelio/rienda/internal/engine"
+	"github.com/varavelio/rienda/internal/llm"
 )
 
 // TestTranscript verifies event folding.
@@ -129,6 +130,74 @@ func TestTranscript(t *testing.T) {
 		)
 
 		require.Empty(t, conversation.entries)
+	})
+
+	t.Run("loads a stored conversation", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.load([]llm.Message{
+			{Role: llm.RoleUser, Blocks: []llm.Block{
+				{Type: llm.BlockText, Text: "list the files"},
+			}},
+			{Role: llm.RoleAssistant, Blocks: []llm.Block{
+				{Type: llm.BlockThinking, Thinking: "let me "},
+				{Type: llm.BlockThinking, Thinking: "check"},
+				{Type: llm.BlockText, Text: "sure"},
+				{
+					Type:              llm.BlockToolCall,
+					ToolCallID:        "call_1",
+					ToolCallName:      "shell",
+					ToolCallArguments: json.RawMessage(`{"command":"ls"}`),
+				},
+			}},
+			{Role: llm.RoleUser, Blocks: []llm.Block{
+				{
+					Type:             llm.BlockToolResult,
+					ToolResultCallID: "call_1",
+					ToolResult: []llm.Block{
+						{Type: llm.BlockText, Text: "a.txt"},
+					},
+				},
+			}},
+		})
+
+		require.Len(t, conversation.entries, 4)
+		require.Equal(t, entryUser, conversation.entries[0].kind)
+		require.Equal(t, "list the files", conversation.entries[0].text)
+		require.Equal(t, entryThinking, conversation.entries[1].kind)
+		require.Equal(t, "let me check", conversation.entries[1].text)
+		require.Equal(t, entryAssistant, conversation.entries[2].kind)
+		require.Equal(t, "sure", conversation.entries[2].text)
+
+		invocation := conversation.entries[3]
+		require.Equal(t, entryTool, invocation.kind)
+		require.Equal(t, "shell", invocation.toolName)
+		require.Equal(t, "a.txt", invocation.text)
+		require.True(t, invocation.toolDone)
+		require.False(t, invocation.toolError)
+	})
+
+	t.Run("loads failed invocations", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.load([]llm.Message{
+			{Role: llm.RoleAssistant, Blocks: []llm.Block{
+				{Type: llm.BlockToolCall, ToolCallID: "call_1", ToolCallName: "shell"},
+			}},
+			{Role: llm.RoleUser, Blocks: []llm.Block{
+				{
+					Type:              llm.BlockToolResult,
+					ToolResultCallID:  "call_1",
+					ToolResultIsError: true,
+					ToolResult: []llm.Block{
+						{Type: llm.BlockText, Text: "boom"},
+					},
+				},
+			}},
+		})
+
+		require.Len(t, conversation.entries, 1)
+		require.True(t, conversation.entries[0].toolDone)
+		require.True(t, conversation.entries[0].toolError)
+		require.Equal(t, "boom", conversation.entries[0].text)
 	})
 }
 
