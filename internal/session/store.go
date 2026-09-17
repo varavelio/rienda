@@ -333,6 +333,7 @@ func (s *Store) Append(ctx context.Context, entry Entry) (Entry, error) {
 		CreatedAt:          now,
 		Role:               entry.Message.Role,
 		Blocks:             toStoredBlocks(entry.Message.Blocks),
+		ItemID:             entry.Message.ItemID,
 		ResponseModel:      entry.ResponseModel,
 		ResponseStopReason: entry.ResponseStopReason,
 		ResponseUsage:      toStoredUsage(entry.ResponseUsage),

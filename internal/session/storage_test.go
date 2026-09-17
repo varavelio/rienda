@@ -17,7 +17,7 @@ const validHeaderLine = `{"kind":"header","version":1,"id":"s1","createdAt":"202
 const userMessageLine = `{"kind":"message","id":"m1","createdAt":"2026-09-16T10:15:31Z","role":"user","blocks":[{"type":"text","text":"hello"}]}`
 
 // assistantMessageLine is an assistant message line used by the decode tests.
-const assistantMessageLine = `{"kind":"message","id":"m2","parentId":"m1","createdAt":"2026-09-16T10:15:32Z","role":"assistant","responseModel":"kimi-k2","responseStopReason":"end_turn","blocks":[{"type":"text","text":"hi"}],"responseUsage":{"inputTokens":10,"outputTokens":5}}`
+const assistantMessageLine = `{"kind":"message","id":"m2","parentId":"m1","createdAt":"2026-09-16T10:15:32Z","role":"assistant","responseModel":"kimi-k2","responseStopReason":"end_turn","itemId":"msg_2","blocks":[{"type":"text","text":"hi"}],"responseUsage":{"inputTokens":10,"outputTokens":5}}`
 
 // TestStoredUsage verifies usage translation.
 func TestStoredUsage(t *testing.T) {
@@ -49,7 +49,10 @@ func TestStoredBlocks(t *testing.T) {
 	t.Run("round trips every block type", func(t *testing.T) {
 		blocks := []llm.Block{
 			{Type: llm.BlockText, Text: "hello"},
-			{Type: llm.BlockThinking, Thinking: "plan", ThinkingSignature: "signature"},
+			{
+				Type: llm.BlockThinking, Thinking: "plan",
+				ThinkingSignature: "signature", ThinkingID: "rs_1",
+			},
 			{Type: llm.BlockRedactedThinking, ThinkingRedactedData: "opaque"},
 			{
 				Type:              llm.BlockToolCall,
@@ -103,6 +106,7 @@ func TestDecode(t *testing.T) {
 		require.Equal(t, llm.RoleUser, entries[0].Message.Role)
 		require.Equal(t, "m2", entries[1].ID)
 		require.Equal(t, "m1", entries[1].ParentID)
+		require.Equal(t, "msg_2", entries[1].Message.ItemID)
 		require.Equal(t, llm.StopReasonEndTurn, entries[1].ResponseStopReason)
 		require.Equal(t, llm.Usage{InputTokens: 10, OutputTokens: 5}, entries[1].ResponseUsage)
 		require.Equal(t, "m2", leaf)

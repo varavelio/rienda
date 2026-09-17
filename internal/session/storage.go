@@ -38,6 +38,7 @@ type storedEntry struct {
 	CreatedAt          time.Time      `json:"createdAt"`
 	Role               llm.Role       `json:"role,omitempty"`
 	Blocks             []storedBlock  `json:"blocks,omitempty"`
+	ItemID             string         `json:"itemId,omitempty"`
 	ResponseModel      string         `json:"responseModel,omitempty"`
 	ResponseStopReason llm.StopReason `json:"responseStopReason,omitempty"`
 	ResponseUsage      *storedUsage   `json:"responseUsage,omitempty"`
@@ -57,6 +58,7 @@ type storedBlock struct {
 	Text                 string          `json:"text,omitempty"`
 	Thinking             string          `json:"thinking,omitempty"`
 	ThinkingSignature    string          `json:"thinkingSignature,omitempty"`
+	ThinkingID           string          `json:"thinkingId,omitempty"`
 	ThinkingRedactedData string          `json:"thinkingRedactedData,omitempty"`
 	ToolCallID           string          `json:"toolCallId,omitempty"`
 	ToolCallName         string          `json:"toolCallName,omitempty"`
@@ -90,7 +92,7 @@ func (s storedEntry) entry() (Entry, error) {
 		ParentID:           s.ParentID,
 		CreatedAt:          s.CreatedAt,
 		Kind:               KindMessage,
-		Message:            llm.Message{Role: s.Role, Blocks: blocks},
+		Message:            llm.Message{Role: s.Role, Blocks: blocks, ItemID: s.ItemID},
 		ResponseModel:      s.ResponseModel,
 		ResponseStopReason: s.ResponseStopReason,
 		ResponseUsage:      s.responseUsage(),
@@ -154,6 +156,7 @@ func toStoredBlock(block llm.Block) storedBlock {
 		Text:                 block.Text,
 		Thinking:             block.Thinking,
 		ThinkingSignature:    block.ThinkingSignature,
+		ThinkingID:           block.ThinkingID,
 		ThinkingRedactedData: block.ThinkingRedactedData,
 		ToolCallID:           block.ToolCallID,
 		ToolCallName:         block.ToolCallName,
@@ -179,6 +182,7 @@ func fromStoredBlock(block storedBlock) (llm.Block, error) {
 			Type:              llm.BlockThinking,
 			Thinking:          block.Thinking,
 			ThinkingSignature: block.ThinkingSignature,
+			ThinkingID:        block.ThinkingID,
 		}, nil
 	case llm.BlockRedactedThinking:
 		return llm.Block{

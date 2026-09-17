@@ -416,9 +416,13 @@ func TestOpen(t *testing.T) {
 			ResponseStopReason: llm.StopReasonToolUse,
 			ResponseUsage:      llm.Usage{InputTokens: 10, OutputTokens: 5},
 			Message: llm.Message{
-				Role: llm.RoleAssistant,
+				Role:   llm.RoleAssistant,
+				ItemID: "msg_1",
 				Blocks: []llm.Block{
-					{Type: llm.BlockThinking, Thinking: "plan", ThinkingSignature: "sig"},
+					{
+						Type: llm.BlockThinking, Thinking: "plan",
+						ThinkingSignature: "sig", ThinkingID: "rs_1",
+					},
 					{Type: llm.BlockText, Text: "on it"},
 				},
 			},
