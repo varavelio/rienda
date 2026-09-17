@@ -4,6 +4,9 @@
     "target": "devcontainer"
   },
   "remoteUser": "root",
+  "mounts": [
+    "source=rienda-dev-data,target=/root/.rienda,type=volume"
+  ],
   "postCreateCommand": "bash ./.devcontainer/post-create.sh",
   "customizations": {
     "vscode": {
