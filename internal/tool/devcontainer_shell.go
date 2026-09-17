@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -19,22 +19,20 @@ const (
 )
 
 // defaultDevcontainerDescription describes the devcontainer shell to the model.
-const defaultDevcontainerDescription = "Runs a single shell command inside the project's dev container through the devcontainer CLI and returns its output. The dev container is located by searching the working directory and its parents for a .devcontainer/devcontainer.json or .devcontainer.json file. Every invocation starts a fresh process, so shell state does not persist between calls."
+const defaultDevcontainerDescription = "Runs a single shell command inside the project's dev container through the devcontainer CLI and returns its output. The dev container is located from the session workspace and commands always run with the workspace folder of the container as their working directory. Every invocation starts a fresh process, so shell state does not persist between calls."
 
 // defaultDevcontainerCommandDescription describes the command argument of the
 // devcontainer shell to the model.
-const defaultDevcontainerCommandDescription = "Shell command to run inside the dev container. The command runs in a fresh process inside the container, so shell state does not persist between calls."
-
-// defaultDevcontainerWorkdirDescription describes the workdir argument of the
-// devcontainer shell to the model.
-const defaultDevcontainerWorkdirDescription = "Host directory used to locate the dev container workspace. Relative paths resolve against the session workspace. Defaults to the session workspace."
+const defaultDevcontainerCommandDescription = "Shell command to run inside the dev container. The command runs in a fresh process with the workspace folder of the container as its working directory, so shell state does not persist between calls."
 
 // DevcontainerShell is the built-in tool that runs one-shot shell commands
 // inside the project's dev container through the devcontainer CLI.
 //
-// Every invocation starts a fresh process through devcontainer exec, so shell
-// state does not persist between calls. Output is streamed to the sink while
-// the command runs and capped for the model result.
+// The tool accepts no working directory: devcontainer exec runs every command
+// with the workspace folder of the container as its working directory, which
+// keeps host paths out of the model interface. Every invocation starts a fresh
+// process, so shell state does not persist between calls. Output is streamed
+// to the sink while the command runs and capped for the model result.
 type DevcontainerShell struct {
 	core *shellTool
 }
@@ -86,7 +84,7 @@ func NewDevcontainerShell(options DevcontainerShellOptions) (*DevcontainerShell,
 		description: cmp.Or(options.Description, defaultDevcontainerDescription),
 		parameters: json.RawMessage(shellParametersJSON(
 			defaultDevcontainerCommandDescription,
-			defaultDevcontainerWorkdirDescription,
+			"",
 			timeout,
 			maxTimeout,
 		)),
@@ -106,6 +104,7 @@ func NewDevcontainerShell(options DevcontainerShellOptions) (*DevcontainerShell,
 			}, nil
 		},
 		defaultWorkdir: options.Workdir,
+		allowWorkdir:   false,
 		timeout:        timeout,
 		maxTimeout:     maxTimeout,
 		maxOutput:      cmp.Or(options.MaxOutputBytes, defaultShellMaxOutput),
@@ -128,7 +127,8 @@ func (d *DevcontainerShell) Execute(ctx context.Context, call Call, out Sink) (R
 
 // findDevcontainerWorkspace locates the workspace folder of the dev container
 // that contains workdir, searching workdir and its ancestors for a
-// devcontainer configuration file.
+// devcontainer configuration file. The error names no directory, because the
+// host path must not travel to the model.
 func findDevcontainerWorkspace(workdir string) (string, error) {
 	dir := workdir
 	for {
@@ -143,9 +143,10 @@ func findDevcontainerWorkspace(workdir string) (string, error) {
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf(
-				"tool: no devcontainer configuration found in %s or any parent directory",
-				workdir,
+			return "", errors.New(
+				"tool: the session workspace is not inside a dev container: " +
+					"no .devcontainer/devcontainer.json or .devcontainer.json " +
+					"was found in it or any of its parent directories",
 			)
 		}
 		dir = parent

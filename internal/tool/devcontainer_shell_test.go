@@ -86,6 +86,29 @@ func TestDevcontainerShellExecute(t *testing.T) {
 		require.Contains(t, resultText(t, result), "--workspace-folder "+workspace)
 	})
 
+	t.Run("rejects a workdir argument", func(t *testing.T) {
+		shim := writeDevcontainerShim(t, `printf 'ARGS:%s\n' "$*"`)
+		workspace := newDevcontainerWorkspace(
+			t,
+			filepath.Join(".devcontainer", "devcontainer.json"),
+		)
+
+		shell, err := NewDevcontainerShell(DevcontainerShellOptions{
+			Binary:  shim,
+			Workdir: workspace,
+		})
+		require.NoError(t, err)
+
+		sink := &recordingSink{}
+		_, err = shell.Execute(
+			t.Context(),
+			Call{Arguments: json.RawMessage(`{"command":"echo hi","workdir":"/tmp"}`)},
+			sink,
+		)
+
+		require.ErrorContains(t, err, "does not accept a workdir argument")
+	})
+
 	t.Run("reports a non-zero exit code", func(t *testing.T) {
 		shim := writeDevcontainerShim(t, `exit 7`)
 		workspace := newDevcontainerWorkspace(
@@ -112,9 +135,10 @@ func TestDevcontainerShellExecute(t *testing.T) {
 	})
 
 	t.Run("fails when no devcontainer is found", func(t *testing.T) {
+		workdir := t.TempDir()
 		shell, err := NewDevcontainerShell(DevcontainerShellOptions{
 			Binary:  writeDevcontainerShim(t, "true"),
-			Workdir: t.TempDir(),
+			Workdir: workdir,
 		})
 		require.NoError(t, err)
 
@@ -125,7 +149,8 @@ func TestDevcontainerShellExecute(t *testing.T) {
 			sink,
 		)
 
-		require.ErrorContains(t, err, "no devcontainer configuration found")
+		require.ErrorContains(t, err, "not inside a dev container")
+		require.NotContains(t, err.Error(), workdir)
 	})
 }
 
@@ -137,9 +162,10 @@ func TestNewDevcontainerShell(t *testing.T) {
 
 		definition := shell.Definition()
 		require.Equal(t, "dc-shell", definition.Name)
-		require.NotEmpty(t, definition.Description)
+		require.Contains(t, definition.Description, "working directory")
 		require.True(t, json.Valid(definition.Parameters))
 		require.Contains(t, string(definition.Parameters), `"command"`)
+		require.NotContains(t, string(definition.Parameters), `"workdir"`)
 	})
 
 	t.Run("rejects invalid options", func(t *testing.T) {

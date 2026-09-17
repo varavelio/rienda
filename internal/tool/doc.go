@@ -13,7 +13,9 @@
 // The package ships two built-in tools. Shell runs one-shot commands on the
 // host and DevcontainerShell runs one-shot commands inside the project's dev
 // container through the devcontainer CLI. Both run each invocation in a fresh
-// process and share the same argument schema.
+// process; Shell accepts a host working directory, while DevcontainerShell
+// always runs in the workspace folder of the container and keeps host paths
+// out of its interface.
 //
 // Tools resolve their working directory from the invocation context (see
 // WithWorkdir), from their configuration, or from the process working

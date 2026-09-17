@@ -62,6 +62,7 @@ type shellConfig struct {
 	parameters     json.RawMessage
 	buildArgv      argvBuilder
 	defaultWorkdir string
+	allowWorkdir   bool
 	timeout        time.Duration
 	maxTimeout     time.Duration
 	maxOutput      int
@@ -74,6 +75,7 @@ type shellTool struct {
 	parameters     json.RawMessage
 	buildArgv      argvBuilder
 	defaultWorkdir string
+	allowWorkdir   bool
 	timeout        time.Duration
 	maxTimeout     time.Duration
 	maxOutput      int
@@ -113,6 +115,7 @@ func newShellTool(cfg shellConfig) (*shellTool, error) {
 		parameters:     cfg.parameters,
 		buildArgv:      cfg.buildArgv,
 		defaultWorkdir: cfg.defaultWorkdir,
+		allowWorkdir:   cfg.allowWorkdir,
 		timeout:        cfg.timeout,
 		maxTimeout:     cfg.maxTimeout,
 		maxOutput:      cfg.maxOutput,
@@ -130,7 +133,7 @@ func (t *shellTool) Definition() llm.Tool {
 
 // Execute runs one command invocation.
 func (t *shellTool) Execute(ctx context.Context, call Call, out Sink) (Result, error) {
-	args, err := parseShellArguments(call.Arguments)
+	args, err := t.parseArguments(call.Arguments)
 	if err != nil {
 		return Result{}, err
 	}
@@ -168,8 +171,10 @@ func (t *shellTool) Execute(ctx context.Context, call Call, out Sink) (Result, e
 	return t.commandResult(ctx, runCtx, cmd, cmd.Wait(), stdout, stderr, timeout)
 }
 
-// parseShellArguments decodes and validates the shared shell arguments.
-func parseShellArguments(raw json.RawMessage) (shellArguments, error) {
+// parseArguments decodes and validates the shared shell arguments. Tools that
+// do not accept a working directory reject the argument instead of ignoring
+// it, so the model learns the interface.
+func (t *shellTool) parseArguments(raw json.RawMessage) (shellArguments, error) {
 	var args shellArguments
 	if err := decodeArguments(raw, &args); err != nil {
 		return shellArguments{}, err
@@ -178,6 +183,12 @@ func parseShellArguments(raw json.RawMessage) (shellArguments, error) {
 	args.Command = strings.TrimSpace(args.Command)
 	if args.Command == "" {
 		return shellArguments{}, errors.New(`tool: "command" is required`)
+	}
+	if !t.allowWorkdir && args.Workdir != "" {
+		return shellArguments{}, fmt.Errorf(
+			"tool: %s does not accept a workdir argument",
+			t.name,
+		)
 	}
 	if args.TimeoutMS < 0 {
 		return shellArguments{}, errors.New(`tool: "timeout_ms" must not be negative`)
@@ -421,7 +432,8 @@ func truncateUTF8(s string, maxBytes int) (string, bool) {
 }
 
 // shellParametersJSON builds the argument schema shared by the built-in shell
-// tools.
+// tools. The workdir property is included only when its description is not
+// empty, because some tools do not accept a working directory.
 func shellParametersJSON(
 	command, workdir string,
 	defaultTimeout, maxTimeout time.Duration,
@@ -431,17 +443,22 @@ func shellParametersJSON(
 		" and requests above " + strconv.FormatInt(maxTimeout.Milliseconds(), 10) +
 		" are capped."
 
+	workdirProperty := ""
+	if workdir != "" {
+		workdirProperty = fmt.Sprintf(`,
+    "workdir": {
+      "type": "string",
+      "description": %q
+    }`, workdir)
+	}
+
 	return fmt.Sprintf(`{
   "type": "object",
   "properties": {
     "command": {
       "type": "string",
       "description": %q
-    },
-    "workdir": {
-      "type": "string",
-      "description": %q
-    },
+    }%s,
     "timeout_ms": {
       "type": "integer",
       "description": %q
@@ -449,7 +466,7 @@ func shellParametersJSON(
   },
   "required": ["command"],
   "additionalProperties": false
-}`, command, workdir, timeout)
+}`, command, workdirProperty, timeout)
 }
 
 // Shell is the built-in tool that runs one-shot shell commands on the host.
@@ -511,6 +528,7 @@ func NewShell(options ShellOptions) (*Shell, error) {
 			return []string{interpreter, "-c", command}, nil
 		},
 		defaultWorkdir: options.Workdir,
+		allowWorkdir:   true,
 		timeout:        timeout,
 		maxTimeout:     maxTimeout,
 		maxOutput:      cmp.Or(options.MaxOutputBytes, defaultShellMaxOutput),
