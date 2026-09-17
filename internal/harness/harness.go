@@ -25,8 +25,14 @@ const configEnvVar = "RIENDA_CONFIG"
 // Options configures the preparation of a session.
 type Options struct {
 	// AgentID is the identifier of the agent definition to run. It is
-	// required.
+	// required to create a session and must be empty when SessionID resumes
+	// one.
 	AgentID string
+
+	// SessionID resumes the session with this identifier instead of creating
+	// a new one. The agent of the resumed session comes from its stored
+	// header.
+	SessionID string
 
 	// Workdir is the directory the session runs commands in. It defaults to
 	// the process working directory.
@@ -51,13 +57,9 @@ type Session struct {
 	engine *engine.Engine
 }
 
-// Prepare resolves the options and opens a new session.
+// Prepare resolves the options and opens a session: the one identified by
+// Options.SessionID when it is set, or a new one owned by Options.AgentID.
 func Prepare(ctx context.Context, opts Options) (*Session, error) {
-	agentID := strings.TrimSpace(opts.AgentID)
-	if agentID == "" {
-		return nil, errors.New("harness: an agent id is required")
-	}
-
 	workdir, err := resolveWorkdir(opts.Workdir)
 	if err != nil {
 		return nil, err
@@ -72,50 +74,39 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, fmt.Errorf("harness: load configuration: %w", err)
 	}
 
-	agentsDir := opts.AgentsDir
-	if agentsDir == "" {
-		agentsDir, err = agent.DefaultDir()
-		if err != nil {
-			return nil, fmt.Errorf("harness: locate agent directory: %w", err)
-		}
-	}
-	definition, err := agent.Load(agentsDir, agentID)
-	if err != nil {
-		return nil, fmt.Errorf("harness: load agent %q: %w", agentID, err)
-	}
-
-	resolved, err := cfg.Resolve(definition.Model)
-	if err != nil {
-		return nil, fmt.Errorf("harness: agent %q: %w", agentID, err)
-	}
-	client, err := provider.New(resolved.Protocol, resolved.ProviderConfig)
-	if err != nil {
-		return nil, fmt.Errorf("harness: build provider client: %w", err)
-	}
-
-	registry, err := newTools()
+	agentsDir, err := resolveAgentsDir(opts.AgentsDir)
 	if err != nil {
 		return nil, err
 	}
-
-	sessionsDir := opts.SessionsDir
-	if sessionsDir == "" {
-		sessionsDir, err = session.DefaultDir()
-		if err != nil {
-			return nil, fmt.Errorf("harness: locate sessions directory: %w", err)
-		}
+	sessionsDir, err := resolveSessionsDir(opts.SessionsDir)
+	if err != nil {
+		return nil, err
 	}
 	projectDir, err := projectDir(sessionsDir, workdir)
 	if err != nil {
 		return nil, err
 	}
-	store, err := session.Create(ctx, projectDir, session.Header{
-		Agent:   definition.ID,
-		Model:   definition.Model,
-		Workdir: workdir,
-	}, id.NewIDGenerator())
+
+	store, definition, err := openSession(ctx, opts, projectDir, workdir, agentsDir)
 	if err != nil {
-		return nil, fmt.Errorf("harness: create session: %w", err)
+		return nil, err
+	}
+
+	resolved, err := cfg.Resolve(definition.Model)
+	if err != nil {
+		closeStore(store)
+		return nil, fmt.Errorf("harness: agent %q: %w", definition.ID, err)
+	}
+	client, err := provider.New(resolved.Protocol, resolved.ProviderConfig)
+	if err != nil {
+		closeStore(store)
+		return nil, fmt.Errorf("harness: build provider client: %w", err)
+	}
+
+	registry, err := newTools()
+	if err != nil {
+		closeStore(store)
+		return nil, err
 	}
 
 	runner, err := engine.New(engine.Config{
@@ -127,11 +118,92 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		Workdir:  workdir,
 	})
 	if err != nil {
-		_ = store.Close()
+		closeStore(store)
 		return nil, fmt.Errorf("harness: build engine: %w", err)
 	}
 
 	return &Session{store: store, engine: runner}, nil
+}
+
+// openSession returns the store of the session to run and the agent definition
+// that owns it. It resumes the session identified by opts.SessionID, or creates
+// a new session owned by opts.AgentID in dir.
+func openSession(
+	ctx context.Context,
+	opts Options,
+	dir, workdir, agentsDir string,
+) (*session.Store, agent.Agent, error) {
+	sessionID := strings.TrimSpace(opts.SessionID)
+	agentID := strings.TrimSpace(opts.AgentID)
+	switch {
+	case sessionID != "" && agentID != "":
+		return nil, agent.Agent{}, errors.New(
+			"harness: an agent id and a session id are mutually exclusive",
+		)
+	case sessionID == "" && agentID == "":
+		return nil, agent.Agent{}, errors.New("harness: an agent id is required")
+	}
+
+	if sessionID != "" {
+		store, err := session.Open(dir, sessionID, id.NewIDGenerator())
+		if err != nil {
+			return nil, agent.Agent{}, fmt.Errorf("harness: open session %q: %w", sessionID, err)
+		}
+		owner := store.Info().Agent
+		definition, err := agent.Load(agentsDir, owner)
+		if err != nil {
+			closeStore(store)
+			return nil, agent.Agent{}, fmt.Errorf("harness: load agent %q: %w", owner, err)
+		}
+		return store, definition, nil
+	}
+
+	definition, err := agent.Load(agentsDir, agentID)
+	if err != nil {
+		return nil, agent.Agent{}, fmt.Errorf("harness: load agent %q: %w", agentID, err)
+	}
+	store, err := session.Create(ctx, dir, session.Header{
+		Agent:   definition.ID,
+		Model:   definition.Model,
+		Workdir: workdir,
+	}, id.NewIDGenerator())
+	if err != nil {
+		return nil, agent.Agent{}, fmt.Errorf("harness: create session: %w", err)
+	}
+	return store, definition, nil
+}
+
+// Sessions returns the sessions stored for the workspace of the options, most
+// recently updated first. A workspace without sessions yields no sessions.
+// Sessions that cannot be read are skipped, and the returned error reports
+// them together with the sessions that could be read.
+func Sessions(opts Options) ([]session.Info, error) {
+	workdir, err := resolveWorkdir(opts.Workdir)
+	if err != nil {
+		return nil, err
+	}
+	sessionsDir, err := resolveSessionsDir(opts.SessionsDir)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := projectDir(sessionsDir, workdir)
+	if err != nil {
+		return nil, err
+	}
+
+	infos, err := session.List(dir)
+	if err != nil {
+		return infos, fmt.Errorf("harness: list sessions: %w", err)
+	}
+	return infos, nil
+}
+
+// closeStore releases a session store when there is one, discarding the close
+// error because the caller is already handling the failure that triggers it.
+func closeStore(store *session.Store) {
+	if store != nil {
+		_ = store.Close()
+	}
 }
 
 // ID returns the session identifier.
@@ -142,6 +214,11 @@ func (s *Session) ID() string {
 // Info returns the session metadata.
 func (s *Session) Info() session.Info {
 	return s.store.Info()
+}
+
+// History returns the messages of the active branch in conversation order.
+func (s *Session) History() []llm.Message {
+	return s.store.History()
 }
 
 // Run starts a run of the session and returns the channel carrying its
@@ -242,4 +319,30 @@ func resolveConfigPath(explicit string) (string, error) {
 		return "", fmt.Errorf("harness: %w", err)
 	}
 	return path, nil
+}
+
+// resolveAgentsDir returns the directory holding the agent definitions: the
+// requested one, or the global agent directory.
+func resolveAgentsDir(requested string) (string, error) {
+	if dir := strings.TrimSpace(requested); dir != "" {
+		return dir, nil
+	}
+	dir, err := agent.DefaultDir()
+	if err != nil {
+		return "", fmt.Errorf("harness: locate agent directory: %w", err)
+	}
+	return dir, nil
+}
+
+// resolveSessionsDir returns the base directory holding the session files: the
+// requested one, or the global sessions directory.
+func resolveSessionsDir(requested string) (string, error) {
+	if dir := strings.TrimSpace(requested); dir != "" {
+		return dir, nil
+	}
+	dir, err := session.DefaultDir()
+	if err != nil {
+		return "", fmt.Errorf("harness: locate sessions directory: %w", err)
+	}
+	return dir, nil
 }

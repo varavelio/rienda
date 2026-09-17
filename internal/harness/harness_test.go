@@ -16,6 +16,7 @@ import (
 
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/id"
+	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 )
 
@@ -263,6 +264,13 @@ func TestPrepare(t *testing.T) {
 				mutate:  func(options *Options) { options.AgentID = "ghost" },
 				wantErr: "ghost.md",
 			},
+			{
+				name: "agent id with session id",
+				mutate: func(options *Options) {
+					options.SessionID = "session_00000000000000000000000000"
+				},
+				wantErr: "mutually exclusive",
+			},
 		}
 
 		for _, test := range tests {
@@ -335,6 +343,93 @@ func TestPrepare(t *testing.T) {
 		)
 		_, err = os.Stat(path)
 		require.NoError(t, err)
+	})
+
+	t.Run("resumes a stored session", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"), textScript("two"))
+		started := env.prepare(t)
+
+		events := collectEvents(started.Run(t.Context(), "first"))
+		require.Equal(t, "one", joinedText(events))
+		require.NoError(t, started.Close())
+
+		options := env.options()
+		options.AgentID = ""
+		options.SessionID = started.ID()
+		resumed, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, resumed.Close()) })
+
+		require.Equal(t, started.ID(), resumed.ID())
+		require.Equal(t, "coder", resumed.Info().Agent)
+
+		history := resumed.History()
+		require.Len(t, history, 2)
+		require.Equal(t, llm.RoleUser, history[0].Role)
+		require.Equal(t, "first", history[0].Blocks[0].Text)
+		require.Equal(t, llm.RoleAssistant, history[1].Role)
+		require.Equal(t, "one", history[1].Blocks[0].Text)
+
+		events = collectEvents(resumed.Run(t.Context(), "second"))
+		require.Equal(t, "two", joinedText(events))
+		require.Len(t, env.provider.requests[1].Messages, 4)
+		require.Equal(t, "second", env.provider.requests[1].Messages[3].Content)
+	})
+
+	t.Run("reports unknown sessions", func(t *testing.T) {
+		env := newTestEnvironment(t)
+
+		options := env.options()
+		options.AgentID = ""
+		options.SessionID = id.NewIDGenerator().NewID(t.Context())
+
+		_, err := Prepare(t.Context(), options)
+
+		require.ErrorContains(t, err, "open session")
+	})
+
+	t.Run("reports sessions whose agent is gone", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		stored := env.prepare(t)
+
+		require.NoError(t, os.Remove(env.agentPath("coder")))
+
+		options := env.options()
+		options.AgentID = ""
+		options.SessionID = stored.ID()
+
+		_, err := Prepare(t.Context(), options)
+
+		require.ErrorContains(t, err, `load agent "coder"`)
+	})
+}
+
+// TestSessions verifies session listing.
+func TestSessions(t *testing.T) {
+	t.Run("lists the sessions of the workspace", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		first := env.prepare(t)
+		second := env.prepare(t)
+
+		infos, err := Sessions(env.options())
+
+		require.NoError(t, err)
+		require.Len(t, infos, 2)
+		require.Equal(t, "coder", infos[0].Agent)
+		require.ElementsMatch(
+			t,
+			[]string{first.ID(), second.ID()},
+			[]string{infos[0].ID, infos[1].ID},
+		)
+	})
+
+	t.Run("returns no sessions for an unused workspace", func(t *testing.T) {
+		env := newTestEnvironment(t)
+
+		infos, err := Sessions(env.options())
+
+		require.NoError(t, err)
+		require.Empty(t, infos)
 	})
 }
 
