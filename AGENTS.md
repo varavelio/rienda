@@ -4,6 +4,13 @@
 
 Rienda is a simple, easy to use, declarative, multi-agent LLM Harness, similar to Pi, OpenCode, etc.
 
+## Architecture
+
+The binary has three modes, one package each, and the entry point only
+dispatches to them: the interactive interface in `internal/tui` (the default
+mode), the non-interactive commands in `internal/cli`, and the protocol server
+in `internal/rpc`. Every mode drives sessions through `internal/harness`.
+
 ## How to maintain this document
 
 Keep this file current and minimal. Update it only when repository-wide workflow, structure, or project guidance changes. Do not turn it into a changelog. Use it exclusively to indicate truly relevant things in the codebase; don't include any minor details that are obvious or don't warrant documentation
