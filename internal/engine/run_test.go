@@ -208,6 +208,43 @@ func TestRun(t *testing.T) {
 		require.Equal(t, "call_2", history[2].Blocks[1].ToolResultCallID)
 	})
 
+	t.Run("persists and replays provider item identifiers", func(t *testing.T) {
+		echoTool := &fakeTool{name: "echo", output: "ok"}
+		client := &fakeClient{scripts: []script{
+			{events: []llm.StreamEvent{
+				{
+					Type: llm.StreamThinkingDelta, Thinking: "plan",
+					ThinkingSignature: "enc-1", ThinkingID: "rs_1",
+				},
+				{Type: llm.StreamToolCallStart, ToolCallID: "call_1", ToolCallName: "echo"},
+				{Type: llm.StreamToolCallArgsDelta, ToolCallID: "call_1", ToolCallArgsDelta: `{}`},
+				{
+					Type: llm.StreamMessageEnd, ItemID: "msg_1",
+					StopReason: llm.StopReasonToolUse,
+				},
+			}},
+			endTurn("done"),
+		}}
+		engine, store := newTestEngine(t, Config{
+			Client:   client,
+			Registry: newTestRegistry(t, echoTool),
+			Agent:    agent.Agent{Tools: []string{"echo"}},
+		})
+
+		collect(engine.Run(t.Context(), "go"))
+
+		history := store.History()
+		require.Len(t, history, 4)
+		require.Equal(t, "msg_1", history[1].ItemID)
+		require.Equal(t, "rs_1", history[1].Blocks[0].ThinkingID)
+		require.Equal(t, "enc-1", history[1].Blocks[0].ThinkingSignature)
+
+		require.Len(t, client.requests, 2)
+		replayed := client.requests[1].Messages[1]
+		require.Equal(t, "msg_1", replayed.ItemID)
+		require.Equal(t, "rs_1", replayed.Blocks[0].ThinkingID)
+	})
+
 	t.Run("reports unknown tools as results", func(t *testing.T) {
 		client := &fakeClient{scripts: []script{
 			toolTurn("call_1", "ghost", `{}`),

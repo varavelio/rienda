@@ -91,7 +91,11 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 		// Persisting a complete response is not cancelable: the work is done,
 		// so it must survive an interrupt that arrives right now.
 		entry, err := e.store.Append(context.WithoutCancel(ctx), session.Entry{
-			Message:            llm.Message{Role: llm.RoleAssistant, Blocks: response.blocks},
+			Message: llm.Message{
+				Role:   llm.RoleAssistant,
+				Blocks: response.blocks,
+				ItemID: response.messageItemID,
+			},
 			ResponseModel:      response.model,
 			ResponseStopReason: response.stopReason,
 			ResponseUsage:      response.usage,

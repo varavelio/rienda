@@ -18,6 +18,10 @@ type turn struct {
 	stopReason llm.StopReason
 	usage      llm.Usage
 
+	// messageItemID identifies the provider output message item that carried
+	// the response text. It is empty when the provider assigns no identifier.
+	messageItemID string
+
 	// argumentErrors reports the tool calls whose streamed arguments were not
 	// a JSON object, keyed by call ID.
 	argumentErrors map[string]error
@@ -43,15 +47,17 @@ type streamedCall struct {
 
 // accumulator assembles the stream events of one model response into a turn.
 type accumulator struct {
-	text       strings.Builder
-	thinking   strings.Builder
-	signature  strings.Builder
-	redacted   []string
-	calls      []*streamedCall
-	callsByID  map[string]*streamedCall
-	model      string
-	stopReason llm.StopReason
-	usage      llm.Usage
+	text          strings.Builder
+	thinking      strings.Builder
+	signature     strings.Builder
+	thinkingID    string
+	messageItemID string
+	redacted      []string
+	calls         []*streamedCall
+	callsByID     map[string]*streamedCall
+	model         string
+	stopReason    llm.StopReason
+	usage         llm.Usage
 }
 
 // newAccumulator returns an empty response accumulator.
@@ -69,6 +75,9 @@ func (a *accumulator) observe(event llm.StreamEvent) {
 	case llm.StreamThinkingDelta:
 		a.thinking.WriteString(event.Thinking)
 		a.signature.WriteString(event.ThinkingSignature)
+		if event.ThinkingID != "" {
+			a.thinkingID = event.ThinkingID
+		}
 	case llm.StreamThinkingRedacted:
 		a.redacted = append(a.redacted, event.ThinkingRedactedData)
 	case llm.StreamToolCallStart:
@@ -78,6 +87,7 @@ func (a *accumulator) observe(event llm.StreamEvent) {
 	case llm.StreamMessageEnd:
 		a.stopReason = event.StopReason
 		a.usage = event.Usage
+		a.messageItemID = event.ItemID
 	}
 }
 
@@ -113,6 +123,7 @@ func (a *accumulator) turn(fallbackModel string) (turn, error) {
 			Type:              llm.BlockThinking,
 			Thinking:          a.thinking.String(),
 			ThinkingSignature: a.signature.String(),
+			ThinkingID:        a.thinkingID,
 		})
 	}
 	for _, data := range a.redacted {
@@ -152,6 +163,7 @@ func (a *accumulator) turn(fallbackModel string) (turn, error) {
 		blocks:         blocks,
 		stopReason:     a.stopReason,
 		usage:          a.usage,
+		messageItemID:  a.messageItemID,
 		argumentErrors: argumentErrors,
 	}, nil
 }
