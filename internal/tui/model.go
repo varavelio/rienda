@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -61,6 +62,10 @@ const maxInputLines = 8
 // maxEventBurst caps how many events one update folds, so a flood of events
 // cannot stall the interface.
 const maxEventBurst = 64
+
+// interruptConfirmWindow is how long the interface waits for a second escape
+// before dropping a pending interruption request.
+const interruptConfirmWindow = 3 * time.Second
 
 // defaultDarkBackground is the terminal background assumed until the terminal
 // reports the real one.
@@ -192,6 +197,13 @@ type engineEventsMsg []engine.Event
 // eventsClosedMsg reports that the event channel of a run was closed.
 type eventsClosedMsg struct{}
 
+// interruptTimeoutMsg reports that the confirmation window of an interruption
+// request expired. The sequence identifies the request that armed it, so a
+// stale timer cannot drop a newer request.
+type interruptTimeoutMsg struct {
+	seq int
+}
+
 // modelConfig configures a model.
 type modelConfig struct {
 	// agents lists the agent definitions the user may run.
@@ -237,6 +249,12 @@ type model struct {
 	fatal    error
 	usageIn  int
 	usageOut int
+
+	// confirmInterrupt reports that an escape press armed an interruption
+	// request that waits for a second press. interruptSeq numbers those
+	// requests so a stale timeout cannot drop a newer one.
+	confirmInterrupt bool
+	interruptSeq     int
 
 	preferences   preferences
 	returnPhase   phase
@@ -357,6 +375,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case engineEventsMsg:
 		return m, m.handleEvents(msg)
+	case interruptTimeoutMsg:
+		m.handleInterruptTimeout(msg)
+		return m, nil
 	case eventsClosedMsg:
 		if m.running {
 			m.finishRun(engine.EndReasonError)
@@ -557,8 +578,7 @@ func (m *model) togglePreference(index int) {
 func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
 	case keyEscape:
-		m.cancelRun()
-		return nil
+		return m.requestInterrupt()
 	case keyEnter:
 		return m.submit()
 	case keyUp, keyDown:
@@ -708,10 +728,47 @@ func (m *model) finishRun(reason engine.EndReason) {
 	m.setRunning(false)
 	m.cancel = nil
 	m.events = nil
+	m.clearInterrupt()
 
 	if reason == engine.EndReasonInterrupted {
 		m.transcript.addNotice("the run was interrupted")
 	}
+}
+
+// requestInterrupt asks the user to confirm the interruption of the run in
+// flight. The first escape arms the confirmation and the second one cancels
+// the run; the request expires after interruptConfirmWindow without a second
+// press. It does nothing when no run is in flight.
+func (m *model) requestInterrupt() tea.Cmd {
+	if !m.running {
+		return nil
+	}
+	if m.confirmInterrupt {
+		m.clearInterrupt()
+		m.cancelRun()
+		return nil
+	}
+
+	m.confirmInterrupt = true
+	m.interruptSeq++
+	seq := m.interruptSeq
+	return tea.Tick(interruptConfirmWindow, func(time.Time) tea.Msg {
+		return interruptTimeoutMsg{seq: seq}
+	})
+}
+
+// handleInterruptTimeout drops a confirmation that expired without a second
+// press, ignoring the timers of requests that a newer press already replaced.
+func (m *model) handleInterruptTimeout(msg interruptTimeoutMsg) {
+	if msg.seq != m.interruptSeq {
+		return
+	}
+	m.clearInterrupt()
+}
+
+// clearInterrupt drops any pending interruption confirmation.
+func (m *model) clearInterrupt() {
+	m.confirmInterrupt = false
 }
 
 // cancelRun interrupts the run in flight, if there is one.

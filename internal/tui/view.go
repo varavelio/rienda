@@ -244,7 +244,11 @@ func (m *model) chatFooter() string {
 
 	switch {
 	case m.running:
-		parts = append(parts, m.spinner.View()+" working… · esc interrupts")
+		hint := "esc interrupts"
+		if m.confirmInterrupt {
+			hint = "esc again to interrupt"
+		}
+		parts = append(parts, m.spinner.View()+" working… · "+hint)
 	case m.usageIn > 0 || m.usageOut > 0:
 		parts = append(parts, fmt.Sprintf(
 			"tokens %d in · %d out · enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit",

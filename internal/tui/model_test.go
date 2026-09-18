@@ -290,19 +290,40 @@ func TestModel(t *testing.T) {
 		require.Equal(t, "second", m.input.Value())
 	})
 
-	t.Run("cancels the run in flight with escape", func(t *testing.T) {
+	t.Run("asks for confirmation before interrupting the run", func(t *testing.T) {
 		m, scripted := chatModel(t)
 		m.input.SetValue("long task")
 		update(t, m, pressEnter)
 		require.True(t, m.running)
 
+		cmd := update(t, m, pressEscape)
+
+		require.True(t, m.confirmInterrupt)
+		require.NotNil(t, cmd, "arming the confirmation starts its timeout")
+		require.Contains(t, plain(m.render()), "esc again to interrupt")
+		select {
+		case <-scripted.canceled:
+			require.Fail(t, "the run was canceled before the confirmation")
+		default:
+		}
+	})
+
+	t.Run("cancels the run on the confirming escape", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		m.input.SetValue("long task")
+		update(t, m, pressEnter)
+
 		update(t, m, pressEscape)
+		require.True(t, m.confirmInterrupt)
+
+		require.Nil(t, update(t, m, pressEscape), "confirming needs no timeout")
 
 		select {
 		case <-scripted.canceled:
 		case <-time.After(2 * time.Second):
 			require.Fail(t, "the run was not canceled")
 		}
+		require.False(t, m.confirmInterrupt)
 
 		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
@@ -311,6 +332,45 @@ func TestModel(t *testing.T) {
 
 		require.False(t, m.running)
 		require.Contains(t, plain(m.render()), "interrupted")
+	})
+
+	t.Run("drops the interruption request when it times out", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		m.input.SetValue("long task")
+		update(t, m, pressEnter)
+		update(t, m, pressEscape)
+		require.True(t, m.confirmInterrupt)
+
+		update(t, m, interruptTimeoutMsg{seq: m.interruptSeq})
+
+		require.False(t, m.confirmInterrupt)
+		require.Contains(t, plain(m.render()), "esc interrupts")
+		require.NotContains(t, plain(m.render()), "esc again")
+		select {
+		case <-scripted.canceled:
+			require.Fail(t, "the timed out request canceled the run")
+		default:
+		}
+	})
+
+	t.Run("ignores the timeout of a replaced request", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("long task")
+		update(t, m, pressEnter)
+		update(t, m, pressEscape)
+
+		// The timer of a request that a newer press already replaced carries
+		// an older sequence and must not drop the pending confirmation.
+		update(t, m, interruptTimeoutMsg{seq: m.interruptSeq - 1})
+
+		require.True(t, m.confirmInterrupt, "a stale timer must not drop the request")
+	})
+
+	t.Run("ignores escape when no run is in flight", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		require.Nil(t, update(t, m, pressEscape))
+		require.False(t, m.confirmInterrupt)
 	})
 
 	t.Run("finishes the run when the event channel closes", func(t *testing.T) {
