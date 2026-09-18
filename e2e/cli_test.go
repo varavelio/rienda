@@ -12,15 +12,30 @@ import (
 )
 
 // TestHelp verifies that every form of the help request prints the program
-// overview and succeeds.
+// overview, headed by the version, and succeeds.
 func TestHelp(t *testing.T) {
 	for _, args := range [][]string{{"help"}, {"-h"}, {"--help"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			result := harness.Run(t, nil, args...)
 
 			result.RequireSuccess(t)
+			require.Regexp(t, `(?i)^rienda \S+\n`, result.Stdout)
 			require.Contains(t, result.Stdout, "Usage:")
 			require.Contains(t, result.Stdout, "rienda run -a <agent> -p <prompt>")
+			require.Empty(t, result.Stderr)
+		})
+	}
+}
+
+// TestVersion verifies that every form of the version request prints the
+// program name and its version and succeeds.
+func TestVersion(t *testing.T) {
+	for _, args := range [][]string{{"version"}, {"-v"}, {"--version"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			result := harness.Run(t, nil, args...)
+
+			result.RequireSuccess(t)
+			require.Regexp(t, `(?i)^rienda \S+`, result.Stdout)
 			require.Empty(t, result.Stderr)
 		})
 	}
