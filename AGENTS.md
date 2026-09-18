@@ -33,3 +33,9 @@ Whenever possible, write tests that verify the expected behavior of the code bei
 - Write high-value tests, focus on critical logic and relevant edge cases. Quality beats quantity; don't write tests just to inflate coverage; make sure every test adds real value.
 - Treat tests as our primary tool to catch regressions. Write every test to guarantee long-term stability, correctness, functionality, and maintainability as the codebase evolves
 - Group test cases with subtests (Go): Keep all test cases for a given function inside a single top-level Test function using subtests (t.Run). This maintains a clean structure and avoids file clutter when testing multiple functions in the same file
+
+### E2E tests
+
+The end-to-end suite in `./e2e` is a black box: it drives the compiled binary through its command line and its files only, never imports `internal`, and reproduces the external contracts it depends on (configuration, agent definitions, session files, and the provider wire protocols) inside `e2e/harness`.
+
+One test file covers one product scenario, and each test runs against its own isolated installation with a dedicated home directory, workspace, and scripted fake provider.
