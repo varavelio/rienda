@@ -239,11 +239,13 @@ func (s *Session) Close() error {
 // engineModel translates the resolved model settings into engine form.
 func engineModel(resolved config.Resolved) engine.Model {
 	return engine.Model{
-		ID:        resolved.ModelID,
-		MaxTokens: resolved.MaxTokens,
-		Reasoning: llm.ReasoningConfig{
-			Effort:       resolved.ReasoningEffort,
-			BudgetTokens: resolved.ReasoningBudgetTokens,
+		ID:          resolved.ModelID,
+		MaxTokens:   resolved.MaxTokens,
+		Temperature: resolved.Temperature,
+		TopP:        resolved.TopP,
+		Thinking: llm.ThinkingConfig{
+			Level:     resolved.ThinkingLevel,
+			MaxTokens: resolved.ThinkingMaxTokens,
 		},
 	}
 }

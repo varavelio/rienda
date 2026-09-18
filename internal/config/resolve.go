@@ -27,16 +27,22 @@ type Resolved struct {
 	// ModelID is the provider model identifier to send on the wire.
 	ModelID string
 
-	// MaxTokens overrides the response token limit when greater than zero.
+	// MaxTokens caps the response token limit when greater than zero.
 	MaxTokens int
 
-	// ReasoningEffort selects the reasoning effort level, empty when the
-	// model uses its provider default.
-	ReasoningEffort string
+	// Temperature controls sampling randomness when set.
+	Temperature *float64
 
-	// ReasoningBudgetTokens reserves a token budget for reasoning when
-	// greater than zero.
-	ReasoningBudgetTokens int
+	// TopP controls nucleus sampling when set.
+	TopP *float64
+
+	// ThinkingLevel selects the extended thinking level, empty when the model
+	// uses its provider default.
+	ThinkingLevel string
+
+	// ThinkingMaxTokens reserves a token budget for thinking when greater than
+	// zero.
+	ThinkingMaxTokens int
 }
 
 // Resolve looks up a model reference in provider/model form and returns the
@@ -77,10 +83,12 @@ func (c *Config) Resolve(ref string) (Resolved, error) {
 			ExtraHeaders:      maps.Clone(declaration.Headers),
 			SessionHeaderName: sessionHeader,
 		},
-		ModelID:               modelID,
-		MaxTokens:             model.MaxTokens,
-		ReasoningEffort:       strings.ToLower(strings.TrimSpace(model.ReasoningEffort)),
-		ReasoningBudgetTokens: model.ReasoningBudgetTokens,
+		ModelID:           modelID,
+		MaxTokens:         model.MaxTokens,
+		Temperature:       model.Temperature,
+		TopP:              model.TopP,
+		ThinkingLevel:     strings.ToLower(strings.TrimSpace(model.ThinkingLevel)),
+		ThinkingMaxTokens: model.ThinkingMaxTokens,
 	}, nil
 }
 

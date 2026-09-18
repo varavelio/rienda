@@ -225,11 +225,11 @@ func anthropicRequestFrom(req *llm.Request, stream bool) (*anthropicRequest, err
 		})
 	}
 	wire.ToolChoice = anthropicToolChoiceFromRequest(req)
-	if req.Reasoning != nil && req.Reasoning.BudgetTokens > 0 {
+	if req.Thinking != nil && req.Thinking.MaxTokens > 0 {
 		// The API rejects temperature alongside thinking.
 		wire.Thinking = &anthropicThinking{
 			Type:         "enabled",
-			BudgetTokens: req.Reasoning.BudgetTokens,
+			BudgetTokens: req.Thinking.MaxTokens,
 		}
 	} else {
 		wire.Temperature = req.Temperature

@@ -123,7 +123,7 @@ func TestOpenAIResponsesGenerate(t *testing.T) {
 			Model:             "gpt-test",
 			System:            "Be helpful.",
 			MaxTokens:         256,
-			Reasoning:         &llm.ReasoningConfig{Effort: "medium"},
+			Thinking:          &llm.ThinkingConfig{Level: "medium"},
 			ToolChoice:        &llm.ToolChoice{Mode: llm.ToolChoiceRequired},
 			ParallelToolCalls: &parallel,
 			Tools:             []llm.Tool{{Name: "read", Description: "Read a file", Strict: true}},

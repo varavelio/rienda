@@ -35,23 +35,6 @@ type Agent struct {
 	// list means the agent cannot use any tool.
 	Tools []string
 
-	// Temperature overrides the model sampling temperature when set.
-	Temperature *float64
-
-	// TopP overrides the model nucleus sampling when set.
-	TopP *float64
-
-	// MaxTokens overrides the response token limit when greater than zero.
-	MaxTokens int
-
-	// ReasoningEffort selects the reasoning effort level, empty when the
-	// agent leaves it to the model default.
-	ReasoningEffort string
-
-	// ReasoningBudgetTokens reserves a token budget for reasoning when
-	// greater than zero and the model supports it.
-	ReasoningBudgetTokens int
-
 	// SystemPrompt is the Markdown body of the definition.
 	SystemPrompt string
 }

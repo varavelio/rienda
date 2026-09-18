@@ -20,16 +20,23 @@ const defaultMaxTurns = 64
 // a run advance while its consumer catches up.
 const eventBuffer = 64
 
-// Model describes the resolved model an agent runs on.
+// Model describes the resolved model an agent runs on. It carries every
+// generation setting of the run, taken from the configuration.
 type Model struct {
 	// ID is the model identifier sent to the provider.
 	ID string
 
-	// MaxTokens is the response token limit configured for the model.
+	// MaxTokens caps the response token limit when greater than zero.
 	MaxTokens int
 
-	// Reasoning holds the reasoning defaults configured for the model.
-	Reasoning llm.ReasoningConfig
+	// Temperature controls sampling randomness when set.
+	Temperature *float64
+
+	// TopP controls nucleus sampling when set.
+	TopP *float64
+
+	// Thinking holds the extended thinking configuration of the model.
+	Thinking llm.ThinkingConfig
 }
 
 // Config configures an Engine.
@@ -41,8 +48,8 @@ type Config struct {
 	// open for the lifetime of the engine.
 	Store *session.Store
 
-	// Agent is the definition the engine runs: its system prompt, its tool
-	// selection and its generation overrides.
+	// Agent is the definition the engine runs: its system prompt and its tool
+	// selection.
 	Agent agent.Agent
 
 	// Model is the resolved model the agent runs on. Its ID is required.
@@ -111,30 +118,20 @@ func (e *Engine) request() *llm.Request {
 		System:      e.agent.SystemPrompt,
 		Messages:    e.store.History(),
 		Tools:       e.tools.definitions,
-		MaxTokens:   e.maxTokens(),
-		Temperature: e.agent.Temperature,
-		TopP:        e.agent.TopP,
-		Reasoning:   e.reasoning(),
+		MaxTokens:   e.model.MaxTokens,
+		Temperature: e.model.Temperature,
+		TopP:        e.model.TopP,
+		Thinking:    e.thinking(),
 	}
 }
 
-// maxTokens returns the response token limit of the run: the agent override
-// wins over the model default.
-func (e *Engine) maxTokens() int {
-	return cmp.Or(e.agent.MaxTokens, e.model.MaxTokens)
-}
-
-// reasoning returns the reasoning configuration of the run: agent overrides
-// win over model defaults. It is nil when neither side configures reasoning.
-func (e *Engine) reasoning() *llm.ReasoningConfig {
-	reasoning := llm.ReasoningConfig{
-		Effort:       cmp.Or(e.agent.ReasoningEffort, e.model.Reasoning.Effort),
-		BudgetTokens: cmp.Or(e.agent.ReasoningBudgetTokens, e.model.Reasoning.BudgetTokens),
-	}
-	if reasoning.Effort == "" && reasoning.BudgetTokens == 0 {
+// thinking returns the extended thinking configuration of the run. It is nil
+// when the model configures no thinking.
+func (e *Engine) thinking() *llm.ThinkingConfig {
+	if e.model.Thinking.Level == "" && e.model.Thinking.MaxTokens == 0 {
 		return nil
 	}
-	return &reasoning
+	return &e.model.Thinking
 }
 
 // toolset pairs the tool definitions sent to the provider with the tools that

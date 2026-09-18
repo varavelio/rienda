@@ -52,22 +52,31 @@ type Provider struct {
 	Models map[string]Model `yaml:"models"`
 }
 
-// Model declares a model offered by a provider.
+// Model declares a model offered by a provider. Every field except ID is a
+// generation setting that shapes how the model is invoked: the configuration
+// is the single place where generation parameters live, and agents reference
+// a model by alias to inherit them.
 type Model struct {
 	// ID is the provider model identifier sent on the wire, for example
 	// "moonshotai/kimi-k2". It defaults to the alias of the model when empty.
 	ID string `yaml:"id"`
 
-	// MaxTokens overrides the response token limit when greater than zero.
+	// MaxTokens caps the response token limit when greater than zero.
 	MaxTokens int `yaml:"max_tokens"`
 
-	// ReasoningEffort selects the reasoning effort level, empty when the
-	// model uses its provider default.
-	ReasoningEffort string `yaml:"reasoning_effort"`
+	// Temperature controls sampling randomness when set.
+	Temperature *float64 `yaml:"temperature"`
 
-	// ReasoningBudgetTokens reserves a token budget for reasoning when
-	// greater than zero and the model supports it.
-	ReasoningBudgetTokens int `yaml:"reasoning_budget_tokens"`
+	// TopP controls nucleus sampling when set.
+	TopP *float64 `yaml:"top_p"`
+
+	// ThinkingLevel selects the extended thinking level, empty when the model
+	// uses its provider default.
+	ThinkingLevel string `yaml:"thinking_level"`
+
+	// ThinkingMaxTokens reserves a token budget for thinking when greater than
+	// zero and the model supports it.
+	ThinkingMaxTokens int `yaml:"thinking_max_tokens"`
 }
 
 // DefaultPath returns the path of the default configuration file.
@@ -161,12 +170,24 @@ func (p Provider) validate() error {
 		if alias == "" {
 			return errors.New("model aliases must not be empty")
 		}
-		if model.MaxTokens < 0 {
-			return fmt.Errorf("model %q: max_tokens must not be negative", alias)
+		if err := model.validate(); err != nil {
+			return fmt.Errorf("model %q: %w", alias, err)
 		}
-		if model.ReasoningBudgetTokens < 0 {
-			return fmt.Errorf("model %q: reasoning_budget_tokens must not be negative", alias)
-		}
+	}
+	return nil
+}
+
+// validate checks the generation settings of a model.
+func (m Model) validate() error {
+	switch {
+	case m.MaxTokens < 0:
+		return errors.New("max_tokens must not be negative")
+	case m.Temperature != nil && (*m.Temperature < 0 || *m.Temperature > 2):
+		return fmt.Errorf("temperature %v must be between 0 and 2", *m.Temperature)
+	case m.TopP != nil && (*m.TopP < 0 || *m.TopP > 1):
+		return fmt.Errorf("top_p %v must be between 0 and 1", *m.TopP)
+	case m.ThinkingMaxTokens < 0:
+		return errors.New("thinking_max_tokens must not be negative")
 	}
 	return nil
 }

@@ -24,8 +24,8 @@ const (
 // Only the first choice (index 0) is consumed; parallel completions (n > 1)
 // are not supported. Thinking blocks are dropped when sending, since the
 // protocol has no standard representation for them, and tool error flags have
-// no wire equivalent either. A ReasoningConfig carries only Effort; a bare
-// BudgetTokens value has no effect here.
+// no wire equivalent either. A ThinkingConfig carries only Level; a bare
+// MaxTokens value has no effect here.
 type openAIChatCompletionsClient struct {
 	http    *http.Client
 	baseURL string
@@ -223,8 +223,8 @@ func openAIChatCompletionsRequestFrom(req *llm.Request, stream bool) *openAIChat
 		TopP:                req.TopP,
 		Stream:              stream,
 	}
-	if req.Reasoning != nil {
-		wire.ReasoningEffort = req.Reasoning.Effort
+	if req.Thinking != nil {
+		wire.ReasoningEffort = req.Thinking.Level
 	}
 	if stream {
 		wire.StreamOptions = &openAIChatCompletionsStreamOptions{IncludeUsage: true}

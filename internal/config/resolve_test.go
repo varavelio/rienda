@@ -22,8 +22,10 @@ providers:
       kimi-k2:
         id: moonshotai/kimi-k2
         max_tokens: 8192
-        reasoning_effort: Medium
-        reasoning_budget_tokens: 2048
+        temperature: 0.7
+        top_p: 0.9
+        thinking_level: Medium
+        thinking_max_tokens: 2048
       moonshotai/kimi-k2: {}
   zen-go:
     preset: opencode-go
@@ -104,8 +106,10 @@ func TestResolve(t *testing.T) {
 		)
 		require.Equal(t, "moonshotai/kimi-k2", resolved.ModelID)
 		require.Equal(t, 8192, resolved.MaxTokens)
-		require.Equal(t, "medium", resolved.ReasoningEffort)
-		require.Equal(t, 2048, resolved.ReasoningBudgetTokens)
+		require.Equal(t, new(0.7), resolved.Temperature)
+		require.Equal(t, new(0.9), resolved.TopP)
+		require.Equal(t, "medium", resolved.ThinkingLevel)
+		require.Equal(t, 2048, resolved.ThinkingMaxTokens)
 	})
 
 	t.Run("supports model aliases containing slashes", func(t *testing.T) {

@@ -77,7 +77,7 @@ func TestOpenAIChatGenerate(t *testing.T) {
 			Model:             "gpt-test",
 			System:            "Be helpful.",
 			MaxTokens:         256,
-			Reasoning:         &llm.ReasoningConfig{Effort: effort},
+			Thinking:          &llm.ThinkingConfig{Level: effort},
 			ToolChoice:        &llm.ToolChoice{Mode: llm.ToolChoiceAuto},
 			ParallelToolCalls: &parallel,
 			Tools:             []llm.Tool{{Name: "read", Description: "Read a file", Strict: true}},

@@ -130,7 +130,7 @@ func TestAnthropicGenerate(t *testing.T) {
 		resp, err := fixture.client().Generate(t.Context(), &llm.Request{
 			Model:       "c",
 			Temperature: &temperature,
-			Reasoning:   &llm.ReasoningConfig{BudgetTokens: 1000},
+			Thinking:    &llm.ThinkingConfig{MaxTokens: 1000},
 			Tools: []llm.Tool{
 				{
 					Name:        "read",

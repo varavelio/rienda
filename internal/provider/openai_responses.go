@@ -34,7 +34,7 @@ const (
 // Conversations are stateless: every turn replays the full history through
 // input items. Thinking blocks replay only when they carry Signature, sent as
 // the encrypted content of a reasoning item together with its identifier and
-// summary; signature-less thinking, redacted thinking and bare BudgetTokens
+// summary; signature-less thinking, redacted thinking and bare MaxTokens
 // values have no wire equivalent and are dropped. Responses are created with
 // store disabled so the provider retains nothing server-side.
 type openAIResponsesClient struct {
@@ -231,8 +231,8 @@ func openAIResponsesRequestFrom(req *llm.Request, stream bool) *openAIResponsesR
 		Store:           &store,
 		Stream:          stream,
 	}
-	if req.Reasoning != nil && req.Reasoning.Effort != "" {
-		wire.Reasoning = &openAIResponsesReasoning{Effort: req.Reasoning.Effort}
+	if req.Thinking != nil && req.Thinking.Level != "" {
+		wire.Reasoning = &openAIResponsesReasoning{Effort: req.Thinking.Level}
 	}
 	for _, message := range req.Messages {
 		wire.Input = append(wire.Input, openAIResponsesItemsFrom(message)...)

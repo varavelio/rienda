@@ -15,14 +15,9 @@ const frontmatterDelimiter = "---"
 
 // frontmatter mirrors the YAML frontmatter of an agent definition.
 type frontmatter struct {
-	Description           string   `yaml:"description"`
-	Model                 string   `yaml:"model"`
-	Tools                 []string `yaml:"tools"`
-	Temperature           *float64 `yaml:"temperature"`
-	TopP                  *float64 `yaml:"top_p"`
-	MaxTokens             int      `yaml:"max_tokens"`
-	ReasoningEffort       string   `yaml:"reasoning_effort"`
-	ReasoningBudgetTokens int      `yaml:"reasoning_budget_tokens"`
+	Description string   `yaml:"description"`
+	Model       string   `yaml:"model"`
+	Tools       []string `yaml:"tools"`
 }
 
 // Parse validates and converts the raw contents of an agent definition into an
@@ -57,16 +52,11 @@ func Parse(id string, data []byte) (Agent, error) {
 	}
 
 	return Agent{
-		ID:                    id,
-		Description:           meta.Description,
-		Model:                 meta.Model,
-		Tools:                 meta.Tools,
-		Temperature:           meta.Temperature,
-		TopP:                  meta.TopP,
-		MaxTokens:             meta.MaxTokens,
-		ReasoningEffort:       meta.ReasoningEffort,
-		ReasoningBudgetTokens: meta.ReasoningBudgetTokens,
-		SystemPrompt:          strings.TrimSpace(string(body)),
+		ID:           id,
+		Description:  meta.Description,
+		Model:        meta.Model,
+		Tools:        meta.Tools,
+		SystemPrompt: strings.TrimSpace(string(body)),
 	}, nil
 }
 
@@ -116,24 +106,6 @@ func (m *frontmatter) normalize() error {
 		if m.Tools[i] == "" {
 			return errors.New("tools must not contain empty names")
 		}
-	}
-
-	if m.Temperature != nil && (*m.Temperature < 0 || *m.Temperature > 2) {
-		return fmt.Errorf("temperature %v must be between 0 and 2", *m.Temperature)
-	}
-	if m.TopP != nil && (*m.TopP < 0 || *m.TopP > 1) {
-		return fmt.Errorf("top_p %v must be between 0 and 1", *m.TopP)
-	}
-	if m.MaxTokens < 0 {
-		return fmt.Errorf("max_tokens %d must not be negative", m.MaxTokens)
-	}
-
-	m.ReasoningEffort = strings.ToLower(strings.TrimSpace(m.ReasoningEffort))
-	if m.ReasoningBudgetTokens < 0 {
-		return fmt.Errorf(
-			"reasoning_budget_tokens %d must not be negative",
-			m.ReasoningBudgetTokens,
-		)
 	}
 	return nil
 }

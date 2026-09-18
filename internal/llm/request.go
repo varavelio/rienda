@@ -28,16 +28,16 @@ type Message struct {
 	ItemID string
 }
 
-// ReasoningConfig controls the reasoning effort of a model that supports it.
-type ReasoningConfig struct {
-	// Effort selects a named reasoning level for providers with effort-based
+// ThinkingConfig controls the extended thinking of a model that supports it.
+type ThinkingConfig struct {
+	// Level selects a named thinking level for providers with level-based
 	// APIs, for example "minimal", "low", "medium" or "high". The accepted
 	// values are provider and model specific.
-	Effort string
+	Level string
 
-	// BudgetTokens reserves a token budget for reasoning for providers with
+	// MaxTokens reserves a token budget for thinking for providers with
 	// budget-based APIs.
-	BudgetTokens int
+	MaxTokens int
 }
 
 // ToolChoiceMode selects how the model may use the declared tools.
@@ -114,7 +114,7 @@ type Request struct {
 	// untouched.
 	TopP *float64
 
-	// Reasoning configures extended reasoning. It is nil to send no explicit
-	// reasoning configuration.
-	Reasoning *ReasoningConfig
+	// Thinking configures extended thinking. It is nil to send no explicit
+	// thinking configuration.
+	Thinking *ThinkingConfig
 }

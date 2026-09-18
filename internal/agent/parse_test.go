@@ -14,11 +14,6 @@ model: openrouter/kimi-k2
 tools:
   - read
   - edit
-temperature: 0.2
-top_p: 0.9
-max_tokens: 4096
-reasoning_effort: High
-reasoning_budget_tokens: 2048
 ---
 
 You are a senior Go engineer.
@@ -26,16 +21,11 @@ You are a senior Go engineer.
 
 		require.NoError(t, err)
 		require.Equal(t, Agent{
-			ID:                    "coder",
-			Description:           "Writes and reviews Go code",
-			Model:                 "openrouter/kimi-k2",
-			Tools:                 []string{"read", "edit"},
-			Temperature:           new(0.2),
-			TopP:                  new(0.9),
-			MaxTokens:             4096,
-			ReasoningEffort:       "high",
-			ReasoningBudgetTokens: 2048,
-			SystemPrompt:          "You are a senior Go engineer.",
+			ID:           "coder",
+			Description:  "Writes and reviews Go code",
+			Model:        "openrouter/kimi-k2",
+			Tools:        []string{"read", "edit"},
+			SystemPrompt: "You are a senior Go engineer.",
 		}, loaded)
 	})
 
@@ -148,31 +138,19 @@ You are a senior Go engineer.
 				"tools must not contain empty names",
 			},
 			{
-				"temperature below range",
-				"---\ndescription: A\nmodel: a/b\ntemperature: -0.1\n---\n",
-				"temperature",
-			},
-			{
-				"temperature above range",
-				"---\ndescription: A\nmodel: a/b\ntemperature: 2.1\n---\n",
-				"temperature",
-			},
-			{"top_p below range", "---\ndescription: A\nmodel: a/b\ntop_p: -0.1\n---\n", "top_p"},
-			{"top_p above range", "---\ndescription: A\nmodel: a/b\ntop_p: 1.1\n---\n", "top_p"},
-			{
-				"negative max_tokens",
-				"---\ndescription: A\nmodel: a/b\nmax_tokens: -1\n---\n",
-				"max_tokens",
-			},
-			{
 				"removed stop key",
 				"---\ndescription: A\nmodel: a/b\nstop: [END]\n---\n",
 				"invalid frontmatter",
 			},
 			{
-				"negative reasoning budget",
-				"---\ndescription: A\nmodel: a/b\nreasoning_budget_tokens: -1\n---\n",
-				"reasoning_budget_tokens",
+				"removed temperature key",
+				"---\ndescription: A\nmodel: a/b\ntemperature: 0.5\n---\n",
+				"invalid frontmatter",
+			},
+			{
+				"removed thinking key",
+				"---\ndescription: A\nmodel: a/b\nthinking_level: high\n---\n",
+				"invalid frontmatter",
 			},
 		}
 

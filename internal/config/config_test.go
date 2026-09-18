@@ -29,8 +29,10 @@ providers:
       kimi-k2:
         id: moonshotai/kimi-k2
         max_tokens: 8192
-        reasoning_effort: Medium
-        reasoning_budget_tokens: 2048
+        temperature: 0.7
+        top_p: 0.9
+        thinking_level: Medium
+        thinking_max_tokens: 2048
   local:
     protocol: openai_chat_completions
     base_url: http://127.0.0.1:8080/v1
@@ -46,10 +48,12 @@ providers:
 				Headers: map[string]string{"X-Title": "rienda"},
 				Models: map[string]Model{
 					"kimi-k2": {
-						ID:                    "moonshotai/kimi-k2",
-						MaxTokens:             8192,
-						ReasoningEffort:       "Medium",
-						ReasoningBudgetTokens: 2048,
+						ID:                "moonshotai/kimi-k2",
+						MaxTokens:         8192,
+						Temperature:       new(0.7),
+						TopP:              new(0.9),
+						ThinkingLevel:     "Medium",
+						ThinkingMaxTokens: 2048,
 					},
 				},
 			},
@@ -148,9 +152,29 @@ providers:
 				"max_tokens must not be negative",
 			},
 			{
-				"negative reasoning budget",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        reasoning_budget_tokens: -1\n",
-				"reasoning_budget_tokens must not be negative",
+				"temperature below range",
+				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        temperature: -0.1\n",
+				"temperature -0.1 must be between 0 and 2",
+			},
+			{
+				"temperature above range",
+				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        temperature: 2.1\n",
+				"temperature 2.1 must be between 0 and 2",
+			},
+			{
+				"top_p below range",
+				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        top_p: -0.1\n",
+				"top_p -0.1 must be between 0 and 1",
+			},
+			{
+				"top_p above range",
+				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        top_p: 1.1\n",
+				"top_p 1.1 must be between 0 and 1",
+			},
+			{
+				"negative thinking max tokens",
+				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        thinking_max_tokens: -1\n",
+				"thinking_max_tokens must not be negative",
 			},
 		}
 

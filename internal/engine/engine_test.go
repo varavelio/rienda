@@ -256,13 +256,15 @@ func TestNew(t *testing.T) {
 func TestRequest(t *testing.T) {
 	temperature, topP := 0.5, 0.9
 
-	t.Run("uses model defaults when the agent overrides nothing", func(t *testing.T) {
+	t.Run("sends the generation settings of the model", func(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{
 			Agent: agent.Agent{SystemPrompt: "be nice"},
 			Model: Model{
-				ID:        "wire-model",
-				MaxTokens: 100,
-				Reasoning: llm.ReasoningConfig{Effort: "high", BudgetTokens: 200},
+				ID:          "wire-model",
+				MaxTokens:   100,
+				Temperature: &temperature,
+				TopP:        &topP,
+				Thinking:    llm.ThinkingConfig{Level: "high", MaxTokens: 200},
 			},
 		})
 
@@ -271,39 +273,20 @@ func TestRequest(t *testing.T) {
 		require.Equal(t, "wire-model", request.Model)
 		require.Equal(t, "be nice", request.System)
 		require.Equal(t, 100, request.MaxTokens)
-		require.Nil(t, request.Temperature)
-		require.Nil(t, request.TopP)
-		require.Equal(t, &llm.ReasoningConfig{Effort: "high", BudgetTokens: 200}, request.Reasoning)
+		require.Equal(t, &temperature, request.Temperature)
+		require.Equal(t, &topP, request.TopP)
+		require.Equal(t, &llm.ThinkingConfig{Level: "high", MaxTokens: 200}, request.Thinking)
 	})
 
-	t.Run("lets the agent override the model defaults", func(t *testing.T) {
-		engine, _ := newTestEngine(t, Config{
-			Agent: agent.Agent{
-				MaxTokens:             50,
-				Temperature:           &temperature,
-				TopP:                  &topP,
-				ReasoningEffort:       "low",
-				ReasoningBudgetTokens: 100,
-			},
-			Model: Model{
-				ID:        "wire-model",
-				MaxTokens: 100,
-				Reasoning: llm.ReasoningConfig{Effort: "high", BudgetTokens: 200},
-			},
-		})
+	t.Run("leaves unset generation settings untouched", func(t *testing.T) {
+		engine, _ := newTestEngine(t, Config{Model: Model{ID: "wire-model"}})
 
 		request := engine.request()
 
-		require.Equal(t, 50, request.MaxTokens)
-		require.Equal(t, &temperature, request.Temperature)
-		require.Equal(t, &topP, request.TopP)
-		require.Equal(t, &llm.ReasoningConfig{Effort: "low", BudgetTokens: 100}, request.Reasoning)
-	})
-
-	t.Run("omits unset reasoning", func(t *testing.T) {
-		engine, _ := newTestEngine(t, Config{})
-
-		require.Nil(t, engine.request().Reasoning)
+		require.Zero(t, request.MaxTokens)
+		require.Nil(t, request.Temperature)
+		require.Nil(t, request.TopP)
+		require.Nil(t, request.Thinking)
 	})
 
 	t.Run("sends the stored history", func(t *testing.T) {
