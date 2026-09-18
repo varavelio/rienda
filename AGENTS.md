@@ -21,6 +21,10 @@ images to Docker Hub and GHCR. Every artifact embeds its version, commit and
 build date through the ldflags of `internal/version`, which the CLI and the
 provider user agent report.
 
+`./installers` holds the published installation integrations: the Homebrew
+formula generator, and the shell and PowerShell installers for macOS, Linux and
+Windows that download the release archives published by the workflow.
+
 ## How to maintain this document
 
 Keep this file current and minimal. Update it only when repository-wide workflow, structure, or project guidance changes. Do not turn it into a changelog. Use it exclusively to indicate truly relevant things in the codebase; don't include any minor details that are obvious or don't warrant documentation
