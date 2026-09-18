@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/varavelio/rienda/internal/transport"
+	"github.com/varavelio/rienda/internal/version"
 
 	"github.com/stretchr/testify/require"
 )
@@ -80,6 +81,39 @@ func TestConfigHTTPClient(t *testing.T) {
 		require.Equal(t, "custom", capture.headers.Get("Anthropic-Version"))
 		require.Equal(t, "1", capture.headers.Get("X-Extra"))
 		require.Equal(t, "key", capture.headers.Get("X-Api-Key"))
+	})
+
+	t.Run("identifies the client with the rienda user agent", func(t *testing.T) {
+		capture := &captureTransport{}
+		cfg := Config{
+			BaseURL:    "https://example.com",
+			HTTPClient: &http.Client{Transport: capture},
+		}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, cfg.BaseURL, nil)
+		require.NoError(t, err)
+
+		resp, err := cfg.httpClient(nil, nil).Do(req)
+
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, version.UserAgent(), capture.headers.Get("User-Agent"))
+	})
+
+	t.Run("lets extra headers override the user agent", func(t *testing.T) {
+		capture := &captureTransport{}
+		cfg := Config{
+			BaseURL:      "https://example.com",
+			ExtraHeaders: map[string]string{"User-Agent": "custom/1.0"},
+			HTTPClient:   &http.Client{Transport: capture},
+		}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, cfg.BaseURL, nil)
+		require.NoError(t, err)
+
+		resp, err := cfg.httpClient(nil, nil).Do(req)
+
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, "custom/1.0", capture.headers.Get("User-Agent"))
 	})
 
 	t.Run("falls back to the default transport", func(t *testing.T) {

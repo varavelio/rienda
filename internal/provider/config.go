@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/varavelio/rienda/internal/transport"
+	"github.com/varavelio/rienda/internal/version"
 )
 
 // Config holds the connection settings shared by every provider client.
@@ -59,9 +60,12 @@ func normalizeBaseURL(base string) string {
 }
 
 // httpClient builds the provider HTTP client wiring auth, static headers and
-// session forwarding through transport.Transport.
+// session forwarding through transport.Transport. The User-Agent of every
+// request identifies Rienda and its version, and ExtraHeaders can override it.
 func (c Config) httpClient(auth transport.AuthStrategy, headers map[string]string) *http.Client {
-	mergedHeaders := make(map[string]string, len(headers)+len(c.ExtraHeaders))
+	mergedHeaders := make(map[string]string, len(headers)+len(c.ExtraHeaders)+1)
+	mergedHeaders["User-Agent"] = version.UserAgent()
+
 	maps.Copy(mergedHeaders, headers)
 	maps.Copy(mergedHeaders, c.ExtraHeaders)
 
