@@ -1,0 +1,22 @@
+# Source control
+.git
+.gitignore
+
+# Development environment
+.vscode
+.devcontainer
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Temporary
+/tmp
+/temp
+
+# Build output
+/dist
+
+# Documentation files
+*.md

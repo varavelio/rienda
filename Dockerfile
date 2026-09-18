@@ -44,3 +44,63 @@ WORKDIR /workspaces/rienda
 FROM tools AS devcontainer
 
 CMD ["sleep", "infinity"]
+
+###########
+# BUILDER #
+###########
+
+FROM tools AS builder
+
+# Set build time variables
+ARG \
+  RIENDA_VERSION="dev" \
+  RIENDA_COMMIT="unknown" \
+  RIENDA_DATE="unknown"
+
+# Set environment variables
+ENV \
+  RIENDA_VERSION="${RIENDA_VERSION}" \
+  RIENDA_COMMIT="${RIENDA_COMMIT}" \
+  RIENDA_DATE="${RIENDA_DATE}"
+
+# Cache the module download in its own layer
+COPY Taskfile.yml go.mod go.sum ./
+RUN task deps
+
+COPY . .
+RUN task build:prod
+
+#######################
+# PRODUCTION (DEBIAN) #
+#######################
+
+FROM debian:trixie-slim AS production
+
+# Set build time variables
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN set -e && \
+  # Install system dependencies
+  apt-get update -qq && \
+  apt-get install -yqq --no-install-recommends ca-certificates && \
+  rm -rf /var/lib/apt/lists/* && \
+  # Create group and user
+  groupadd -g 65532 nonroot && \
+  useradd -u 65532 -g nonroot -m -s /bin/sh nonroot && \
+  # Create the directory sessions run in
+  mkdir -p /workspace && \
+  chown nonroot:nonroot /workspace
+
+# Sessions run in the workspace directory by default
+WORKDIR /workspace
+
+COPY --from=builder --chown=nonroot:nonroot /workspaces/rienda/dist/rienda /usr/local/bin/rienda
+
+USER nonroot
+
+# The configuration and the sessions live under the home directory of the user
+VOLUME ["/home/nonroot/.rienda"]
+
+ENTRYPOINT ["/usr/local/bin/rienda"]
+
+CMD ["--help"]

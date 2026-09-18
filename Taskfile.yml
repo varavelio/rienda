@@ -30,6 +30,20 @@ tasks:
     desc: Build the project
     cmd: go build -o ./dist/rienda ./cmd/rienda/.
 
+  build:prod:
+    desc: Build the project with production optimizations and embedded build metadata
+    cmd: >-
+      go build -trimpath
+      -ldflags "-s -w
+      -X github.com/varavelio/rienda/internal/version.Version=${RIENDA_VERSION:-dev}
+      -X github.com/varavelio/rienda/internal/version.Commit=${RIENDA_COMMIT:-unknown}
+      -X github.com/varavelio/rienda/internal/version.Date=${RIENDA_DATE:-unknown}"
+      -o ./dist/rienda ./cmd/rienda/.
+
+  release:
+    desc: Build all release artifacts into dist
+    cmd: go run ./scripts/release
+
   run:
     desc: Build and run the project
     deps:
