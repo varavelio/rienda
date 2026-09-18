@@ -8,6 +8,7 @@ import (
 
 	"github.com/varavelio/rienda/internal/cli"
 	"github.com/varavelio/rienda/internal/tui"
+	"github.com/varavelio/rienda/internal/version"
 )
 
 // main is the program entrypoint. Its only job is to delegate to run and
@@ -35,6 +36,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "help", "-h", "--help":
 		usage(stdout)
 		return nil
+	case "version", "-v", "--version":
+		_, _ = fmt.Fprintln(stdout, version.Detailed())
+		return nil
 	}
 
 	if !strings.HasPrefix(args[0], "-") {
@@ -46,9 +50,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	return tui.Run(args, stdin, stdout)
 }
 
-// usage prints the program overview.
+// usage prints the program overview, headed by the build version.
 func usage(w io.Writer) {
-	_, _ = fmt.Fprint(w, `rienda runs AI agents defined as Markdown files.
+	_, _ = fmt.Fprintf(w, `Rienda %s
+
+Runs AI agents defined as Markdown files.
 
 Usage:
   rienda [flags]                      Open the interactive interface
@@ -57,6 +63,10 @@ Usage:
 Commands:
   run    Run an agent once and print its answer
 
+Global flags:
+  -h, --help      Print this overview
+  -v, --version   Print the version and the build metadata
+
 Flags of the interactive interface:
   -a, --agent     Agent to run, skipping the start menu and the agent picker
   -C, --workdir   Directory sessions run in
@@ -64,5 +74,5 @@ Flags of the interactive interface:
 
 Environment:
   RIENDA_CONFIG   Path of the configuration file when --config is not set
-`)
+`, version.Number())
 }

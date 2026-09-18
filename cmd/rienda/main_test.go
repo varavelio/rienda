@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/varavelio/rienda/internal/version"
 )
 
 // TestRun verifies command dispatch.
@@ -16,7 +18,20 @@ func TestRun(t *testing.T) {
 			err := run([]string{arg}, strings.NewReader(""), stdout, stderr)
 
 			require.NoError(t, err)
+			require.Contains(t, stdout.String(), version.String(), "argument %q", arg)
 			require.Contains(t, stdout.String(), "Usage:", "argument %q", arg)
+		}
+	})
+
+	t.Run("prints the version for version requests", func(t *testing.T) {
+		for _, arg := range []string{"version", "-v", "--version"} {
+			stdout, stderr := &strings.Builder{}, &strings.Builder{}
+
+			err := run([]string{arg}, strings.NewReader(""), stdout, stderr)
+
+			require.NoError(t, err)
+			require.Equal(t, version.Detailed()+"\n", stdout.String(), "argument %q", arg)
+			require.Empty(t, stderr.String())
 		}
 	})
 
