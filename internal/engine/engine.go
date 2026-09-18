@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -11,10 +10,6 @@ import (
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/tool"
 )
-
-// defaultMaxTurns caps the model turns of one run when Config leaves the limit
-// unset.
-const defaultMaxTurns = 64
 
 // eventBuffer is the capacity of the channel returned by Run. The buffer lets
 // a run advance while its consumer catches up.
@@ -61,9 +56,6 @@ type Config struct {
 
 	// Workdir is the directory tools run in. It must be absolute when set.
 	Workdir string
-
-	// MaxTurns caps the model turns of one run. It defaults to 64.
-	MaxTurns int
 }
 
 // Engine runs one agent over one session.
@@ -71,13 +63,12 @@ type Config struct {
 // An Engine is not safe for concurrent use: runs append to a session store,
 // which callers serialize.
 type Engine struct {
-	client   llm.Client
-	store    *session.Store
-	agent    agent.Agent
-	model    Model
-	tools    toolset
-	workdir  string
-	maxTurns int
+	client  llm.Client
+	store   *session.Store
+	agent   agent.Agent
+	model   Model
+	tools   toolset
+	workdir string
 }
 
 // New validates cfg and builds an Engine.
@@ -91,8 +82,6 @@ func New(cfg Config) (*Engine, error) {
 		return nil, errors.New("engine: the model id is required")
 	case cfg.Workdir != "" && !filepath.IsAbs(cfg.Workdir):
 		return nil, errors.New("engine: workdir must be an absolute path")
-	case cfg.MaxTurns < 0:
-		return nil, errors.New("engine: max turns must not be negative")
 	}
 
 	tools, err := resolveTools(cfg.Registry, cfg.Agent.Tools)
@@ -101,13 +90,12 @@ func New(cfg Config) (*Engine, error) {
 	}
 
 	return &Engine{
-		client:   cfg.Client,
-		store:    cfg.Store,
-		agent:    cfg.Agent,
-		model:    cfg.Model,
-		tools:    tools,
-		workdir:  cfg.Workdir,
-		maxTurns: cmp.Or(cfg.MaxTurns, defaultMaxTurns),
+		client:  cfg.Client,
+		store:   cfg.Store,
+		agent:   cfg.Agent,
+		model:   cfg.Model,
+		tools:   tools,
+		workdir: cfg.Workdir,
 	}, nil
 }
 

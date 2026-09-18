@@ -313,19 +313,6 @@ func TestModel(t *testing.T) {
 		require.Contains(t, plain(m.render()), "interrupted")
 	})
 
-	t.Run("reports the turn limit", func(t *testing.T) {
-		m, _ := chatModel(t)
-		m.input.SetValue("go")
-		update(t, m, pressEnter)
-
-		sendEvent(t, m, engine.Event{
-			Type:   engine.EventRunEnd,
-			Reason: engine.EndReasonMaxTurns,
-		})
-
-		require.Contains(t, plain(m.render()), "turn limit")
-	})
-
 	t.Run("finishes the run when the event channel closes", func(t *testing.T) {
 		m, _ := chatModel(t)
 		m.input.SetValue("go")

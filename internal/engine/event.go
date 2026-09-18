@@ -38,8 +38,6 @@ type EndReason string
 const (
 	// EndReasonTurn marks a run the model finished without requesting tools.
 	EndReasonTurn EndReason = "end_turn"
-	// EndReasonMaxTurns marks a run stopped by the turn limit.
-	EndReasonMaxTurns EndReason = "max_turns"
 	// EndReasonInterrupted marks a run stopped by context cancellation.
 	EndReasonInterrupted EndReason = "interrupted"
 	// EndReasonError marks a run stopped by a failure.

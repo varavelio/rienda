@@ -72,7 +72,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	// The session identifier travels with the request so providers can group
 	// the calls of one conversation.
 	requestCtx := llm.WithSessionID(ctx, e.store.ID())
-	for range e.maxTurns {
+	for {
 		if ctx.Err() != nil {
 			emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})
 			return
@@ -125,8 +125,6 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			return
 		}
 	}
-
-	emit(events, Event{Type: EventRunEnd, Reason: EndReasonMaxTurns})
 }
 
 // executeTools runs the tool calls of a response in request order and returns

@@ -3,8 +3,7 @@
 // A run appends the user prompt to the session and then loops: it streams a
 // model response, persists it, runs the tool calls the response requested,
 // persists their results, and repeats until the model answers without tool
-// calls, a turn limit stops it, the caller cancels the context, or a failure
-// aborts it.
+// calls, the caller cancels the context, or a failure aborts it.
 //
 // The session is the source of truth: every request is rebuilt from the stored
 // history, so a run can stop and resume at any time. A run always leaves that

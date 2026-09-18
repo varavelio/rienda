@@ -392,27 +392,6 @@ func TestRun(t *testing.T) {
 		require.Equal(t, interruptedBeforeTool, results[1].ToolResult[0].Text)
 	})
 
-	t.Run("stops at the turn limit", func(t *testing.T) {
-		echoTool := &fakeTool{name: "echo", output: "ok"}
-		client := &fakeClient{scripts: []script{
-			toolTurn("call_1", "echo", `{}`),
-			toolTurn("call_2", "echo", `{}`),
-		}}
-		engine, store := newTestEngine(t, Config{
-			Client:   client,
-			Registry: newTestRegistry(t, echoTool),
-			Agent:    agent.Agent{Tools: []string{"echo"}},
-			MaxTurns: 2,
-		})
-
-		events := collect(engine.Run(t.Context(), "go"))
-
-		last := events[len(events)-1]
-		require.Equal(t, EndReasonMaxTurns, last.Reason)
-		require.Len(t, client.requests, 2)
-		require.Len(t, store.History(), 5)
-	})
-
 	t.Run("resumes from the active leaf without a prompt", func(t *testing.T) {
 		client := &fakeClient{scripts: []script{endTurn("resumed")}}
 		engine, store := newTestEngine(t, Config{Client: client})

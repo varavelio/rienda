@@ -199,11 +199,6 @@ func TestNew(t *testing.T) {
 				wantErr: "workdir must be an absolute path",
 			},
 			{
-				name:    "negative max turns",
-				mutate:  func(cfg *Config) { cfg.MaxTurns = -1 },
-				wantErr: "max turns must not be negative",
-			},
-			{
 				name:    "declared tools without a registry",
 				mutate:  func(cfg *Config) { cfg.Agent.Tools = []string{"shell"} },
 				wantErr: "the agent declares tools but no registry was provided",
@@ -233,7 +228,6 @@ func TestNew(t *testing.T) {
 	t.Run("applies defaults", func(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{})
 
-		require.Equal(t, defaultMaxTurns, engine.maxTurns)
 		require.Empty(t, engine.tools.definitions)
 		require.Nil(t, engine.tools.executors)
 	})
@@ -242,10 +236,8 @@ func TestNew(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{
 			Registry: newTestRegistry(t, &fakeTool{name: "shell"}),
 			Agent:    agent.Agent{ID: "coder", Tools: []string{"shell", "shell"}},
-			MaxTurns: 5,
 		})
 
-		require.Equal(t, 5, engine.maxTurns)
 		require.Len(t, engine.tools.definitions, 1)
 		require.Equal(t, "shell", engine.tools.definitions[0].Name)
 		require.Contains(t, engine.tools.executors, "shell")

@@ -709,10 +709,7 @@ func (m *model) finishRun(reason engine.EndReason) {
 	m.cancel = nil
 	m.events = nil
 
-	switch reason {
-	case engine.EndReasonMaxTurns:
-		m.transcript.addNotice("the run reached the turn limit")
-	case engine.EndReasonInterrupted:
+	if reason == engine.EndReasonInterrupted {
 		m.transcript.addNotice("the run was interrupted")
 	}
 }

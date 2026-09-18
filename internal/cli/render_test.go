@@ -135,18 +135,6 @@ func TestRender(t *testing.T) {
 		require.EqualError(t, err, "boom")
 	})
 
-	t.Run("reports turn limits", func(t *testing.T) {
-		stdout, stderr := &strings.Builder{}, &strings.Builder{}
-
-		err := render(
-			eventsOf(engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonMaxTurns}),
-			stdout,
-			stderr,
-		)
-
-		require.EqualError(t, err, "the run reached the turn limit")
-	})
-
 	t.Run("reports interruptions", func(t *testing.T) {
 		stdout, stderr := &strings.Builder{}, &strings.Builder{}
 

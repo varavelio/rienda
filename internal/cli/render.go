@@ -67,8 +67,6 @@ func runError(reason engine.EndReason, failure error) error {
 	switch reason {
 	case engine.EndReasonTurn:
 		return nil
-	case engine.EndReasonMaxTurns:
-		return errors.New("the run reached the turn limit")
 	case engine.EndReasonInterrupted:
 		return errors.New("the run was interrupted")
 	default:
