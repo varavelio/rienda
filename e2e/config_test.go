@@ -177,53 +177,35 @@ func TestRunDisablesTheSessionHeader(t *testing.T) {
 	require.Empty(t, app.Provider().LastRequest(t).Header.Get("x-session-id"))
 }
 
-// TestRunAppliesModelDefaults verifies that the settings of a model reach the
-// wire and that the agent definition overrides them.
+// TestRunAppliesModelDefaults verifies that every generation setting declared
+// for a model reaches the wire.
 func TestRunAppliesModelDefaults(t *testing.T) {
 	model := harness.Model{
-		Alias:           harness.DefaultModelAlias,
-		ID:              "wire-model",
-		MaxTokens:       1234,
-		ReasoningEffort: "low",
+		Alias:         harness.DefaultModelAlias,
+		ID:            "wire-model",
+		MaxTokens:     1234,
+		Temperature:   new(0.3),
+		TopP:          new(0.8),
+		ThinkingLevel: "low",
 	}
 
-	t.Run("from the configuration", func(t *testing.T) {
-		app := harness.New(t, harness.Options{
-			Script: []harness.Turn{harness.Text("hello")},
-			Agents: []harness.Agent{coderAgent()},
-			Config: &harness.Config{Providers: []harness.Provider{
-				chatProvider(harness.FakeProviderName, model),
-			}},
-		})
-
-		result := app.Run(t, "run", "-a", "coder", "-p", "hi")
-		result.RequireSuccess(t)
-
-		chat := app.Provider().LastRequest(t).Chat(t)
-		require.Equal(t, "wire-model", chat.Model)
-		require.Equal(t, 1234, chat.MaxCompletionTokens)
-		require.Equal(t, "low", chat.ReasoningEffort)
+	app := harness.New(t, harness.Options{
+		Script: []harness.Turn{harness.Text("hello")},
+		Agents: []harness.Agent{coderAgent()},
+		Config: &harness.Config{Providers: []harness.Provider{
+			chatProvider(harness.FakeProviderName, model),
+		}},
 	})
 
-	t.Run("overridden by the agent", func(t *testing.T) {
-		definition := coderAgent()
-		definition.MaxTokens = 99
-		definition.ReasoningEffort = "high"
-		app := harness.New(t, harness.Options{
-			Script: []harness.Turn{harness.Text("hello")},
-			Agents: []harness.Agent{definition},
-			Config: &harness.Config{Providers: []harness.Provider{
-				chatProvider(harness.FakeProviderName, model),
-			}},
-		})
+	result := app.Run(t, "run", "-a", "coder", "-p", "hi")
+	result.RequireSuccess(t)
 
-		result := app.Run(t, "run", "-a", "coder", "-p", "hi")
-		result.RequireSuccess(t)
-
-		chat := app.Provider().LastRequest(t).Chat(t)
-		require.Equal(t, 99, chat.MaxCompletionTokens)
-		require.Equal(t, "high", chat.ReasoningEffort)
-	})
+	chat := app.Provider().LastRequest(t).Chat(t)
+	require.Equal(t, "wire-model", chat.Model)
+	require.Equal(t, 1234, chat.MaxCompletionTokens)
+	require.Equal(t, 0.3, *chat.Temperature)
+	require.Equal(t, 0.8, *chat.TopP)
+	require.Equal(t, "low", chat.ReasoningEffort)
 }
 
 // TestRunReportsConfigurationFailures verifies that every way of configuring an

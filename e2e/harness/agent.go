@@ -39,21 +39,6 @@ type Agent struct {
 	// Tools lists the names of the tools available to the agent.
 	Tools []string
 
-	// Temperature overrides the sampling temperature of the model.
-	Temperature *float64
-
-	// TopP overrides the nucleus sampling of the model.
-	TopP *float64
-
-	// MaxTokens overrides the response token limit of the model.
-	MaxTokens int
-
-	// ReasoningEffort selects the reasoning effort level of the model.
-	ReasoningEffort string
-
-	// ReasoningBudgetTokens reserves a token budget for reasoning.
-	ReasoningBudgetTokens int
-
 	// SystemPrompt is the Markdown body of the definition.
 	SystemPrompt string
 
@@ -83,14 +68,9 @@ func (a Agent) write(t *testing.T, dir string) {
 	}
 
 	frontmatter, err := yaml.Marshal(agentFrontmatter{
-		Description:           a.Description,
-		Model:                 a.Model,
-		Tools:                 a.Tools,
-		Temperature:           a.Temperature,
-		TopP:                  a.TopP,
-		MaxTokens:             a.MaxTokens,
-		ReasoningEffort:       a.ReasoningEffort,
-		ReasoningBudgetTokens: a.ReasoningBudgetTokens,
+		Description: a.Description,
+		Model:       a.Model,
+		Tools:       a.Tools,
 	})
 	if err != nil {
 		t.Fatalf("harness: encode agent %q: %v", a.ID, err)
@@ -103,12 +83,7 @@ func (a Agent) write(t *testing.T, dir string) {
 
 // agentFrontmatter mirrors the YAML frontmatter of an agent definition.
 type agentFrontmatter struct {
-	Description           string   `yaml:"description"`
-	Model                 string   `yaml:"model"`
-	Tools                 []string `yaml:"tools,omitempty"`
-	Temperature           *float64 `yaml:"temperature,omitempty"`
-	TopP                  *float64 `yaml:"top_p,omitempty"`
-	MaxTokens             int      `yaml:"max_tokens,omitempty"`
-	ReasoningEffort       string   `yaml:"reasoning_effort,omitempty"`
-	ReasoningBudgetTokens int      `yaml:"reasoning_budget_tokens,omitempty"`
+	Description string   `yaml:"description"`
+	Model       string   `yaml:"model"`
+	Tools       []string `yaml:"tools,omitempty"`
 }

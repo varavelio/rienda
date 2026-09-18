@@ -89,14 +89,20 @@ type Model struct {
 	// the alias when empty.
 	ID string
 
-	// MaxTokens overrides the response token limit when greater than zero.
+	// MaxTokens caps the response token limit when greater than zero.
 	MaxTokens int
 
-	// ReasoningEffort selects the reasoning effort level of the model.
-	ReasoningEffort string
+	// Temperature controls sampling randomness when set.
+	Temperature *float64
 
-	// ReasoningBudgetTokens reserves a token budget for reasoning.
-	ReasoningBudgetTokens int
+	// TopP controls nucleus sampling when set.
+	TopP *float64
+
+	// ThinkingLevel selects the extended thinking level of the model.
+	ThinkingLevel string
+
+	// ThinkingMaxTokens reserves a token budget for thinking.
+	ThinkingMaxTokens int
 }
 
 // DefaultConfig returns the configuration of a fresh instance: a single
@@ -172,10 +178,12 @@ func (p Provider) document(t *testing.T, fakeBaseURL string) providerDocument {
 			t.Fatalf("harness: provider %q declares a model without an alias", p.Name)
 		}
 		models[model.Alias] = modelDocument{
-			ID:                    model.ID,
-			MaxTokens:             model.MaxTokens,
-			ReasoningEffort:       model.ReasoningEffort,
-			ReasoningBudgetTokens: model.ReasoningBudgetTokens,
+			ID:                model.ID,
+			MaxTokens:         model.MaxTokens,
+			Temperature:       model.Temperature,
+			TopP:              model.TopP,
+			ThinkingLevel:     model.ThinkingLevel,
+			ThinkingMaxTokens: model.ThinkingMaxTokens,
 		}
 	}
 
@@ -208,10 +216,12 @@ type providerDocument struct {
 
 // modelDocument mirrors one entry of the models map.
 type modelDocument struct {
-	ID                    string `yaml:"id,omitempty"`
-	MaxTokens             int    `yaml:"max_tokens,omitempty"`
-	ReasoningEffort       string `yaml:"reasoning_effort,omitempty"`
-	ReasoningBudgetTokens int    `yaml:"reasoning_budget_tokens,omitempty"`
+	ID                string   `yaml:"id,omitempty"`
+	MaxTokens         int      `yaml:"max_tokens,omitempty"`
+	Temperature       *float64 `yaml:"temperature,omitempty"`
+	TopP              *float64 `yaml:"top_p,omitempty"`
+	ThinkingLevel     string   `yaml:"thinking_level,omitempty"`
+	ThinkingMaxTokens int      `yaml:"thinking_max_tokens,omitempty"`
 }
 
 // writeFile writes contents into path, creating its parent directory, and

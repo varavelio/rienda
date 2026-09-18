@@ -142,3 +142,34 @@ func TestAnthropicAccountsUsage(t *testing.T) {
 		CacheReadTokens: 60,
 	}, app.Session(t, result.SessionID(t)).Entries[1].ResponseUsage)
 }
+
+// TestAnthropicAppliesTheThinkingBudget verifies that the thinking budget
+// declared for a model reaches the Messages protocol and that the sampling
+// temperature is dropped, since the API rejects both together.
+func TestAnthropicAppliesTheThinkingBudget(t *testing.T) {
+	app := harness.New(t, harness.Options{
+		Script: []harness.Turn{harness.Text("hello")},
+		Agents: []harness.Agent{coderAgent()},
+		Config: &harness.Config{Providers: []harness.Provider{
+			{
+				Name:     harness.FakeProviderName,
+				Protocol: harness.ProtocolAnthropic,
+				APIKey:   harness.TestAPIKey,
+				Models: []harness.Model{{
+					Alias:             harness.DefaultModelAlias,
+					ID:                harness.DefaultModelID,
+					Temperature:       new(0.4),
+					ThinkingMaxTokens: 4096,
+				}},
+			},
+		}},
+	})
+
+	result := app.Run(t, "run", "-a", "coder", "-p", "think hard")
+	result.RequireSuccess(t)
+
+	anthropic := app.Provider().LastRequest(t).Anthropic(t)
+	require.NotNil(t, anthropic.Thinking)
+	require.Equal(t, 4096, anthropic.Thinking.BudgetTokens)
+	require.Nil(t, anthropic.Temperature)
+}

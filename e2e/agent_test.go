@@ -11,15 +11,10 @@ import (
 )
 
 // TestRunSendsTheAgentDefinition verifies that the body of the definition
-// becomes the system instruction, that its tools are declared to the model, and
-// that its generation settings reach the wire.
+// becomes the system instruction and that its tools are declared to the model.
 func TestRunSendsTheAgentDefinition(t *testing.T) {
 	definition := coderAgent()
 	definition.SystemPrompt = "# Rules\n\nAnswer in a single line."
-	definition.Temperature = new(0.25)
-	definition.TopP = new(0.9)
-	definition.MaxTokens = 512
-	definition.ReasoningEffort = "high"
 
 	app := harness.New(t, harness.Options{
 		Script: []harness.Turn{harness.Text("hello")},
@@ -31,10 +26,6 @@ func TestRunSendsTheAgentDefinition(t *testing.T) {
 
 	chat := app.Provider().LastRequest(t).Chat(t)
 	require.Equal(t, definition.SystemPrompt, chat.Messages[0].Text())
-	require.Equal(t, 0.25, *chat.Temperature)
-	require.Equal(t, 0.9, *chat.TopP)
-	require.Equal(t, 512, chat.MaxCompletionTokens)
-	require.Equal(t, "high", chat.ReasoningEffort)
 
 	require.Equal(t, []string{"shell"}, chat.ToolNames())
 	require.Equal(t, "function", chat.Tools[0].Type)
@@ -119,13 +110,13 @@ func TestRunReportsInvalidDefinitions(t *testing.T) {
 			definition: modelFor("ghost"),
 			message:    "must have the form provider/model",
 		},
-		"with an out-of-range temperature": {
-			definition: func() harness.Agent {
-				definition := coderAgent()
-				definition.Temperature = new(3.0)
-				return definition
-			}(),
-			message: "temperature 3 must be between 0 and 2",
+		"with an unknown generation setting": {
+			definition: harness.Agent{ID: "coder", Raw: "---\n" +
+				"description: A test agent\n" +
+				"model: " + harness.FakeModelRef + "\n" +
+				"temperature: 0.5\n" +
+				"---\nYou answer briefly.\n"},
+			message: "field temperature not found",
 		},
 		"without frontmatter": {
 			definition: harness.Agent{ID: "coder", Raw: "You answer briefly.\n"},
