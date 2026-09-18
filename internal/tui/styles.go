@@ -6,10 +6,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// blockIndent is the left margin of the body of a block, relative to its
-// label.
-const blockIndent = 2
-
 // styles groups the styles of the interface. Foreground colors come from the
 // sixteen ANSI colors so the interface adapts to every terminal theme; the
 // rules adapt to the terminal background.
@@ -33,6 +29,8 @@ type styles struct {
 	thinking  section
 	tool      section
 	failure   section
+
+	markdown markdownStyles
 }
 
 // section groups the styles of one kind of conversation block.
@@ -55,10 +53,18 @@ func (s section) block(width int, label, body string) string {
 // The label and the body wrap to the width of the block, so a long title
 // breaks into several lines instead of running past the terminal.
 func (s section) titled(width int, label, body string) string {
+	if body == "" {
+		return s.styled(width, label, "")
+	}
+	return s.styled(width, label, s.body.Render(wrap(body, width)))
+}
+
+// styled renders a conversation block whose body is already rendered and
+// wrapped, which the markdown answers use so their styling survives. The label
+// is wrapped to the width of the block; the body is emitted as is.
+func (s section) styled(width int, label, body string) string {
 	lines := strings.Split(wrapLabel(label, width), "\n")
 	if body != "" {
-		inner := max(1, width-blockIndent)
-		body := indentLines(s.body.Render(wrap(body, inner)), strings.Repeat(" ", blockIndent))
 		lines = append(lines, "", body)
 	}
 	return strings.Join(lines, "\n")
@@ -118,6 +124,30 @@ func newStyles(isDark bool) styles {
 		failure: section{
 			title: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")),
 			body:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
+		},
+
+		markdown: markdownStyles{
+			headings: []lipgloss.Style{
+				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
+				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14")),
+				lipgloss.NewStyle().Bold(true),
+				lipgloss.NewStyle().Bold(true),
+				lipgloss.NewStyle().Bold(true),
+				lipgloss.NewStyle().Bold(true),
+			},
+			bold:     lipgloss.NewStyle().Bold(true),
+			italic:   lipgloss.NewStyle().Italic(true),
+			strike:   lipgloss.NewStyle().Strikethrough(true),
+			code:     lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
+			codeLine: lipgloss.NewStyle().Faint(true),
+			link:     lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("12")),
+			quote:    lipgloss.NewStyle().Italic(true).Faint(true),
+			quoteBar: lipgloss.NewStyle().Faint(true),
+			bullet:   lipgloss.NewStyle().Foreground(lipgloss.Color("14")),
+			rule:     lipgloss.NewStyle().Faint(true),
+
+			tableHead:   lipgloss.NewStyle().Bold(true),
+			tableBorder: lipgloss.NewStyle().Faint(true),
 		},
 	}
 }

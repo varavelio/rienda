@@ -283,7 +283,7 @@ func (m *model) renderBlock(index int) string {
 	case entryUser:
 		return m.styles.user.block(width, "You", current.text())
 	case entryAssistant:
-		return m.styles.assistant.block(width, m.assistantName(), current.text())
+		return m.renderAssistantBlock(current, width)
 	case entryThinking:
 		return m.renderThinkingEntry(current, width, m.active(index))
 	case entryTool:
@@ -293,6 +293,15 @@ func (m *model) renderBlock(index int) string {
 	default:
 		return m.styles.failure.block(width, "Error", current.text())
 	}
+}
+
+// renderAssistantBlock renders an answer of the model, formatted as markdown
+// so headings, emphasis, code, lists and links read the way the model wrote
+// them.
+func (m *model) renderAssistantBlock(current *entry, width int) string {
+	body := renderMarkdown(current.text(), width, m.styles.markdown)
+	label := m.styles.assistant.title.Render(m.assistantName())
+	return m.styles.assistant.styled(width, label, body)
 }
 
 // divider returns the rule that separates two conversation blocks.
@@ -389,13 +398,4 @@ func wrap(text string, width int) string {
 		return text
 	}
 	return ansi.Wrap(text, width, "")
-}
-
-// indentLines prefixes every line of text with prefix.
-func indentLines(text, prefix string) string {
-	lines := strings.Split(text, "\n")
-	for i, line := range lines {
-		lines[i] = prefix + line
-	}
-	return strings.Join(lines, "\n")
 }

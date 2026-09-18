@@ -123,6 +123,62 @@ func TestView(t *testing.T) {
 		require.GreaterOrEqual(t, strings.Count(view, "─"), 4, "separators and dividers")
 	})
 
+	t.Run("renders markdown in the answers of the model", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.preferences = preferences{}
+		update(t, m, windowMsg(80, 40))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{
+			Type: engine.EventTextDelta,
+			Text: "# Title\n\n- first\n- second\n\nUse `go test` and **bold**.",
+		})
+		sendEvent(t, m, engine.Event{
+			Type:   engine.EventRunEnd,
+			Reason: engine.EndReasonTurn,
+		})
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "Title")
+		require.NotContains(t, view, "# Title", "the heading marker is consumed")
+		require.Contains(t, view, "• first")
+		require.Contains(t, view, "Use go test and bold.", "the inline markers are consumed")
+		require.NotContains(t, view, "**")
+	})
+
+	t.Run("aligns the answer with its label", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.preferences = preferences{}
+		update(t, m, windowMsg(80, 40))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "plain answer"})
+		sendEvent(t, m, engine.Event{
+			Type:   engine.EventRunEnd,
+			Reason: engine.EndReasonTurn,
+		})
+
+		lines := strings.Split(plain(m.render()), "\n")
+
+		require.Contains(t, lines, "coder", "the answer carries the agent label")
+		require.Contains(t, lines, "plain answer", "the body aligns with the label")
+	})
+
+	t.Run("keeps the color of the answer label", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 40))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "answer"})
+		sendEvent(t, m, engine.Event{
+			Type:   engine.EventRunEnd,
+			Reason: engine.EndReasonTurn,
+		})
+
+		require.Contains(t, m.render(), "\x1b[1;92mcoder", "the label keeps its green style")
+	})
+
 	t.Run("marks failed invocations", func(t *testing.T) {
 		m, _ := chatModel(t)
 		m.preferences = preferences{}
@@ -361,13 +417,13 @@ func TestView(t *testing.T) {
 func TestSectionBlock(t *testing.T) {
 	styles := newStyles(true)
 
-	t.Run("wraps the body under the label", func(t *testing.T) {
+	t.Run("wraps the body aligned with the label", func(t *testing.T) {
 		block := styles.user.block(40, "You", "one two three four five six seven eight nine ten")
 		lines := strings.Split(ansi.Strip(block), "\n")
 
 		require.Equal(t, "You", lines[0])
 		require.Equal(t, "", lines[1])
-		require.True(t, strings.HasPrefix(lines[2], "  "))
+		require.False(t, strings.HasPrefix(lines[2], " "), "the body aligns with the label")
 		require.Contains(t, lines[2], "one two")
 		for _, line := range lines {
 			require.LessOrEqual(t, ansi.StringWidth(line), 40)
