@@ -28,6 +28,12 @@ func plain(text string) string {
 	return strings.Join(lines, "\n")
 }
 
+// showAllPreferences returns the preferences that reveal every block and keep
+// the markdown formatting, so the tests assert the full rendering.
+func showAllPreferences() preferences {
+	return preferences{HideToolOutput: false, HideThinking: false, RenderMarkdown: true}
+}
+
 // TestView verifies the rendering of every phase of the interface.
 func TestView(t *testing.T) {
 	t.Run("renders the agent picker", func(t *testing.T) {
@@ -67,7 +73,7 @@ func TestView(t *testing.T) {
 
 	t.Run("renders the conversation", func(t *testing.T) {
 		m, _ := chatModel(t)
-		m.preferences = preferences{}
+		m.preferences = showAllPreferences()
 		update(t, m, windowMsg(80, 40))
 		m.input.SetValue("hello")
 		update(t, m, pressEnter)
@@ -125,7 +131,7 @@ func TestView(t *testing.T) {
 
 	t.Run("renders markdown in the answers of the model", func(t *testing.T) {
 		m, _ := chatModel(t)
-		m.preferences = preferences{}
+		m.preferences = showAllPreferences()
 		update(t, m, windowMsg(80, 40))
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
@@ -149,7 +155,7 @@ func TestView(t *testing.T) {
 
 	t.Run("aligns the answer with its label", func(t *testing.T) {
 		m, _ := chatModel(t)
-		m.preferences = preferences{}
+		m.preferences = showAllPreferences()
 		update(t, m, windowMsg(80, 40))
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
@@ -163,6 +169,27 @@ func TestView(t *testing.T) {
 
 		require.Contains(t, lines, "coder", "the answer carries the agent label")
 		require.Contains(t, lines, "plain answer", "the body aligns with the label")
+	})
+
+	t.Run("shows raw markdown when the rendering is disabled", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 40))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "# Title"})
+		sendEvent(t, m, engine.Event{
+			Type:   engine.EventRunEnd,
+			Reason: engine.EndReasonTurn,
+		})
+		require.NotContains(t, plain(m.render()), "# Title", "the heading renders as markdown")
+
+		update(t, m, pressCtrlP)
+		update(t, m, pressDown)
+		update(t, m, pressDown)
+		update(t, m, pressSpace)
+		update(t, m, pressEscape)
+
+		require.Contains(t, plain(m.render()), "# Title", "the raw markdown shows again")
 	})
 
 	t.Run("keeps the color of the answer label", func(t *testing.T) {
@@ -181,7 +208,7 @@ func TestView(t *testing.T) {
 
 	t.Run("marks failed invocations", func(t *testing.T) {
 		m, _ := chatModel(t)
-		m.preferences = preferences{}
+		m.preferences = showAllPreferences()
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
 		sendEvent(t, m, engine.Event{
@@ -372,6 +399,7 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "› Hide tool output")
 		require.Contains(t, view, "[on]")
 		require.Contains(t, view, "Hide thinking")
+		require.Contains(t, view, "Render markdown")
 		require.Contains(t, view, "enter toggle")
 		require.Contains(t, view, "esc close")
 	})
@@ -503,7 +531,7 @@ func TestChatLayout(t *testing.T) {
 
 		for _, size := range sizes {
 			m, _ := chatModel(t)
-			m.preferences = preferences{}
+			m.preferences = showAllPreferences()
 			update(t, m, windowMsg(size.width, size.height))
 			m.input.SetValue("go")
 			update(t, m, pressEnter)
@@ -542,7 +570,7 @@ func TestChatLayout(t *testing.T) {
 
 	t.Run("rewraps the conversation after a resize", func(t *testing.T) {
 		m, _ := chatModel(t)
-		m.preferences = preferences{}
+		m.preferences = showAllPreferences()
 		update(t, m, windowMsg(80, 30))
 		m.input.SetValue("go")
 		update(t, m, pressEnter)

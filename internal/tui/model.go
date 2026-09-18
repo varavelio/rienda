@@ -91,12 +91,17 @@ type preferences struct {
 
 	// HideThinking collapses the reasoning of the model to one line.
 	HideThinking bool
+
+	// RenderMarkdown formats the answers of the model as markdown. When it is
+	// off the answers are shown as the model wrote them.
+	RenderMarkdown bool
 }
 
 // defaultPreferences returns the options of a new interface: the blocks that
-// grow while the model works start hidden.
+// grow while the model works start hidden and the answers of the model are
+// formatted as markdown.
 func defaultPreferences() preferences {
-	return preferences{HideToolOutput: true, HideThinking: true}
+	return preferences{HideToolOutput: true, HideThinking: true, RenderMarkdown: true}
 }
 
 // preference is one option the command center lists and toggles.
@@ -127,6 +132,12 @@ var preferencesList = []preference{
 		Note:  "collapse the reasoning of the model to a single line",
 		IsOn:  func(current preferences) bool { return current.HideThinking },
 		Set:   func(current *preferences, on bool) { current.HideThinking = on },
+	},
+	{
+		Label: "Render markdown",
+		Note:  "format the answers of the model as markdown",
+		IsOn:  func(current preferences) bool { return current.RenderMarkdown },
+		Set:   func(current *preferences, on bool) { current.RenderMarkdown = on },
 	},
 }
 

@@ -443,6 +443,7 @@ func TestModel(t *testing.T) {
 		m, _ := chatModel(t)
 		require.True(t, m.preferences.HideToolOutput)
 		require.True(t, m.preferences.HideThinking)
+		require.True(t, m.preferences.RenderMarkdown)
 
 		update(t, m, pressCtrlP)
 		update(t, m, pressEnter)
@@ -456,8 +457,12 @@ func TestModel(t *testing.T) {
 		require.False(t, m.preferences.HideThinking)
 
 		update(t, m, pressDown)
+		update(t, m, pressSpace)
+		require.False(t, m.preferences.RenderMarkdown)
+
 		update(t, m, pressDown)
-		require.Equal(t, 1, m.settingCursor)
+		update(t, m, pressDown)
+		require.Equal(t, 2, m.settingCursor, "the cursor stays on the last option")
 	})
 
 	t.Run("shows the tool output toggled from the command center", func(t *testing.T) {

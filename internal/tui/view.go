@@ -299,6 +299,10 @@ func (m *model) renderBlock(index int) string {
 // so headings, emphasis, code, lists and links read the way the model wrote
 // them.
 func (m *model) renderAssistantBlock(current *entry, width int) string {
+	if !m.preferences.RenderMarkdown {
+		return m.styles.assistant.block(width, m.assistantName(), current.text())
+	}
+
 	body := renderMarkdown(current.text(), width, m.styles.markdown)
 	label := m.styles.assistant.title.Render(m.assistantName())
 	return m.styles.assistant.styled(width, label, body)
