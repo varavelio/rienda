@@ -40,6 +40,16 @@ const (
 	versionPackage = "github.com/varavelio/rienda/internal/version"
 )
 
+// Permissions of the generated artifacts.
+//
+// The release workflow builds them inside a container running as root and
+// uploads them from the host with the unprivileged user of the runner, so the
+// dist directory and its files must stay readable by every user.
+const (
+	artifactDirMode  = 0o755
+	artifactFileMode = 0o644
+)
+
 // Operating systems and architectures covered by a release.
 const (
 	osDarwin  = "darwin"
@@ -127,11 +137,8 @@ func run(ctx context.Context) error {
 	fmt.Printf("Release commit: %s\n", metadata.Commit)
 	fmt.Printf("Release date: %s\n", metadata.Date)
 
-	if err := os.RemoveAll(distDir); err != nil {
-		return fmt.Errorf("clean dist directory: %w", err)
-	}
-	if err := os.MkdirAll(distDir, 0o750); err != nil {
-		return fmt.Errorf("create dist directory: %w", err)
+	if err := prepareDistDir(distDir); err != nil {
+		return err
 	}
 
 	artifacts := make([]releaseArtifact, 0, len(releaseTargets))
@@ -150,6 +157,20 @@ func run(ctx context.Context) error {
 	}
 
 	fmt.Printf("Release artifacts written to %s\n", distDir)
+	return nil
+}
+
+// prepareDistDir replaces the dist directory with an empty one that every user
+// can read, so the release workflow can collect the artifacts from outside the
+// container that builds them.
+func prepareDistDir(distDir string) error {
+	if err := os.RemoveAll(distDir); err != nil {
+		return fmt.Errorf("clean dist directory: %w", err)
+	}
+	if err := os.MkdirAll(distDir, artifactDirMode); err != nil {
+		return fmt.Errorf("create dist directory: %w", err)
+	}
+
 	return nil
 }
 
@@ -311,7 +332,8 @@ func writeManifest(distDir, version string, artifacts []releaseArtifact) error {
 		return fmt.Errorf("marshal release manifest: %w", err)
 	}
 	content = append(content, '\n')
-	if err := os.WriteFile(filepath.Join(distDir, manifestFileName), content, 0o600); err != nil {
+	path := filepath.Join(distDir, manifestFileName)
+	if err := os.WriteFile(path, content, artifactFileMode); err != nil {
 		return fmt.Errorf("write release manifest: %w", err)
 	}
 
@@ -342,9 +364,6 @@ func writeChecksums(distDir string) error {
 	if err != nil {
 		return fmt.Errorf("create checksums file: %w", err)
 	}
-	defer func() {
-		_ = checksumFile.Close()
-	}()
 
 	for _, name := range names {
 		hash, err := fileSHA256(filepath.Join(distDir, name))
@@ -354,6 +373,19 @@ func writeChecksums(distDir string) error {
 		if _, err := fmt.Fprintf(checksumFile, "%s  %s\n", hash, name); err != nil {
 			return fmt.Errorf("write checksum for %s: %w", name, err)
 		}
+	}
+	if err := checksumFile.Close(); err != nil {
+		return fmt.Errorf("close checksums file: %w", err)
+	}
+
+	return publishFile(checksumPath)
+}
+
+// publishFile makes one generated artifact readable for every user, whatever
+// the umask of the process that wrote it.
+func publishFile(path string) error {
+	if err := os.Chmod(path, artifactFileMode); err != nil {
+		return fmt.Errorf("publish %s: %w", path, err)
 	}
 
 	return nil
@@ -367,22 +399,22 @@ func createZip(target string, files map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("create zip archive: %w", err)
 	}
-	defer func() {
-		_ = archiveFile.Close()
-	}()
 
 	archive := zip.NewWriter(archiveFile)
-	defer func() {
-		_ = archive.Close()
-	}()
 
 	for _, source := range sortedKeys(files) {
 		if err := addFileToZip(archive, source, files[source]); err != nil {
 			return err
 		}
 	}
+	if err := archive.Close(); err != nil {
+		return fmt.Errorf("close zip archive: %w", err)
+	}
+	if err := archiveFile.Close(); err != nil {
+		return fmt.Errorf("close zip file: %w", err)
+	}
 
-	return nil
+	return publishFile(target)
 }
 
 // addFileToZip adds one file to a zip archive.
@@ -414,27 +446,26 @@ func createTarGz(target string, files map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("create tar.gz archive: %w", err)
 	}
-	defer func() {
-		_ = archiveFile.Close()
-	}()
 
 	gzipWriter := gzip.NewWriter(archiveFile)
-	defer func() {
-		_ = gzipWriter.Close()
-	}()
-
 	tarWriter := tar.NewWriter(gzipWriter)
-	defer func() {
-		_ = tarWriter.Close()
-	}()
 
 	for _, source := range sortedKeys(files) {
 		if err := addFileToTar(tarWriter, source, files[source]); err != nil {
 			return err
 		}
 	}
+	if err := tarWriter.Close(); err != nil {
+		return fmt.Errorf("close tar archive: %w", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		return fmt.Errorf("close tar archive compression: %w", err)
+	}
+	if err := archiveFile.Close(); err != nil {
+		return fmt.Errorf("close tar file: %w", err)
+	}
 
-	return nil
+	return publishFile(target)
 }
 
 // addFileToTar adds one file to a tar archive.

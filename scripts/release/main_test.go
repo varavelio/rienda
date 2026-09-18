@@ -160,6 +160,67 @@ func TestDetectBuildMetadata(t *testing.T) {
 	})
 }
 
+func TestPrepareDistDir(t *testing.T) {
+	t.Run("replaces the directory with an empty readable one", func(t *testing.T) {
+		distDir := filepath.Join(t.TempDir(), "dist")
+		require.NoError(t, os.MkdirAll(filepath.Join(distDir, "stale"), 0o700))
+		require.NoError(
+			t,
+			os.WriteFile(filepath.Join(distDir, "stale", "old.txt"), []byte("old"), 0o600),
+		)
+		require.NoError(t, prepareDistDir(distDir))
+
+		info, err := os.Stat(distDir)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+		require.Equal(t, os.FileMode(artifactDirMode), info.Mode().Perm())
+
+		entries, err := os.ReadDir(distDir)
+		require.NoError(t, err)
+		require.Empty(t, entries)
+	})
+}
+
+// requireWorldReadable fails unless every user can read path, which is the
+// requirement the release workflow has on the generated artifacts: they are
+// built inside a container running as root and uploaded from the host with the
+// unprivileged user of the runner.
+func requireWorldReadable(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	other := info.Mode().Perm() & 0o007
+	if info.IsDir() {
+		// A directory also needs the traverse bit to expose its entries.
+		require.Equal(t, os.FileMode(0o005), other, "%s must be traversable by every user", path)
+		return
+	}
+	require.Equal(t, os.FileMode(0o004), other, "%s must be readable by every user", path)
+}
+
+func TestArtifactPermissions(t *testing.T) {
+	t.Run("makes every artifact readable by the release workflow", func(t *testing.T) {
+		distDir := t.TempDir()
+		require.NoError(t, prepareDistDir(distDir))
+		require.NoError(t, writeManifest(distDir, "0.1.0", nil))
+		require.NoError(t, writeChecksums(distDir))
+
+		binary := filepath.Join(t.TempDir(), binaryName("linux"))
+		require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o600))
+		files := map[string]string{binary: binaryName("linux")}
+		require.NoError(t, createTarGz(filepath.Join(distDir, "rienda_linux_amd64.tar.gz"), files))
+		require.NoError(t, createZip(filepath.Join(distDir, "rienda_windows_amd64.zip"), files))
+
+		requireWorldReadable(t, distDir)
+		requireWorldReadable(t, filepath.Join(distDir, manifestFileName))
+		requireWorldReadable(t, filepath.Join(distDir, checksumFileName))
+		requireWorldReadable(t, filepath.Join(distDir, "rienda_linux_amd64.tar.gz"))
+		requireWorldReadable(t, filepath.Join(distDir, "rienda_windows_amd64.zip"))
+	})
+}
+
 func TestFindProjectRoot(t *testing.T) {
 	t.Run("locates the repository root from any depth", func(t *testing.T) {
 		root, err := findProjectRoot()

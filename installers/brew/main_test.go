@@ -23,6 +23,25 @@ func formulaHashes() map[string]string {
 	}
 }
 
+// requireWorldReadable fails unless every user can read path, which is the
+// requirement the release workflow has on the generated formulas: they are
+// generated inside a container running as root and committed from the host with
+// the unprivileged user of the runner.
+func requireWorldReadable(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	other := info.Mode().Perm() & 0o007
+	if info.IsDir() {
+		// A directory also needs the traverse bit to expose its entries.
+		require.Equal(t, os.FileMode(0o005), other, "%s must be traversable by every user", path)
+		return
+	}
+	require.Equal(t, os.FileMode(0o004), other, "%s must be readable by every user", path)
+}
+
 func TestGenerateFormula(t *testing.T) {
 	t.Run("renders the complete formula", func(t *testing.T) {
 		content, err := generateFormula("rienda.rb", "0.1.0", formulaHashes())
@@ -173,6 +192,12 @@ func TestRun(t *testing.T) {
 		content, err := os.ReadFile(filepath.Join(formulaDir, "rienda.rb"))
 		require.NoError(t, err)
 		require.True(t, strings.HasPrefix(string(content), "# This file was generated"))
+
+		// The workflow commits the formulas from outside the container that
+		// generates them, so the directory and the files must be readable by
+		// every user.
+		requireWorldReadable(t, formulaDir)
+		requireWorldReadable(t, filepath.Join(formulaDir, "rienda.rb"))
 	})
 
 	t.Run("writes only the next formula for pre-releases", func(t *testing.T) {

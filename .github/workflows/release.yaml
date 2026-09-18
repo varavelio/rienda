@@ -71,9 +71,26 @@ jobs:
             RIENDA_DATE='${{ needs.setup.outputs.date }}'
             task release"
 
+      - name: Verify the release artifacts
+        run: |
+          set -euo pipefail
+
+          # The archives are built inside the dev container; this runs on the
+          # runner, so it fails fast when they are missing or unreadable
+          # instead of publishing an empty release.
+          ls -l ./dist || true
+
+          for artifact in ./dist/*.tar.gz ./dist/*.zip ./dist/checksums.txt ./dist/manifest.json; do
+            if [[ ! -r "${artifact}" ]]; then
+              echo "::error::${artifact} is missing or not readable by the runner"
+              exit 1
+            fi
+          done
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: true
           files: |
             ./dist/*.tar.gz
             ./dist/*.zip
@@ -252,7 +269,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          BODY="$(gh release view "${TAG}" --json body --jq '.body')"
+          BODY="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json body --jq '.body')"
           NOTE=$'\n\n---\n\n> [!WARNING]\n> The release workflow failed. Use the next release instead.'
 
           if [[ "${BODY}" == *"The release workflow failed"* ]]; then
@@ -260,4 +277,4 @@ jobs:
             exit 0
           fi
 
-          gh release edit "${TAG}" --notes "${BODY}${NOTE}"
+          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --notes "${BODY}${NOTE}"

@@ -21,6 +21,16 @@ import (
 	"unicode"
 )
 
+// Permissions of the generated formulas.
+//
+// The release workflow generates them inside a container running as root and
+// commits them from the host with the unprivileged user of the runner, so the
+// formula directory and its files must stay readable by every user.
+const (
+	formulaDirMode  = 0o755
+	formulaFileMode = 0o644
+)
+
 const (
 	formulaDir       = "Formula/rienda"
 	githubRepo       = "varavelio/rienda"
@@ -94,11 +104,13 @@ func writeFormula(outputRoot, fileName, version string, hashes map[string]string
 		return err
 	}
 	directory := filepath.Join(outputRoot, filepath.FromSlash(formulaDir))
-	if err := os.MkdirAll(directory, 0o750); err != nil {
+	//nolint:gosec // the formulas are published, so they must be world-readable.
+	if err := os.MkdirAll(directory, formulaDirMode); err != nil {
 		return fmt.Errorf("create formula directory: %w", err)
 	}
 	path := filepath.Join(directory, fileName)
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	//nolint:gosec // the formulas are published, so they must be world-readable.
+	if err := os.WriteFile(path, []byte(content), formulaFileMode); err != nil {
 		return fmt.Errorf("write %s: %w", fileName, err)
 	}
 
