@@ -18,7 +18,7 @@ func TestRun(t *testing.T) {
 			err := run([]string{arg}, strings.NewReader(""), stdout, stderr)
 
 			require.NoError(t, err)
-			require.Contains(t, stdout.String(), version.String(), "argument %q", arg)
+			require.Regexp(t, `^Rienda \S+\n`, stdout.String(), "argument %q", arg)
 			require.Contains(t, stdout.String(), "Usage:", "argument %q", arg)
 		}
 	})
