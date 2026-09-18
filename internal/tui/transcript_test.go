@@ -38,20 +38,20 @@ func TestTranscript(t *testing.T) {
 
 		require.Len(t, conversation.entries, 4)
 		require.Equal(t, entryUser, conversation.entries[0].kind)
-		require.Equal(t, "list the files", conversation.entries[0].text)
+		require.Equal(t, "list the files", conversation.entries[0].text())
 		require.Equal(t, entryAssistant, conversation.entries[1].kind)
-		require.Equal(t, "Let me check.", conversation.entries[1].text)
+		require.Equal(t, "Let me check.", conversation.entries[1].text())
 
 		invocation := conversation.entries[2]
 		require.Equal(t, entryTool, invocation.kind)
 		require.Equal(t, "shell", invocation.toolName)
 		require.Equal(t, `{"command":"ls"}`, invocation.toolArguments)
-		require.Equal(t, "a.txt\n", invocation.text)
+		require.Equal(t, "a.txt\n", invocation.text())
 		require.True(t, invocation.toolDone)
 		require.False(t, invocation.toolError)
 
 		require.Equal(t, entryAssistant, conversation.entries[3].kind)
-		require.Equal(t, "Done.", conversation.entries[3].text)
+		require.Equal(t, "Done.", conversation.entries[3].text())
 	})
 
 	t.Run("separates thinking from the answer", func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestTranscript(t *testing.T) {
 
 		require.Len(t, conversation.entries, 2)
 		require.Equal(t, entryThinking, conversation.entries[0].kind)
-		require.Equal(t, "hmm yes", conversation.entries[0].text)
+		require.Equal(t, "hmm yes", conversation.entries[0].text())
 		require.Equal(t, entryAssistant, conversation.entries[1].kind)
 	})
 
@@ -83,7 +83,7 @@ func TestTranscript(t *testing.T) {
 		invocation := conversation.entries[0]
 		require.True(t, invocation.toolDone)
 		require.True(t, invocation.toolError)
-		require.Equal(t, "boom", invocation.text)
+		require.Equal(t, "boom", invocation.text())
 	})
 
 	t.Run("caps the tool output", func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestTranscript(t *testing.T) {
 		conversation.apply(engine.Event{Type: engine.EventToolOutput, ToolCallID: "call_1"})
 
 		invocation := conversation.entries[0]
-		require.Len(t, invocation.text, maxToolOutput)
+		require.Len(t, invocation.text(), maxToolOutput)
 		require.True(t, invocation.truncated)
 	})
 
@@ -116,7 +116,7 @@ func TestTranscript(t *testing.T) {
 
 		require.Len(t, conversation.entries, 2)
 		require.Equal(t, entryError, conversation.entries[0].kind)
-		require.Equal(t, "boom", conversation.entries[0].text)
+		require.Equal(t, "boom", conversation.entries[0].text())
 		require.Equal(t, entryNotice, conversation.entries[1].kind)
 	})
 
@@ -162,16 +162,16 @@ func TestTranscript(t *testing.T) {
 
 		require.Len(t, conversation.entries, 4)
 		require.Equal(t, entryUser, conversation.entries[0].kind)
-		require.Equal(t, "list the files", conversation.entries[0].text)
+		require.Equal(t, "list the files", conversation.entries[0].text())
 		require.Equal(t, entryThinking, conversation.entries[1].kind)
-		require.Equal(t, "let me check", conversation.entries[1].text)
+		require.Equal(t, "let me check", conversation.entries[1].text())
 		require.Equal(t, entryAssistant, conversation.entries[2].kind)
-		require.Equal(t, "sure", conversation.entries[2].text)
+		require.Equal(t, "sure", conversation.entries[2].text())
 
 		invocation := conversation.entries[3]
 		require.Equal(t, entryTool, invocation.kind)
 		require.Equal(t, "shell", invocation.toolName)
-		require.Equal(t, "a.txt", invocation.text)
+		require.Equal(t, "a.txt", invocation.text())
 		require.True(t, invocation.toolDone)
 		require.False(t, invocation.toolError)
 	})
@@ -197,7 +197,87 @@ func TestTranscript(t *testing.T) {
 		require.Len(t, conversation.entries, 1)
 		require.True(t, conversation.entries[0].toolDone)
 		require.True(t, conversation.entries[0].toolError)
-		require.Equal(t, "boom", conversation.entries[0].text)
+		require.Equal(t, "boom", conversation.entries[0].text())
+	})
+
+	t.Run("tracks the entries that changed", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.markRendered()
+
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "one"})
+		require.Equal(t, 0, conversation.changedFrom())
+
+		conversation.markRendered()
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: " and two"})
+		require.Equal(t, 0, conversation.changedFrom())
+
+		conversation.markRendered()
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+		})
+		require.Equal(t, 0, conversation.changedFrom(), "the entry before it changes too")
+
+		conversation.markRendered()
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolOutput,
+			ToolCallID: "call_1",
+			Output:     "a.txt",
+		})
+		require.Equal(t, 1, conversation.changedFrom())
+
+		conversation.markRendered()
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolResult,
+			ToolCallID: "call_1",
+			Text:       "a.txt",
+		})
+		require.Equal(t, 1, conversation.changedFrom())
+
+		conversation.markRendered()
+		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
+		require.Equal(t, 1, conversation.changedFrom(), "the entry before it changes too")
+	})
+
+	t.Run("marks the entries that animate", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+		})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_2",
+			ToolName:   "shell",
+		})
+		conversation.markRendered()
+
+		conversation.touchSpinners(true)
+		require.Equal(t, 1, conversation.changedFrom())
+
+		conversation.markRendered()
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolResult,
+			ToolCallID: "call_1",
+			Text:       "done",
+		})
+		conversation.markRendered()
+
+		conversation.touchSpinners(true)
+		require.Equal(t, 2, conversation.changedFrom())
+	})
+
+	t.Run("does not mark reasoning that is shown", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
+		conversation.markRendered()
+
+		conversation.touchSpinners(false)
+
+		require.Equal(t, 1, conversation.changedFrom())
 	})
 }
 

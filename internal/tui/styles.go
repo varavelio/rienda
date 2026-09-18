@@ -22,6 +22,8 @@ type styles struct {
 	divider     lipgloss.Style
 	notice      lipgloss.Style
 	footer      lipgloss.Style
+	on          lipgloss.Style
+	off         lipgloss.Style
 	errorText   lipgloss.Style
 	inputBox    lipgloss.Style
 	inputPrompt lipgloss.Style
@@ -50,14 +52,26 @@ func (s section) block(width int, label, body string) string {
 
 // titled renders a conversation block with a label that already carries its
 // styling, which the tool blocks use to mix the invocation and its arguments.
+// The label and the body wrap to the width of the block, so a long title
+// breaks into several lines instead of running past the terminal.
 func (s section) titled(width int, label, body string) string {
-	lines := []string{label}
+	lines := strings.Split(wrapLabel(label, width), "\n")
 	if body != "" {
 		inner := max(1, width-blockIndent)
 		body := indentLines(s.body.Render(wrap(body, inner)), strings.Repeat(" ", blockIndent))
 		lines = append(lines, "", body)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// wrapLabel wraps a label that already carries styling to width columns. It
+// keeps the styles on every line it produces, which the plain text wrapper
+// used for bodies does not need to do.
+func wrapLabel(label string, width int) string {
+	if width <= 0 {
+		return label
+	}
+	return lipgloss.Wrap(label, width, "")
 }
 
 // newStyles builds the styles of the interface for the given terminal
@@ -76,6 +90,8 @@ func newStyles(isDark bool) styles {
 			Foreground(lightDark(lipgloss.Color("246"), lipgloss.Color("242"))),
 		notice:      lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
 		footer:      lipgloss.NewStyle().Faint(true),
+		on:          lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
+		off:         lipgloss.NewStyle().Faint(true),
 		errorText:   lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
 		inputPrompt: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
 		inputBox: lipgloss.NewStyle().

@@ -13,4 +13,10 @@
 // reacts to messages, and the rendering lives in its own file. Sessions and
 // runs are reached through the small Session interface, which keeps the model
 // independent from providers and from the filesystem.
+//
+// A run is followed through the conversation the model renders: the answers of
+// the agent, the reasoning of the model and the tool invocations with their
+// output. The command center (ctrl+p) holds the options of the harness, which
+// start hiding the tool output and the reasoning so that a working session
+// stays readable.
 package tui

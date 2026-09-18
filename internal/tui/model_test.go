@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"image/color"
 	"sync"
@@ -69,9 +70,11 @@ var (
 	pressDown   = tea.KeyPressMsg{Code: tea.KeyDown}
 	pressEnter  = tea.KeyPressMsg{Code: tea.KeyEnter}
 	pressEscape = tea.KeyPressMsg{Code: tea.KeyEscape}
+	pressSpace  = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 	pressCtrlC  = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	pressCtrlD  = tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
 	pressCtrlJ  = tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}
+	pressCtrlP  = tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
 	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
 )
 
@@ -85,6 +88,14 @@ func update(t *testing.T, m *model, msg tea.Msg) tea.Cmd {
 	t.Helper()
 
 	_, cmd := m.Update(msg)
+	return cmd
+}
+
+// sendEvent delivers one engine event to the model, as the run stream does.
+func sendEvent(t testing.TB, m *model, event engine.Event) tea.Cmd {
+	t.Helper()
+
+	_, cmd := m.Update(engineEventsMsg{event})
 	return cmd
 }
 
@@ -235,21 +246,17 @@ func TestModel(t *testing.T) {
 		require.True(t, m.running)
 		require.Empty(t, m.input.Value())
 
-		update(t, m, engineEventMsg{event: engine.Event{Type: engine.EventRunStart}})
-		update(t, m, engineEventMsg{event: engine.Event{Type: engine.EventTextDelta, Text: "hi "}})
-		update(
-			t,
-			m,
-			engineEventMsg{event: engine.Event{Type: engine.EventTextDelta, Text: "there"}},
-		)
-		update(t, m, engineEventMsg{event: engine.Event{
+		sendEvent(t, m, engine.Event{Type: engine.EventRunStart})
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "hi "})
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "there"})
+		sendEvent(t, m, engine.Event{
 			Type:  engine.EventMessageEnd,
 			Usage: &engine.Usage{InputTokens: 3, OutputTokens: 2},
-		}})
-		update(t, m, engineEventMsg{event: engine.Event{
+		})
+		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
 			Reason: engine.EndReasonTurn,
-		}})
+		})
 
 		require.False(t, m.running)
 		require.Equal(t, 3, m.usageIn)
@@ -297,10 +304,10 @@ func TestModel(t *testing.T) {
 			require.Fail(t, "the run was not canceled")
 		}
 
-		update(t, m, engineEventMsg{event: engine.Event{
+		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
 			Reason: engine.EndReasonInterrupted,
-		}})
+		})
 
 		require.False(t, m.running)
 		require.Contains(t, plain(m.render()), "interrupted")
@@ -311,10 +318,10 @@ func TestModel(t *testing.T) {
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
 
-		update(t, m, engineEventMsg{event: engine.Event{
+		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
 			Reason: engine.EndReasonMaxTurns,
-		}})
+		})
 
 		require.Contains(t, plain(m.render()), "turn limit")
 	})
@@ -336,21 +343,131 @@ func TestModel(t *testing.T) {
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
 		for range 40 {
-			update(t, m, engineEventMsg{event: engine.Event{
+			sendEvent(t, m, engine.Event{
 				Type: engine.EventTextDelta,
 				Text: "line\n",
-			}})
+			})
 		}
-		update(t, m, engineEventMsg{event: engine.Event{
+		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
 			Reason: engine.EndReasonTurn,
-		}})
-		require.Positive(t, m.viewport.YOffset())
+		})
+		require.Positive(t, m.conversation.offsetRows())
 
-		before := m.viewport.YOffset()
+		before := m.conversation.offsetRows()
 		update(t, m, pressUp)
 
-		require.Less(t, m.viewport.YOffset(), before)
+		require.Less(t, m.conversation.offsetRows(), before)
+	})
+
+	t.Run("opens and closes the command center", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("draft")
+
+		update(t, m, pressCtrlP)
+		require.Equal(t, phaseSettings, m.phase)
+
+		update(t, m, tea.KeyPressMsg{Code: 'a', Text: "a"})
+		require.Equal(t, "draft", m.input.Value())
+
+		update(t, m, pressEscape)
+
+		require.Equal(t, phaseChat, m.phase)
+		require.Equal(t, "draft", m.input.Value())
+	})
+
+	t.Run("returns from the command center to the previous phase", func(t *testing.T) {
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+		require.Equal(t, phaseMenu, m.phase)
+
+		update(t, m, pressCtrlP)
+		require.Equal(t, phaseSettings, m.phase)
+
+		update(t, m, pressCtrlP)
+
+		require.Equal(t, phaseMenu, m.phase)
+	})
+
+	t.Run("toggles the harness options", func(t *testing.T) {
+		m, _ := chatModel(t)
+		require.True(t, m.preferences.HideToolOutput)
+		require.True(t, m.preferences.HideThinking)
+
+		update(t, m, pressCtrlP)
+		update(t, m, pressEnter)
+		require.False(t, m.preferences.HideToolOutput)
+
+		update(t, m, pressSpace)
+		require.True(t, m.preferences.HideToolOutput)
+
+		update(t, m, pressDown)
+		update(t, m, pressSpace)
+		require.False(t, m.preferences.HideThinking)
+
+		update(t, m, pressDown)
+		update(t, m, pressDown)
+		require.Equal(t, 1, m.settingCursor)
+	})
+
+	t.Run("shows the tool output toggled from the command center", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+		})
+		sendEvent(t, m, engine.Event{
+			Type:       engine.EventToolResult,
+			ToolCallID: "call_1",
+			Text:       "a.txt",
+		})
+		sendEvent(t, m, engine.Event{
+			Type:   engine.EventRunEnd,
+			Reason: engine.EndReasonTurn,
+		})
+		require.NotContains(t, plain(m.render()), "a.txt")
+
+		update(t, m, pressCtrlP)
+		update(t, m, pressEnter)
+		update(t, m, pressEscape)
+
+		require.Contains(t, plain(m.render()), "a.txt")
+	})
+
+	t.Run("keeps the rendered conversation in sync", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventThinkingDelta, Text: "thinking about it"})
+		sendEvent(t, m, engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+			Arguments:  json.RawMessage(`{"command":"ls"}`),
+		})
+		sendEvent(t, m, engine.Event{
+			Type:       engine.EventToolOutput,
+			ToolCallID: "call_1",
+			Output:     "a.txt\n",
+		})
+		sendEvent(t, m, engine.Event{
+			Type:       engine.EventToolResult,
+			ToolCallID: "call_1",
+			Text:       "a.txt",
+		})
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "done"})
+
+		before := m.conversation.view()
+		m.invalidateTranscript()
+		m.refreshTranscript()
+
+		require.Equal(t, before, m.conversation.view())
 	})
 
 	t.Run("passes typed text to the input", func(t *testing.T) {
@@ -363,7 +480,7 @@ func TestModel(t *testing.T) {
 
 	t.Run("inserts newlines in the prompt", func(t *testing.T) {
 		m, scripted := chatModel(t)
-		require.Equal(t, 14, m.viewport.Height())
+		require.Equal(t, 14, m.conversation.height)
 
 		update(t, m, tea.KeyPressMsg{Code: 'a', Text: "first"})
 		update(t, m, pressCtrlJ)
@@ -372,14 +489,14 @@ func TestModel(t *testing.T) {
 		require.Equal(t, "first\nsecond", m.input.Value())
 		require.Equal(t, 2, m.input.LineCount())
 		require.Equal(t, 2, m.input.Height())
-		require.Equal(t, 13, m.viewport.Height())
+		require.Equal(t, 13, m.conversation.height)
 		require.Empty(t, scripted.prompts)
 
 		update(t, m, pressEnter)
 
 		require.Equal(t, []string{"first\nsecond"}, scripted.prompts)
 		require.Equal(t, 1, m.input.Height())
-		require.Equal(t, 14, m.viewport.Height())
+		require.Equal(t, 14, m.conversation.height)
 	})
 
 	t.Run("moves the prompt cursor with the arrows when it is multi-line", func(t *testing.T) {
@@ -415,6 +532,23 @@ func TestModel(t *testing.T) {
 
 		require.True(t, m.busy())
 		require.NotNil(t, update(t, m, m.spinner.Tick()))
+	})
+
+	t.Run("advances the spinner of the blocks in flight", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+		})
+		before := m.conversation.view()
+
+		update(t, m, m.spinner.Tick())
+
+		require.NotEqual(t, before, m.conversation.view())
+		require.Contains(t, plain(m.conversation.view()), "shell")
 	})
 
 	t.Run("quits with ctrl+c", func(t *testing.T) {
@@ -584,12 +718,50 @@ func TestStartPhase(t *testing.T) {
 	})
 }
 
-// TestWaitForEvent verifies event delivery.
-func TestWaitForEvent(t *testing.T) {
-	events := make(chan engine.Event, 1)
-	events <- engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn}
-	close(events)
+// TestStreamEvents verifies event delivery.
+func TestStreamEvents(t *testing.T) {
+	t.Run("delivers the events already available", func(t *testing.T) {
+		events := make(chan engine.Event, 3)
+		events <- engine.Event{Type: engine.EventTextDelta, Text: "one"}
+		events <- engine.Event{Type: engine.EventTextDelta, Text: "two"}
 
-	require.IsType(t, engineEventMsg{}, waitForEvent(events)())
-	require.IsType(t, eventsClosedMsg{}, waitForEvent(events)())
+		burst, ok := streamEvents(events)().(engineEventsMsg)
+
+		require.True(t, ok)
+		require.Len(t, burst, 2)
+		require.Equal(t, "one", burst[0].Text)
+		require.Equal(t, "two", burst[1].Text)
+	})
+
+	t.Run("caps the burst", func(t *testing.T) {
+		events := make(chan engine.Event, maxEventBurst+1)
+		for range maxEventBurst + 1 {
+			events <- engine.Event{Type: engine.EventTextDelta, Text: "chunk"}
+		}
+
+		burst, ok := streamEvents(events)().(engineEventsMsg)
+
+		require.True(t, ok)
+		require.Len(t, burst, maxEventBurst)
+		require.Len(t, events, 1)
+	})
+
+	t.Run("reports a closed channel", func(t *testing.T) {
+		events := make(chan engine.Event)
+		close(events)
+
+		require.IsType(t, eventsClosedMsg{}, streamEvents(events)())
+	})
+
+	t.Run("closes after delivering the last events", func(t *testing.T) {
+		events := make(chan engine.Event, 1)
+		events <- engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn}
+		close(events)
+
+		burst, ok := streamEvents(events)().(engineEventsMsg)
+		require.True(t, ok)
+		require.Len(t, burst, 1)
+
+		require.IsType(t, eventsClosedMsg{}, streamEvents(events)())
+	})
 }

@@ -7,12 +7,17 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/varavelio/rienda/internal/agent"
 )
 
 // brand is the name of the interface, shown at the top of every phase.
 const brand = "rienda"
+
+// maxToolLabel caps the characters of a tool invocation the interface shows,
+// so a call carrying a huge argument cannot flood the conversation.
+const maxToolLabel = 400
 
 // View renders the interface in the alternate screen.
 func (m *model) View() tea.View {
@@ -32,6 +37,8 @@ func (m *model) render() string {
 		return m.viewSessions()
 	case m.phase == phasePicker:
 		return m.viewPicker()
+	case m.phase == phaseSettings:
+		return m.viewSettings()
 	case m.phase == phasePreparing:
 		return m.viewPreparing()
 	default:
@@ -60,7 +67,7 @@ func (m *model) viewMenu() string {
 		m.row(m.menu == menuNew, "New session"),
 		m.row(m.menu == menuContinue, "Continue a previous session"),
 	)
-	rows = append(rows, m.footerRows("↑/↓ move · enter select · ctrl+c quit")...)
+	rows = append(rows, m.footerRows("↑/↓ move · enter select · ctrl+p settings · ctrl+c quit")...)
 	return strings.Join(rows, "\n")
 }
 
@@ -74,7 +81,10 @@ func (m *model) viewSessions() string {
 		rows = append(rows, m.sessionLine(index))
 	}
 
-	rows = append(rows, m.footerRows("↑/↓ move · enter open · esc back · ctrl+c quit")...)
+	rows = append(
+		rows,
+		m.footerRows("↑/↓ move · enter open · esc back · ctrl+p settings · ctrl+c quit")...,
+	)
 	return strings.Join(rows, "\n")
 }
 
@@ -85,17 +95,16 @@ func (m *model) sessionLine(index int) string {
 	if title == "" {
 		title = "untitled session"
 	}
-	return m.row(index == m.chosen, title) + "  " + m.styles.dim.Render(
-		info.Agent+" · "+formatAge(info.UpdatedAt),
-	)
+	details := m.styles.dim.Render(info.Agent + " · " + formatAge(info.UpdatedAt))
+	return m.clip(m.row(index == m.chosen, title) + "  " + details)
 }
 
 // row renders one list row, highlighted when it holds the cursor.
 func (m *model) row(highlighted bool, label string) string {
 	if highlighted {
-		return "› " + m.styles.selected.Render(label)
+		return m.clip("› " + m.styles.selected.Render(label))
 	}
-	return "  " + label
+	return m.clip("  " + label)
 }
 
 // listRows returns the list rows that fit on screen outside the fixed lines of
@@ -145,7 +154,7 @@ func (m *model) viewPicker() string {
 		rows = append(rows, m.pickerLine(index, m.agents[index]))
 	}
 
-	rows = append(rows, m.footerRows("↑/↓ move · enter select · ctrl+c quit")...)
+	rows = append(rows, m.footerRows("↑/↓ move · enter select · ctrl+p settings · ctrl+c quit")...)
 	return strings.Join(rows, "\n")
 }
 
@@ -155,7 +164,38 @@ func (m *model) pickerLine(index int, definition agent.Agent) string {
 	if definition.Description == "" {
 		return line
 	}
-	return line + "  " + m.styles.dim.Render(definition.Description)
+	return m.clip(line + "  " + m.styles.dim.Render(definition.Description))
+}
+
+// viewSettings renders the command center: the options of the harness and
+// their state.
+func (m *model) viewSettings() string {
+	rows := m.headerRows(m.settingsIdentity())
+	rows = append(rows, "Command center", "")
+
+	first, last := visibleWindow(m.settingCursor, len(preferencesList), m.listRows())
+	for index := first; index < last; index++ {
+		rows = append(rows, m.preferenceLine(index))
+	}
+
+	rows = append(rows, m.footerRows("↑/↓ move · enter toggle · esc close")...)
+	return strings.Join(rows, "\n")
+}
+
+// settingsIdentity renders the identity of the command center.
+func (m *model) settingsIdentity() string {
+	return m.styles.title.Render(brand) + m.styles.header.Render(" · settings")
+}
+
+// preferenceLine renders one option of the command center with its state.
+func (m *model) preferenceLine(index int) string {
+	option := preferencesList[index]
+	state := m.styles.off.Render("[off]")
+	if option.IsOn(m.preferences) {
+		state = m.styles.on.Render("[on]")
+	}
+	label := m.row(index == m.settingCursor, option.Label) + "  " + state
+	return m.clip(label + "  " + m.styles.dim.Render(option.Note))
 }
 
 // viewPreparing renders the session preparation screen.
@@ -171,7 +211,7 @@ func (m *model) viewChat() string {
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		strings.Join(m.headerRows(m.chatIdentity()), "\n"),
-		m.viewport.View(),
+		m.conversation.view(),
 		m.viewInput(),
 		m.chatFooter(),
 	)
@@ -198,7 +238,7 @@ func (m *model) viewInput() string {
 // token usage, together with the keys the interface listens to.
 func (m *model) chatFooter() string {
 	parts := make([]string, 0, 2)
-	if !m.running && !m.viewport.AtBottom() {
+	if !m.conversation.atBottom() {
 		parts = append(parts, "↑ scrolled")
 	}
 
@@ -207,60 +247,59 @@ func (m *model) chatFooter() string {
 		parts = append(parts, m.spinner.View()+" working… · esc interrupts")
 	case m.usageIn > 0 || m.usageOut > 0:
 		parts = append(parts, fmt.Sprintf(
-			"tokens %d in · %d out · enter send · ctrl+j newline · ctrl+c quit",
+			"tokens %d in · %d out · enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit",
 			m.usageIn,
 			m.usageOut,
 		))
 	default:
-		parts = append(parts, "enter send · ctrl+j newline · ctrl+c quit")
+		parts = append(parts, "enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit")
 	}
 
 	text := m.clip(m.styles.footer.Render(strings.Join(parts, " · ")))
 	return text
 }
 
-// renderTranscript renders the whole conversation: the blocks separated by the
-// divider rule, resting on the bottom of the transcript.
-func (m *model) renderTranscript() string {
-	if len(m.transcript.entries) == 0 {
-		return ""
+// renderEntry renders the transcript entry at the given index as a
+// conversation block, preceded by the divider that separates it from the
+// previous one.
+func (m *model) renderEntry(index int) string {
+	block := m.renderBlock(index)
+	if index == 0 || block == "" {
+		return block
 	}
-
-	blocks := make([]string, 0, len(m.transcript.entries))
-	for _, current := range m.transcript.entries {
-		blocks = append(blocks, m.renderEntry(current))
-	}
-
-	divider := strings.Join([]string{"", m.ruleLine(m.styles.divider), ""}, "\n")
-	return anchorBottom(strings.Join(blocks, "\n"+divider+"\n"), m.viewport.Height())
+	return m.divider() + "\n" + block
 }
 
-// anchorBottom pads text with blank lines above so it rests on the bottom of a
-// space of the given height.
-func anchorBottom(text string, height int) string {
-	if pad := height - (strings.Count(text, "\n") + 1); pad > 0 {
-		return strings.Repeat("\n", pad) + text
-	}
-	return text
-}
+// renderBlock renders the content of the transcript entry at the given index.
+func (m *model) renderBlock(index int) string {
+	current := &m.transcript.entries[index]
+	width := m.width
 
-// renderEntry renders one transcript entry as a conversation block.
-func (m *model) renderEntry(current entry) string {
-	width := m.viewport.Width()
 	switch current.kind {
 	case entryUser:
-		return m.styles.user.block(width, "You", current.text)
+		return m.styles.user.block(width, "You", current.text())
 	case entryAssistant:
-		return m.styles.assistant.block(width, m.assistantName(), current.text)
+		return m.styles.assistant.block(width, m.assistantName(), current.text())
 	case entryThinking:
-		return m.styles.thinking.block(width, "Thinking", current.text)
+		return m.renderThinkingEntry(current, width, m.active(index))
 	case entryTool:
 		return m.renderToolEntry(current, width)
 	case entryNotice:
-		return m.styles.notice.Render(wrap(current.text, width))
+		return m.styles.notice.Render(wrap(current.text(), width))
 	default:
-		return m.styles.failure.block(width, "Error", current.text)
+		return m.styles.failure.block(width, "Error", current.text())
 	}
+}
+
+// divider returns the rule that separates two conversation blocks.
+func (m *model) divider() string {
+	return strings.Join([]string{"", m.ruleLine(m.styles.divider), ""}, "\n")
+}
+
+// active reports whether the model is still writing the entry at the given
+// index, which is the last one of a run in flight.
+func (m *model) active(index int) bool {
+	return m.running && index == len(m.transcript.entries)-1
 }
 
 // assistantName returns the name shown for the answers of the agent.
@@ -268,8 +307,25 @@ func (m *model) assistantName() string {
 	return m.session.Info().Agent
 }
 
-// renderToolEntry renders a tool invocation with its output.
-func (m *model) renderToolEntry(current entry, width int) string {
+// renderThinkingEntry renders a reasoning block: the whole text when the
+// preferences ask for it, a spinner while it streams and a collapsed line
+// afterwards otherwise.
+func (m *model) renderThinkingEntry(current *entry, width int, active bool) string {
+	if !m.preferences.HideThinking {
+		return m.styles.thinking.block(width, "Thinking", current.text())
+	}
+
+	label := "Thinking"
+	if active {
+		label = m.spinner.View() + " " + label
+	}
+	return m.styles.thinking.titled(width, m.styles.thinking.title.Render(label), "")
+}
+
+// renderToolEntry renders a tool invocation. The preferences decide whether
+// the output is shown or only the invocation, which keeps a noisy tool from
+// flooding the conversation.
+func (m *model) renderToolEntry(current *entry, width int) string {
 	name := m.styles.tool.title
 	switch {
 	case current.toolError:
@@ -280,14 +336,27 @@ func (m *model) renderToolEntry(current entry, width int) string {
 
 	label := name.Render(current.toolName)
 	if current.toolArguments != "" {
-		label += " " + m.styles.dim.Render(current.toolArguments)
+		label += " " + m.styles.dim.Render(toolLabel(current.toolArguments))
+	}
+	if !current.toolDone {
+		label = m.spinner.View() + " " + label
 	}
 
-	output := strings.TrimRight(current.text, "\n")
+	if m.preferences.HideToolOutput {
+		return m.styles.tool.titled(width, label, "")
+	}
+
+	output := strings.TrimRight(current.text(), "\n")
 	if current.truncated {
 		output += "\n[output truncated]"
 	}
 	return m.styles.tool.titled(width, label, output)
+}
+
+// toolLabel compacts the arguments of an invocation into one line and caps how
+// much of them is shown.
+func toolLabel(arguments string) string {
+	return ansi.Truncate(strings.Join(strings.Fields(arguments), " "), maxToolLabel, "…")
 }
 
 // ruleLine renders a horizontal line of the given style across the terminal.
@@ -308,12 +377,14 @@ func clipText(width int, text string) string {
 	return lipgloss.NewStyle().MaxWidth(width).Render(text)
 }
 
-// wrap wraps text to width columns, keeping words together when possible.
+// wrap wraps plain text to width columns, keeping words together when
+// possible. It runs on the plain text of a block, before the style of the
+// block is applied, so it does not need to track styles.
 func wrap(text string, width int) string {
 	if width <= 0 {
 		return text
 	}
-	return lipgloss.NewStyle().Width(width).Render(text)
+	return ansi.Wrap(text, width, "")
 }
 
 // indentLines prefixes every line of text with prefix.

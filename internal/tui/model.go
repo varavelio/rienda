@@ -7,7 +7,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -59,6 +58,10 @@ const inputPromptWidth = 2
 // maxInputLines caps how many lines the prompt input grows to.
 const maxInputLines = 8
 
+// maxEventBurst caps how many events one update folds, so a flood of events
+// cannot stall the interface.
+const maxEventBurst = 64
+
 // defaultDarkBackground is the terminal background assumed until the terminal
 // reports the real one.
 const defaultDarkBackground = true
@@ -68,10 +71,59 @@ const (
 	keyUp      = "up"
 	keyDown    = "down"
 	keyEnter   = "enter"
+	keySpace   = "space"
 	keyEscape  = "esc"
+	keyPgUp    = "pgup"
+	keyPgDown  = "pgdown"
 	keyVimUp   = "k"
 	keyVimDown = "j"
 )
+
+// preferences groups the options of the harness the command center toggles.
+type preferences struct {
+	// HideToolOutput shows the invocation of a tool without its output.
+	HideToolOutput bool
+
+	// HideThinking collapses the reasoning of the model to one line.
+	HideThinking bool
+}
+
+// defaultPreferences returns the options of a new interface: the blocks that
+// grow while the model works start hidden.
+func defaultPreferences() preferences {
+	return preferences{HideToolOutput: true, HideThinking: true}
+}
+
+// preference is one option the command center lists and toggles.
+type preference struct {
+	// Label names the option in the list.
+	Label string
+
+	// Note describes what the option does, shown next to the label.
+	Note string
+
+	// IsOn reports whether the option is enabled.
+	IsOn func(preferences) bool
+
+	// Set enables or disables the option.
+	Set func(*preferences, bool)
+}
+
+// preferencesList lists the options of the command center in display order.
+var preferencesList = []preference{
+	{
+		Label: "Hide tool output",
+		Note:  "show the invocation of a tool without its output",
+		IsOn:  func(current preferences) bool { return current.HideToolOutput },
+		Set:   func(current *preferences, on bool) { current.HideToolOutput = on },
+	},
+	{
+		Label: "Hide thinking",
+		Note:  "collapse the reasoning of the model to a single line",
+		IsOn:  func(current preferences) bool { return current.HideThinking },
+		Set:   func(current *preferences, on bool) { current.HideThinking = on },
+	},
+}
 
 // Session is the agent session the interface drives. The harness package
 // provides the production implementation.
@@ -112,6 +164,8 @@ const (
 	phasePreparing
 	// phaseChat shows the conversation.
 	phaseChat
+	// phaseSettings shows the command center with the harness options.
+	phaseSettings
 )
 
 // Menu entries, indexed by the menu cursor.
@@ -132,10 +186,8 @@ type sessionFailedMsg struct {
 	err error
 }
 
-// engineEventMsg carries one event of a running session.
-type engineEventMsg struct {
-	event engine.Event
-}
+// engineEventsMsg carries a burst of events of a running session.
+type engineEventsMsg []engine.Event
 
 // eventsClosedMsg reports that the event channel of a run was closed.
 type eventsClosedMsg struct{}
@@ -186,10 +238,14 @@ type model struct {
 	usageIn  int
 	usageOut int
 
-	transcript transcript
-	input      textarea.Model
-	spinner    spinner.Model
-	viewport   viewport.Model
+	preferences   preferences
+	returnPhase   phase
+	settingCursor int
+
+	transcript   transcript
+	conversation conversation
+	input        textarea.Model
+	spinner      spinner.Model
 
 	width     int
 	height    int
@@ -224,9 +280,10 @@ func newModel(cfg modelConfig) *model {
 		selected:      cfg.selected,
 		sessions:      cfg.sessions,
 		phase:         startPhase(cfg),
+		preferences:   defaultPreferences(),
 		input:         input,
 		spinner:       spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(styles.dim)),
-		viewport:      viewport.New(),
+		conversation:  newConversation(),
 		hasDarkBG:     defaultDarkBackground,
 		newSession:    cfg.newSession,
 		resumeSession: cfg.resumeSession,
@@ -298,8 +355,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionFailedMsg:
 		m.fatal = msg.err
 		return m, tea.Quit
-	case engineEventMsg:
-		return m, m.handleEvent(msg.event)
+	case engineEventsMsg:
+		return m, m.handleEvents(msg)
 	case eventsClosedMsg:
 		if m.running {
 			m.finishRun(engine.EndReasonError)
@@ -312,6 +369,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
+		if m.running {
+			// The spinners of the tool and reasoning blocks live inside the
+			// cached conversation, so the blocks that animate need a refresh.
+			m.transcript.touchSpinners(m.preferences.HideThinking)
+			m.refreshTranscript()
+		}
 		return m, cmd
 	default:
 		var cmd tea.Cmd
@@ -330,6 +393,7 @@ func (m *model) applyBackground(isDark bool) {
 	m.hasDarkBG = isDark
 	m.styles = newStyles(isDark)
 	m.input.SetStyles(newInputStyles(m.styles, isDark))
+	m.invalidateTranscript()
 	m.refreshTranscript()
 }
 
@@ -343,6 +407,8 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 			return m.quit()
 		}
 		return nil
+	case "ctrl+p":
+		return m.toggleSettings()
 	}
 
 	switch m.phase {
@@ -354,6 +420,8 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		return m.handlePickerKey(key)
 	case phasePreparing:
 		return nil
+	case phaseSettings:
+		return m.handleSettingsKey(key)
 	default:
 		return m.handleChatKey(key)
 	}
@@ -425,6 +493,66 @@ func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
+// toggleSettings opens the command center, or closes it when it is already
+// open. The session being prepared, a phase of its own, has no state to return
+// to, so the command center ignores it.
+func (m *model) toggleSettings() tea.Cmd {
+	if m.phase == phasePreparing {
+		return nil
+	}
+	if m.phase == phaseSettings {
+		return m.closeSettings()
+	}
+
+	m.returnPhase = m.phase
+	m.phase = phaseSettings
+	m.settingCursor = 0
+	m.input.Blur()
+	return nil
+}
+
+// closeSettings returns to the phase the command center was opened from and
+// renders the conversation again with the current preferences.
+func (m *model) closeSettings() tea.Cmd {
+	m.phase = m.returnPhase
+	if m.phase != phaseChat {
+		return nil
+	}
+
+	m.refreshTranscript()
+	return m.input.Focus()
+}
+
+// handleSettingsKey moves the cursor of the command center or toggles the
+// option under it.
+func (m *model) handleSettingsKey(key tea.KeyPressMsg) tea.Cmd {
+	switch key.String() {
+	case keyEscape:
+		return m.closeSettings()
+	case keyUp, keyVimUp:
+		if m.settingCursor > 0 {
+			m.settingCursor--
+		}
+	case keyDown, keyVimDown:
+		if m.settingCursor < len(preferencesList)-1 {
+			m.settingCursor++
+		}
+	case keyEnter, keySpace:
+		m.togglePreference(m.settingCursor)
+	}
+	return nil
+}
+
+// togglePreference flips one option and drops the rendered conversation, which
+// changes with the preferences.
+func (m *model) togglePreference(index int) {
+	option := preferencesList[index]
+	next := m.preferences
+	option.Set(&next, !option.IsOn(next))
+	m.preferences = next
+	m.invalidateTranscript()
+}
+
 // handleChatKey submits prompts, interrupts runs and scrolls the transcript.
 func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
@@ -439,9 +567,11 @@ func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 		if m.input.LineCount() > 1 {
 			break
 		}
-		return m.scrollTranscript(key)
-	case "pgup", "pgdown":
-		return m.scrollTranscript(key)
+		m.scrollTranscript(key)
+		return nil
+	case keyPgUp, keyPgDown:
+		m.scrollTranscript(key)
+		return nil
 	}
 
 	var cmd tea.Cmd
@@ -450,11 +580,25 @@ func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
-// scrollTranscript moves the conversation viewport with the given key.
-func (m *model) scrollTranscript(key tea.KeyPressMsg) tea.Cmd {
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(key)
-	return cmd
+// scrollTranscript moves the conversation window with the given key.
+func (m *model) scrollTranscript(key tea.KeyPressMsg) {
+	m.conversation.scroll(scrollDelta(key, m.conversation.height))
+}
+
+// scrollDelta returns the rows a scroll key moves, negative towards the newest
+// rows and positive towards the oldest ones.
+func scrollDelta(key tea.KeyPressMsg, page int) int {
+	switch key.String() {
+	case keyUp:
+		return -1
+	case keyDown:
+		return 1
+	case keyPgUp:
+		return -page
+	case keyPgDown:
+		return page
+	}
+	return 0
 }
 
 // prepareNewSession returns the command that creates the session of the
@@ -490,11 +634,12 @@ func (m *model) enterChat(prepared Session) tea.Cmd {
 	m.phase = phaseChat
 	m.cancel = nil
 	m.events = nil
-	m.running = false
+	m.setRunning(false)
 	m.transcript = transcript{}
 	m.transcript.load(prepared.History())
 	m.input.Reset()
 	m.syncLayout()
+	m.invalidateTranscript()
 	m.refreshTranscript()
 	return m.input.Focus()
 }
@@ -508,7 +653,7 @@ func (m *model) submit() tea.Cmd {
 
 	m.input.Reset()
 	m.transcript.addUser(prompt)
-	m.running = true
+	m.setRunning(true)
 	m.syncLayout()
 	m.refreshTranscript()
 
@@ -516,11 +661,25 @@ func (m *model) submit() tea.Cmd {
 	m.cancel = cancel
 	m.events = m.session.Run(ctx, prompt)
 
-	return tea.Batch(m.spinner.Tick, waitForEvent(m.events))
+	return tea.Batch(m.spinner.Tick, streamEvents(m.events))
 }
 
-// handleEvent folds one engine event into the interface state.
-func (m *model) handleEvent(event engine.Event) tea.Cmd {
+// handleEvents folds a burst of engine events into the interface and renders
+// the conversation once for the whole burst.
+func (m *model) handleEvents(events []engine.Event) tea.Cmd {
+	for _, event := range events {
+		m.applyEvent(event)
+	}
+	m.refreshTranscript()
+
+	if m.events == nil {
+		return nil
+	}
+	return streamEvents(m.events)
+}
+
+// applyEvent folds one engine event into the interface state.
+func (m *model) applyEvent(event engine.Event) {
 	m.transcript.apply(event)
 
 	switch event.Type {
@@ -531,17 +690,22 @@ func (m *model) handleEvent(event engine.Event) tea.Cmd {
 		}
 	case engine.EventRunEnd:
 		m.finishRun(event.Reason)
-		m.refreshTranscript()
-		return nil
 	}
+}
 
-	m.refreshTranscript()
-	return waitForEvent(m.events)
+// setRunning records whether a run is in flight, dropping the rendered
+// conversation when the state changes because it renders differently.
+func (m *model) setRunning(running bool) {
+	if m.running == running {
+		return
+	}
+	m.running = running
+	m.invalidateTranscript()
 }
 
 // finishRun marks the run as finished and reports unusual endings.
 func (m *model) finishRun(reason engine.EndReason) {
-	m.running = false
+	m.setRunning(false)
 	m.cancel = nil
 	m.events = nil
 
@@ -585,18 +749,17 @@ func (m *model) resize(width, height int) {
 	m.width = width
 	m.height = height
 	m.input.SetWidth(max(1, width-inputGutterWidth))
-	m.viewport.SetWidth(max(1, width))
-	m.viewport.SetHeight(m.transcriptHeight())
+	m.invalidateTranscript()
 	m.refreshTranscript()
 }
 
 // syncLayout resizes the transcript when the input height changed.
 func (m *model) syncLayout() {
 	height := m.transcriptHeight()
-	if height == m.viewport.Height() {
+	if height == m.conversation.height {
 		return
 	}
-	m.viewport.SetHeight(height)
+	m.conversation.setHeight(height)
 	m.refreshTranscript()
 }
 
@@ -605,27 +768,52 @@ func (m *model) transcriptHeight() int {
 	return max(1, m.height-chatChrome-m.input.Height())
 }
 
-// refreshTranscript renders the conversation into the viewport, keeping the
-// view pinned to its bottom when it already was there.
+// invalidateTranscript drops the rendered conversation, used whenever
+// something it depends on changes: the terminal width, the styles, the
+// preferences or the state of a run.
+func (m *model) invalidateTranscript() {
+	m.conversation.invalidate()
+}
+
+// refreshTranscript renders the entries of the conversation that changed into
+// the window the interface shows.
 func (m *model) refreshTranscript() {
 	if m.phase != phaseChat || m.width <= 0 {
 		return
 	}
 
-	atBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(m.renderTranscript())
-	if atBottom {
-		m.viewport.GotoBottom()
+	m.conversation.setHeight(m.transcriptHeight())
+	from := min(m.transcript.changedFrom(), m.conversation.blockCount())
+	m.conversation.truncate(from)
+	for index := from; index < len(m.transcript.entries); index++ {
+		m.conversation.appendBlock(m.renderEntry(index))
 	}
+	m.transcript.markRendered()
 }
 
-// waitForEvent returns the command that delivers the next event of a run.
-func waitForEvent(events <-chan engine.Event) tea.Cmd {
+// streamEvents returns the command that delivers the next burst of events of a
+// run. Folding the events that are already available into one message keeps a
+// fast stream from costing one update and one frame per event.
+func streamEvents(events <-chan engine.Event) tea.Cmd {
 	return func() tea.Msg {
-		event, ok := <-events
+		first, ok := <-events
 		if !ok {
 			return eventsClosedMsg{}
 		}
-		return engineEventMsg{event: event}
+
+		burst := make(engineEventsMsg, 0, maxEventBurst)
+		burst = append(burst, first)
+		for len(burst) < maxEventBurst {
+			select {
+			case event, ok := <-events:
+				if !ok {
+					return burst
+				}
+				burst = append(burst, event)
+			default:
+				return burst
+			}
+		}
+		return burst
 	}
 }

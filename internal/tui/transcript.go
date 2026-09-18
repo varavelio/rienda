@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -29,11 +30,21 @@ const (
 	entryError
 )
 
-// entry is one block of the conversation transcript. For tool entries the
-// text field carries the output streamed by the invocation.
+// entry is one block of the conversation transcript. For tool entries the text
+// carries the output streamed by the invocation.
+//
+// The text grows with the fragments appended to it and is joined only when the
+// interface renders the entry, which keeps streaming an answer cheap.
 type entry struct {
 	kind entryKind
-	text string
+
+	// fragments holds the pieces of text appended to the entry, joined into
+	// joined up to joinedLen when the interface renders it. size is the total
+	// length of the text, tracked to cap the output of a tool without joining.
+	fragments []string
+	joined    string
+	joinedLen int
+	size      int
 
 	// Tool fields are only meaningful for entryTool entries.
 	toolCallID    string
@@ -44,19 +55,88 @@ type entry struct {
 	truncated     bool
 }
 
-// transcript accumulates the conversation shown to the user.
+// text returns the text of the entry, joining the fragments appended since the
+// last call.
+func (e *entry) text() string {
+	if pending := e.fragments[e.joinedLen:]; len(pending) > 0 {
+		e.joined += strings.Join(pending, "")
+		e.joinedLen = len(e.fragments)
+	}
+	return e.joined
+}
+
+// append extends the text of the entry with one fragment.
+func (e *entry) append(fragment string) {
+	if fragment == "" {
+		return
+	}
+	e.fragments = append(e.fragments, fragment)
+	e.size += len(fragment)
+}
+
+// transcript accumulates the conversation shown to the user. It tracks the
+// first entry whose rendering is stale, so the interface can render only the
+// blocks that changed.
 type transcript struct {
 	entries []entry
+
+	// dirty is the index of the first entry that must be rendered again, or
+	// the number of entries when every one of them is already rendered.
+	dirty int
+}
+
+// changedFrom returns the index of the first entry whose rendering is stale.
+func (t *transcript) changedFrom() int {
+	return min(t.dirty, len(t.entries))
+}
+
+// markRendered records that every entry is rendered.
+func (t *transcript) markRendered() {
+	t.dirty = len(t.entries)
+}
+
+// touch marks the entry and everything after it as stale.
+func (t *transcript) touch(index int) {
+	if index < t.dirty {
+		t.dirty = index
+	}
+}
+
+// touchSpinners marks the entries that render an advancing spinner: a tool
+// that has not finished and, when the reasoning is hidden, the reasoning block
+// still streaming.
+func (t *transcript) touchSpinners(hideThinking bool) {
+	for index := range t.entries {
+		if current := &t.entries[index]; current.kind == entryTool && !current.toolDone {
+			t.touch(index)
+		}
+	}
+	last := len(t.entries) - 1
+	if hideThinking && last >= 0 && t.entries[last].kind == entryThinking {
+		t.touch(last)
+	}
+}
+
+// push appends an entry and marks it, together with the one before it, as
+// stale: an entry renders differently once it is no longer the last one.
+func (t *transcript) push(current entry) {
+	t.entries = append(t.entries, current)
+
+	last := len(t.entries) - 1
+	t.touch(last)
+	if last > 0 {
+		t.touch(last - 1)
+	}
 }
 
 // addUser appends a message written by the user.
 func (t *transcript) addUser(text string) {
-	t.entries = append(t.entries, entry{kind: entryUser, text: text})
+	t.push(entry{kind: entryUser, fragments: []string{text}})
 }
 
 // addNotice appends an informational notice.
 func (t *transcript) addNotice(text string) {
-	t.entries = append(t.entries, entry{kind: entryNotice, text: text})
+	t.push(entry{kind: entryNotice, fragments: []string{text}})
 }
 
 // load seeds the transcript with the messages of a stored conversation,
@@ -90,7 +170,7 @@ func (t *transcript) appendMessage(message llm.Message) {
 
 // addTool appends a tool invocation to the transcript.
 func (t *transcript) addTool(callID, name, arguments string) {
-	t.entries = append(t.entries, entry{
+	t.push(entry{
 		kind:          entryTool,
 		toolCallID:    callID,
 		toolName:      name,
@@ -101,15 +181,18 @@ func (t *transcript) addTool(callID, name, arguments string) {
 // finishTool marks a tool invocation as finished, keeping the result text when
 // nothing streamed before it.
 func (t *transcript) finishTool(callID string, isError bool, result string) {
-	tool := t.tool(callID)
-	if tool == nil {
+	index := t.toolIndex(callID)
+	if index < 0 {
 		return
 	}
+
+	tool := &t.entries[index]
 	tool.toolDone = true
 	tool.toolError = isError
-	if tool.text == "" {
+	if tool.size == 0 {
 		tool.appendOutput(result)
 	}
+	t.touch(index)
 }
 
 // textOf concatenates the text of the given blocks.
@@ -131,13 +214,14 @@ func (t *transcript) apply(event engine.Event) {
 	case engine.EventToolCall:
 		t.addTool(event.ToolCallID, event.ToolName, string(event.Arguments))
 	case engine.EventToolOutput:
-		if tool := t.tool(event.ToolCallID); tool != nil {
-			tool.appendOutput(event.Output)
+		if index := t.toolIndex(event.ToolCallID); index >= 0 {
+			t.entries[index].appendOutput(event.Output)
+			t.touch(index)
 		}
 	case engine.EventToolResult:
 		t.finishTool(event.ToolCallID, event.IsError, event.Text)
 	case engine.EventError:
-		t.entries = append(t.entries, entry{kind: entryError, text: event.Error})
+		t.push(entry{kind: entryError, fragments: []string{event.Error}})
 	}
 }
 
@@ -148,20 +232,22 @@ func (t *transcript) appendText(kind entryKind, text string) {
 		return
 	}
 	if n := len(t.entries); n > 0 && t.entries[n-1].kind == kind {
-		t.entries[n-1].text += text
+		t.entries[n-1].append(text)
+		t.touch(n - 1)
 		return
 	}
-	t.entries = append(t.entries, entry{kind: kind, text: text})
+	t.push(entry{kind: kind, fragments: []string{text}})
 }
 
-// tool returns the tool entry of the call, nil when it is absent.
-func (t *transcript) tool(callID string) *entry {
-	for i := len(t.entries) - 1; i >= 0; i-- {
-		if t.entries[i].kind == entryTool && t.entries[i].toolCallID == callID {
-			return &t.entries[i]
+// toolIndex returns the index of the tool entry of the call, or -1 when it is
+// absent.
+func (t *transcript) toolIndex(callID string) int {
+	for index, current := range slices.Backward(t.entries) {
+		if current.kind == entryTool && current.toolCallID == callID {
+			return index
 		}
 	}
-	return nil
+	return -1
 }
 
 // appendOutput extends the tool output, capping what the interface retains.
@@ -170,17 +256,17 @@ func (e *entry) appendOutput(text string) {
 		return
 	}
 
-	remaining := maxToolOutput - len(e.text)
+	remaining := maxToolOutput - e.size
 	if remaining <= 0 {
 		e.truncated = true
 		return
 	}
 	if len(text) > remaining {
-		e.text += cutRunes(text, remaining)
+		e.append(cutRunes(text, remaining))
 		e.truncated = true
 		return
 	}
-	e.text += text
+	e.append(text)
 }
 
 // cutRunes returns the longest prefix of s that fits in maxBytes without
