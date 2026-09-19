@@ -499,7 +499,10 @@ func (s *openAIChatCompletionsStream) Close() error {
 // means the stream was truncated.
 func openAIChatCompletionsStreamError(err error) error {
 	if errors.Is(err, io.EOF) {
-		return errors.New("openai-chat-completions: stream ended before [DONE]")
+		return fmt.Errorf(
+			"openai-chat-completions: stream ended before [DONE]: %w",
+			io.ErrUnexpectedEOF,
+		)
 	}
 	return fmt.Errorf("openai-chat-completions: read stream: %w", err)
 }

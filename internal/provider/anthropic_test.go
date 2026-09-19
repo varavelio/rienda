@@ -461,8 +461,8 @@ func TestAnthropicStream(t *testing.T) {
 		require.Equal(t, llm.StreamMessageStart, event.Type)
 
 		_, err = stream.Next()
-		require.Error(t, err)
-		require.NotErrorIs(t, err, io.EOF)
+		require.ErrorContains(t, err, "ended before message_stop")
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	})
 
 	t.Run("wraps read failures", func(t *testing.T) {

@@ -55,6 +55,11 @@ type Turn struct {
 	// ChunkDelay delays every streamed fragment, keeping a response in flight
 	// for the tests that act while the binary is working.
 	ChunkDelay time.Duration
+
+	// Status makes the provider answer the turn with that HTTP status and a
+	// JSON error body instead of streaming a response, which lets a test
+	// script a provider failure.
+	Status int
 }
 
 // Call describes one tool invocation requested by a model response.
@@ -181,6 +186,13 @@ func (p *FakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	turn, sequence, scripted := p.record(r, body)
 	if !scripted {
 		http.Error(w, "fake provider: the script ran out of turns", http.StatusInternalServerError)
+		return
+	}
+
+	if turn.Status != 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(turn.Status)
+		_, _ = io.WriteString(w, `{"error":{"message":"`+http.StatusText(turn.Status)+`"}}`)
 		return
 	}
 

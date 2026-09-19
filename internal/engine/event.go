@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/tool"
@@ -26,6 +27,9 @@ const (
 	EventToolResult EventType = "tool_result"
 	// EventMessageEnd closes an assistant message after it is persisted.
 	EventMessageEnd EventType = "message_end"
+	// EventRetry reports that a model call failed with a transient error and
+	// is being retried after a backoff.
+	EventRetry EventType = "retry"
 	// EventRunEnd closes a run. It is the last event of every channel.
 	EventRunEnd EventType = "run_end"
 	// EventError reports the failure that ended a run.
@@ -119,9 +123,15 @@ type Event struct {
 	StopReason llm.StopReason `json:"stopReason,omitempty"`
 	Usage      *Usage         `json:"usage,omitempty"`
 
+	// Attempt and RetryIn describe the retry of an EventRetry: the 1-based
+	// number of the attempt that failed and the wait before the next one.
+	Attempt int           `json:"attempt,omitempty"`
+	RetryIn time.Duration `json:"retryIn,omitempty"`
+
 	// Reason explains why the run ended in EventRunEnd.
 	Reason EndReason `json:"reason,omitempty"`
 
-	// Error carries the failure description of an EventError.
+	// Error carries the failure description of an EventRetry and of an
+	// EventError.
 	Error string `json:"error,omitempty"`
 }

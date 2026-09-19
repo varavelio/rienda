@@ -508,7 +508,10 @@ func (s *openAIResponsesStream) Close() error {
 // terminal event means the stream was truncated.
 func openAIResponsesStreamError(err error) error {
 	if errors.Is(err, io.EOF) {
-		return errors.New("openai-responses: stream ended before completion")
+		return fmt.Errorf(
+			"openai-responses: stream ended before completion: %w",
+			io.ErrUnexpectedEOF,
+		)
 	}
 	return fmt.Errorf("openai-responses: read stream: %w", err)
 }

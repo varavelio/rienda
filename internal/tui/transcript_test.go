@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -118,6 +119,21 @@ func TestTranscript(t *testing.T) {
 		require.Equal(t, entryError, conversation.entries[0].kind)
 		require.Equal(t, "boom", conversation.entries[0].text())
 		require.Equal(t, entryNotice, conversation.entries[1].kind)
+	})
+
+	t.Run("records retried model calls as notices", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{
+			Type:    engine.EventRetry,
+			Attempt: 1,
+			RetryIn: 250 * time.Millisecond,
+			Error:   "engine: stream response: overloaded",
+		})
+
+		require.Len(t, conversation.entries, 1)
+		require.Equal(t, entryNotice, conversation.entries[0].kind)
+		require.Contains(t, conversation.entries[0].text(), "retrying in 250ms")
+		require.Contains(t, conversation.entries[0].text(), "overloaded")
 	})
 
 	t.Run("ignores output of unknown calls", func(t *testing.T) {

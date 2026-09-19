@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -122,6 +123,26 @@ func TestRender(t *testing.T) {
 			"tool: ghost\ntool failed: unknown tool \"ghost\"\n",
 			stderr.String(),
 		)
+	})
+
+	t.Run("writes retry notices to stderr", func(t *testing.T) {
+		stdout, stderr := &strings.Builder{}, &strings.Builder{}
+
+		err := render(eventsOf(
+			engine.Event{
+				Type:    engine.EventRetry,
+				Attempt: 1,
+				RetryIn: 250 * time.Millisecond,
+				Error:   "engine: stream response: overloaded",
+			},
+			engine.Event{Type: engine.EventTextDelta, Text: "hi"},
+			engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn},
+		), stdout, stderr)
+
+		require.NoError(t, err)
+		require.Equal(t, "hi\n", stdout.String())
+		require.Contains(t, stderr.String(), "retrying in 250ms")
+		require.Contains(t, stderr.String(), "overloaded")
 	})
 
 	t.Run("reports run failures", func(t *testing.T) {

@@ -20,6 +20,13 @@
 //     are not a JSON object are not executed and receive an error result that
 //     explains why.
 //
+// Streaming a model response is retried with exponential backoff while the
+// failure is transient and none of the response reached the caller, so a
+// dropped connection or an overloaded provider stays invisible. From the first
+// streamed delta on the response is never restarted, because repeating it
+// would repeat the output the caller already saw; a failure past that point
+// ends the run.
+//
 // Consumers follow a run through the channel returned by Run, which always
 // closes after a run_end event.
 package engine

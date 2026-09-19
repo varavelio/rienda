@@ -811,7 +811,7 @@ func (m *model) trackActivity(event engine.Event) {
 		m.setActivity(activityThinking, "")
 	case engine.EventToolCall, engine.EventToolOutput:
 		m.setActivity(activityTool, event.ToolName)
-	case engine.EventToolResult:
+	case engine.EventToolResult, engine.EventRetry:
 		m.setActivity(activityWorking, "")
 	}
 }

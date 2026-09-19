@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/varavelio/rienda/internal/llm"
+	"github.com/varavelio/rienda/internal/retry"
 )
 
 // turn is a completed model response ready to persist.
@@ -186,35 +187,67 @@ func normalizeArguments(raw string) (json.RawMessage, error) {
 	return json.RawMessage(trimmed), nil
 }
 
-// generate streams one model response, forwarding its deltas as events, and
-// returns the completed turn.
+// generate streams one model response and returns the completed turn.
+//
+// A transient failure is retried with exponential backoff (see
+// internal/retry), but only while none of the response reached the caller:
+// repeating a call that already delivered output would repeat what the user
+// saw, so from the first delta on the response is never restarted.
 func (e *Engine) generate(ctx context.Context, events chan<- Event) (turn, error) {
+	//nolint:wrapcheck // the failure already names the call it aborted.
+	return retry.Do(ctx, func(ctx context.Context) (turn, error) {
+		response, delivered, err := e.streamTurn(ctx, events)
+		if err != nil && delivered {
+			return turn{}, retry.Permanent(err)
+		}
+		return response, err
+	}, func(attempt retry.Attempt) {
+		emit(events, Event{
+			Type:    EventRetry,
+			Attempt: attempt.Number,
+			RetryIn: attempt.Delay,
+			Error:   attempt.Err.Error(),
+		})
+	})
+}
+
+// streamTurn streams one model response, forwarding its deltas as events, and
+// returns the completed turn together with whether any delta reached the
+// caller.
+func (e *Engine) streamTurn(
+	ctx context.Context,
+	events chan<- Event,
+) (turn, bool, error) {
 	stream, err := e.client.Stream(ctx, e.request())
 	if err != nil {
-		return turn{}, fmt.Errorf("engine: stream response: %w", err)
+		return turn{}, false, fmt.Errorf("engine: stream response: %w", err)
 	}
 	defer func() { _ = stream.Close() }()
 
 	accumulator := newAccumulator()
+	delivered := false
 	for {
 		event, err := stream.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return turn{}, fmt.Errorf("engine: read response stream: %w", err)
+			return turn{}, delivered, fmt.Errorf("engine: read response stream: %w", err)
 		}
 
 		switch event.Type {
 		case llm.StreamTextDelta:
 			emit(events, Event{Type: EventTextDelta, Text: event.Text})
+			delivered = true
 		case llm.StreamThinkingDelta:
 			if event.Thinking != "" {
 				emit(events, Event{Type: EventThinkingDelta, Text: event.Thinking})
+				delivered = true
 			}
 		}
 		accumulator.observe(event)
 	}
 
-	return accumulator.turn(e.model.ID)
+	response, err := accumulator.turn(e.model.ID)
+	return response, delivered, err
 }

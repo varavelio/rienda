@@ -307,6 +307,7 @@ func TestOpenAIChatStream(t *testing.T) {
 
 		_, err = stream.Next()
 		require.ErrorContains(t, err, "ended before [DONE]")
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 
 		require.NoError(t, stream.Close())
 	})

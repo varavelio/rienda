@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/varavelio/rienda/internal/engine"
@@ -213,9 +215,21 @@ func (t *transcript) apply(event engine.Event) {
 		}
 	case engine.EventToolResult:
 		t.finishTool(event.ToolCallID, event.IsError, event.Text)
+	case engine.EventRetry:
+		t.addNotice(retryNotice(event))
 	case engine.EventError:
 		t.push(entry{kind: entryError, fragments: []string{event.Error}})
 	}
+}
+
+// retryNotice describes a model call that failed transiently and is being
+// retried, so the pause before the next attempt never reads as a hang.
+func retryNotice(event engine.Event) string {
+	return fmt.Sprintf(
+		"transient error, retrying in %s: %s",
+		event.RetryIn.Round(time.Millisecond),
+		event.Error,
+	)
 }
 
 // appendText extends the last entry of the given kind, starting a new one when

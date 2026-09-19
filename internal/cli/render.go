@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/varavelio/rienda/internal/engine"
 )
 
 // render consumes the events of a run, writing the assistant text to stdout
-// and the tool activity to stderr. It returns an error when the run does not
-// end by finishing its turn.
+// and the tool activity and retry notices to stderr. It returns an error when
+// the run does not end by finishing its turn.
 func render(events <-chan engine.Event, stdout, stderr io.Writer) error {
 	streamed := map[string]bool{}
 	pending := false
@@ -48,6 +49,10 @@ func render(events <-chan engine.Event, stdout, stderr io.Writer) error {
 			}
 		case engine.EventMessageEnd:
 			if err := flushLine(stdout, &pending); err != nil {
+				return err
+			}
+		case engine.EventRetry:
+			if err := renderRetry(stderr, event); err != nil {
 				return err
 			}
 		case engine.EventError:
@@ -93,6 +98,20 @@ func renderToolResult(w io.Writer, event engine.Event, streamed bool) error {
 		if _, err := fmt.Fprintln(w, "tool failed"); err != nil {
 			return fmt.Errorf("render: write tool result: %w", err)
 		}
+	}
+	return nil
+}
+
+// renderRetry reports a model call that failed with a transient error and is
+// being retried before any of its output reached standard output.
+func renderRetry(w io.Writer, event engine.Event) error {
+	if _, err := fmt.Fprintf(
+		w,
+		"transient error, retrying in %s: %s\n",
+		event.RetryIn.Round(time.Millisecond),
+		event.Error,
+	); err != nil {
+		return fmt.Errorf("render: write retry notice: %w", err)
 	}
 	return nil
 }

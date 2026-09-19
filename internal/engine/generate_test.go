@@ -3,6 +3,8 @@ package engine
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -166,5 +168,70 @@ func TestGenerate(t *testing.T) {
 		_, err := engine.generate(t.Context(), events)
 
 		require.ErrorContains(t, err, "connect boom")
+	})
+
+	t.Run("retries a transient failure before any output", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{
+			{openErr: &llm.Error{
+				Provider: "test",
+				Kind:     llm.ErrorKindOverloaded,
+				Message:  "overloaded",
+			}},
+			{events: []llm.StreamEvent{
+				{Type: llm.StreamTextDelta, Text: "recovered"},
+				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+			}},
+		}}
+		engine, _ := newTestEngine(t, Config{Client: client})
+
+		response, events := generateTurn(t, engine)
+
+		require.Equal(t, []llm.Block{{Type: llm.BlockText, Text: "recovered"}}, response.blocks)
+		require.Len(t, client.requests, 2)
+		require.Equal(t, []EventType{EventRetry, EventTextDelta}, eventTypes(events))
+		require.Equal(t, 1, events[0].Attempt)
+		require.Positive(t, events[0].RetryIn)
+		require.Contains(t, events[0].Error, "overloaded")
+	})
+
+	t.Run("retries a stream truncated before its first delta", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{
+			{nextErr: fmt.Errorf(
+				"openai-chat-completions: stream ended before [DONE]: %w",
+				io.ErrUnexpectedEOF,
+			)},
+			{events: []llm.StreamEvent{
+				{Type: llm.StreamTextDelta, Text: "recovered"},
+				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+			}},
+		}}
+		engine, _ := newTestEngine(t, Config{Client: client})
+
+		response, events := generateTurn(t, engine)
+
+		require.Equal(t, "recovered", response.blocks[0].Text)
+		require.Len(t, client.requests, 2)
+		require.Equal(t, []EventType{EventRetry, EventTextDelta}, eventTypes(events))
+	})
+
+	t.Run("does not restart a response that reached the caller", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{{
+			events: []llm.StreamEvent{{Type: llm.StreamTextDelta, Text: "partial"}},
+			nextErr: &llm.Error{
+				Provider: "test",
+				Kind:     llm.ErrorKindServer,
+				Message:  "dropped",
+			},
+		}}}
+		engine, _ := newTestEngine(t, Config{Client: client})
+
+		events := make(chan Event, 8)
+		_, err := engine.generate(t.Context(), events)
+		close(events)
+		collected := collect(events)
+
+		require.ErrorContains(t, err, "dropped")
+		require.Len(t, client.requests, 1)
+		require.Equal(t, []EventType{EventTextDelta}, eventTypes(collected))
 	})
 }

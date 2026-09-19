@@ -464,7 +464,10 @@ func (s *anthropicStream) Close() error {
 // means the stream was truncated.
 func anthropicStreamError(err error) error {
 	if errors.Is(err, io.EOF) {
-		return errors.New("anthropic: stream ended before message_stop")
+		return fmt.Errorf(
+			"anthropic: stream ended before message_stop: %w",
+			io.ErrUnexpectedEOF,
+		)
 	}
 	return fmt.Errorf("anthropic: read stream: %w", err)
 }
