@@ -27,9 +27,10 @@ const brandRows = 3
 const inputBoxRows = 4
 
 // activityRows is the number of rows the status block occupies between the
-// transcript and the input box: a blank row above and below the status line,
-// so the run status breathes instead of touching the content or the prompt.
-const activityRows = 3
+// transcript and the input box: two blank rows above the status line and one
+// below, so the run status breathes instead of touching the content or the
+// prompt.
+const activityRows = 4
 
 // chatFooterRows is the number of rows the chat footer occupies under the
 // input box.

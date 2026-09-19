@@ -26,8 +26,32 @@ func (m *model) View() tea.View {
 	return view
 }
 
-// render builds the interface of the phase in progress.
+// render builds the interface of the phase in progress, padded to the terminal
+// width.
 func (m *model) render() string {
+	text := m.renderPhase()
+	if m.width <= 0 {
+		return text
+	}
+	return padLines(text, m.width)
+}
+
+// padLines pads every line to width cells. A line that changed but kept its
+// width lets the renderer overwrite it cell by cell without leaving the tail of
+// a longer line behind, which shows as stale characters glued to the new
+// content.
+func padLines(text string, width int) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if gap := width - ansi.StringWidth(line); gap > 0 {
+			lines[i] = line + strings.Repeat(" ", gap)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderPhase builds the interface of the phase in progress.
+func (m *model) renderPhase() string {
 	switch {
 	case m.fatal != nil:
 		return m.styles.errorText.Render("error: "+m.fatal.Error()) + "\n"
@@ -230,9 +254,10 @@ func (m *model) viewChat() string {
 }
 
 // activityBlock renders the status of the run in flight between the
-// conversation and the prompt, with a blank row above and below so the status
-// line never touches the content or the input box. A very short terminal keeps
-// only the status line while a run is in flight, and nothing while idle.
+// conversation and the prompt, with two blank rows above and one below, so the
+// status line breathes without touching the content or the input box. A very
+// short terminal keeps only the status line while a run is in flight, and
+// nothing while idle.
 func (m *model) activityBlock() string {
 	if m.activityHeight() == 0 {
 		return ""
@@ -240,7 +265,7 @@ func (m *model) activityBlock() string {
 	if m.activityHeight() == 1 {
 		return m.activityLine()
 	}
-	return "\n" + m.activityLine() + "\n"
+	return "\n\n" + m.activityLine() + "\n"
 }
 
 // activityLine renders the single status row that reports the run in flight:
