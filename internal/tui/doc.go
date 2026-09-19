@@ -22,11 +22,13 @@
 //
 // A single status line closes the conversation and reports what the run is
 // doing at the moment, from the model writing an answer to a tool running,
-// together with the key that interrupts it. It is the only spinner: the
-// reasoning and tool blocks are static, and the footer under the input only
-// shows the token usage and the keys the interface listens to. The status line
-// occupies no room once the run is over, so the conversation grows into its
-// rows instead of leaving them blank.
+// together with the key that interrupts it. Its spinner is the Varavel fluid
+// mark, the same mark that opens the identity line of every phase, kept static
+// there, which gives the interface a motif of its own. It is the only
+// animation: the reasoning and tool blocks are static, and the footer under the
+// input only shows the token usage and the keys the interface listens to. The
+// status line occupies no room once the run is over, so the conversation grows
+// into its rows instead of leaving them blank.
 //
 // The command center (ctrl+p) holds the options of the harness, which start
 // hiding the tool output and the reasoning so that a working session stays

@@ -13,7 +13,7 @@ import (
 )
 
 // brand is the name of the interface, shown at the top of every phase.
-const brand = "rienda"
+const brand = "varavel rienda"
 
 // maxToolLabel caps the characters of a tool invocation the interface shows,
 // so a call carrying a huge argument cannot flood the conversation.
@@ -46,6 +46,14 @@ func (m *model) render() string {
 	}
 }
 
+// brandIdentity renders the logo and the name that open the identity line of
+// every phase. The logo stays static and shares the faint color of the header
+// text, so it reads as part of the identity rather than drawing the eye; the
+// status line carries the only animation of the interface.
+func (m *model) brandIdentity() string {
+	return m.styles.header.Render(varavelLogo+" · ") + m.styles.title.Render(brand)
+}
+
 // headerRows returns the rows that open a phase: the identity line, the
 // separator under it and the padding below the separator.
 func (m *model) headerRows(identity string) []string {
@@ -60,7 +68,7 @@ func (m *model) footerRows(hints string) []string {
 
 // viewMenu renders the choice between a new session and a previous one.
 func (m *model) viewMenu() string {
-	rows := m.headerRows(m.styles.title.Render(brand))
+	rows := m.headerRows(m.brandIdentity())
 	rows = append(rows,
 		"What do you want to do?",
 		"",
@@ -73,7 +81,7 @@ func (m *model) viewMenu() string {
 
 // viewSessions renders the list of previous sessions of the workspace.
 func (m *model) viewSessions() string {
-	rows := m.headerRows(m.styles.title.Render(brand))
+	rows := m.headerRows(m.brandIdentity())
 	rows = append(rows, "Continue a previous session", "")
 
 	first, last := visibleWindow(m.chosen, len(m.sessions), m.listRows())
@@ -146,7 +154,7 @@ func formatAge(moment time.Time) string {
 
 // viewPicker renders the list of agents to choose from.
 func (m *model) viewPicker() string {
-	rows := m.headerRows(m.styles.title.Render(brand))
+	rows := m.headerRows(m.brandIdentity())
 	rows = append(rows, "Select an agent", "")
 
 	first, last := visibleWindow(m.cursor, len(m.agents), m.listRows())
@@ -184,7 +192,7 @@ func (m *model) viewSettings() string {
 
 // settingsIdentity renders the identity of the command center.
 func (m *model) settingsIdentity() string {
-	return m.styles.title.Render(brand) + m.styles.header.Render(" · settings")
+	return m.brandIdentity() + m.styles.header.Render(" · settings")
 }
 
 // preferenceLine renders one option of the command center with its state.
@@ -200,8 +208,9 @@ func (m *model) preferenceLine(index int) string {
 
 // viewPreparing renders the session preparation screen.
 func (m *model) viewPreparing() string {
-	rows := m.headerRows(m.styles.title.Render(brand))
-	rows = append(rows, m.spinner.View()+" preparing the session of "+m.agents[m.selected].ID, "")
+	rows := m.headerRows(m.brandIdentity())
+	mark := m.styles.dim.Render(m.spinner.View())
+	rows = append(rows, mark+" preparing the session of "+m.agents[m.selected].ID, "")
 	return strings.Join(rows, "\n")
 }
 
@@ -242,11 +251,12 @@ func (m *model) activityLine() string {
 		return ""
 	}
 
-	hint := m.styles.footer.Render("esc interrupts")
+	hint := m.styles.footer.Render("esc to interrupt")
 	if m.confirmInterrupt {
 		hint = m.styles.notice.Render("esc again to interrupt")
 	}
-	line := m.spinner.View() + m.styles.activity.Render(m.activityLabel()) +
+	line := m.styles.dim.Render(m.spinner.View()) + " " +
+		m.styles.activity.Render(m.activityLabel()) +
 		m.styles.footer.Render(" · ") + hint
 	return m.clip(line)
 }
@@ -271,7 +281,7 @@ func (m *model) chatIdentity() string {
 	if info.ID != "" {
 		parts = append(parts, info.ID)
 	}
-	return m.styles.title.Render(brand) + m.styles.header.Render(" · "+strings.Join(parts, " · "))
+	return m.brandIdentity() + m.styles.header.Render(" · "+strings.Join(parts, " · "))
 }
 
 // viewInput renders the prompt input inside a box.

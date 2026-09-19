@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -307,7 +306,7 @@ type model struct {
 	transcript   transcript
 	conversation conversation
 	input        textarea.Model
-	spinner      spinner.Model
+	spinner      spinner
 
 	width     int
 	height    int
@@ -348,7 +347,6 @@ func newModel(cfg modelConfig) *model {
 		phase:         startPhase(cfg),
 		preferences:   defaultPreferences(),
 		input:         input,
-		spinner:       spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(styles.dim)),
 		conversation:  newConversation(),
 		hasDarkBG:     defaultDarkBackground,
 		newSession:    cfg.newSession,
@@ -432,13 +430,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshTranscript()
 		}
 		return m, nil
-	case spinner.TickMsg:
+	case spinnerStartMsg:
 		if !m.busy() {
 			return m, nil
 		}
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
+		return m, m.spinner.command()
+	case spinnerTickMsg:
+		if !m.busy() {
+			return m, nil
+		}
+		m.spinner.advance()
+		return m, m.spinner.command()
 	default:
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
@@ -681,14 +683,17 @@ func (m *model) scrollTranscriptBlock(key tea.KeyPressMsg) {
 func (m *model) prepareNewSession() tea.Cmd {
 	prepare := m.newSession
 	agentID := m.agents[m.selected].ID
-	return sessionCommand(func() (Session, error) { return prepare(agentID) })
+	return tea.Batch(m.spin(), sessionCommand(func() (Session, error) { return prepare(agentID) }))
 }
 
 // prepareStoredSession returns the command that opens the selected session.
 func (m *model) prepareStoredSession() tea.Cmd {
 	prepare := m.resumeSession
 	sessionID := m.sessions[m.chosen].ID
-	return sessionCommand(func() (Session, error) { return prepare(sessionID) })
+	return tea.Batch(
+		m.spin(),
+		sessionCommand(func() (Session, error) { return prepare(sessionID) }),
+	)
 }
 
 // sessionCommand returns the command that prepares a session outside the
@@ -738,7 +743,7 @@ func (m *model) submit() tea.Cmd {
 	m.cancel = cancel
 	m.events = m.session.Run(ctx, prompt)
 
-	return tea.Batch(m.spinner.Tick, streamEvents(m.events))
+	return tea.Batch(m.spin(), streamEvents(m.events))
 }
 
 // handleEvents folds a burst of engine events into the interface and renders
@@ -792,6 +797,15 @@ func (m *model) trackActivity(event engine.Event) {
 func (m *model) setActivity(next activity, tool string) {
 	m.activity = next
 	m.activityTool = tool
+}
+
+// spin resets the status spinner and returns the command that starts its
+// animation. It is issued whenever a busy phase begins, either preparing a
+// session or running one. The command is delivered at once; the spinner waits
+// for the hold of its first frame when it arms it.
+func (m *model) spin() tea.Cmd {
+	m.spinner.reset()
+	return func() tea.Msg { return spinnerStartMsg{} }
 }
 
 // setRunning records whether a run is in flight, dropping the rendered

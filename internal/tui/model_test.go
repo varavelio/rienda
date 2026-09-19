@@ -96,6 +96,44 @@ func update(t *testing.T, m *model, msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+// run executes a command and feeds every message it produces into the model the
+// way the Bubble Tea runtime does, following the commands a batch carries. It
+// returns the last command the model issued, so tests can assert side effects
+// such as quitting.
+func run(t *testing.T, m *model, cmd tea.Cmd) tea.Cmd {
+	t.Helper()
+
+	return deliver(t, m, cmd)
+}
+
+// deliver executes one command, if any, and feeds its message into the model.
+func deliver(t *testing.T, m *model, cmd tea.Cmd) tea.Cmd {
+	t.Helper()
+
+	if cmd == nil {
+		return nil
+	}
+	return feed(t, m, cmd())
+}
+
+// feed gives a message to the model and follows the commands of a batch.
+func feed(t *testing.T, m *model, msg tea.Msg) tea.Cmd {
+	t.Helper()
+
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var last tea.Cmd
+		for _, sub := range batch {
+			if out := deliver(t, m, sub); out != nil {
+				last = out
+			}
+		}
+		return last
+	}
+
+	_, out := m.Update(msg)
+	return out
+}
+
 // sendEvent delivers one engine event to the model, as the run stream does.
 func sendEvent(t testing.TB, m *model, event engine.Event) tea.Cmd {
 	t.Helper()
@@ -153,7 +191,7 @@ func chatModel(t *testing.T) (*model, *fakeSession) {
 
 	cmd := m.Init()
 	require.NotNil(t, cmd)
-	update(t, m, cmd())
+	run(t, m, cmd)
 	require.Equal(t, phaseChat, m.phase)
 	update(t, m, windowMsg(80, 24))
 	return m, scripted
@@ -176,7 +214,7 @@ func TestModel(t *testing.T) {
 
 		cmd := m.Init()
 		require.NotNil(t, cmd)
-		update(t, m, cmd())
+		run(t, m, cmd)
 
 		require.Equal(t, phaseChat, m.phase)
 		require.Equal(t, "session-1", m.session.Info().ID)
@@ -202,7 +240,7 @@ func TestModel(t *testing.T) {
 		require.Equal(t, phasePreparing, m.phase)
 		require.NotNil(t, cmd)
 
-		update(t, m, cmd())
+		run(t, m, cmd)
 
 		require.Equal(t, "writer", created)
 		require.Equal(t, phaseChat, m.phase)
@@ -234,7 +272,7 @@ func TestModel(t *testing.T) {
 
 		cmd := m.Init()
 		require.NotNil(t, cmd)
-		quit := update(t, m, cmd())
+		quit := run(t, m, cmd)
 
 		require.ErrorContains(t, m.fatal, "boom")
 		require.NotNil(t, quit)
@@ -349,7 +387,7 @@ func TestModel(t *testing.T) {
 		update(t, m, interruptTimeoutMsg{seq: m.interruptSeq})
 
 		require.False(t, m.confirmInterrupt)
-		require.Contains(t, plain(m.render()), "esc interrupts")
+		require.Contains(t, plain(m.render()), "esc to interrupt")
 		require.NotContains(t, plain(m.render()), "esc again")
 		select {
 		case <-scripted.canceled:
@@ -658,13 +696,13 @@ func TestModel(t *testing.T) {
 
 	t.Run("ticks the spinner only while busy", func(t *testing.T) {
 		m, _ := chatModel(t)
-		require.Nil(t, update(t, m, m.spinner.Tick()))
+		require.Nil(t, update(t, m, spinnerTickMsg{}))
 
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
 
 		require.True(t, m.busy())
-		require.NotNil(t, update(t, m, m.spinner.Tick()))
+		require.NotNil(t, update(t, m, spinnerTickMsg{}))
 	})
 
 	t.Run("animates the status spinner while a run is in flight", func(t *testing.T) {
@@ -674,7 +712,7 @@ func TestModel(t *testing.T) {
 		before := plain(m.render())
 		require.Contains(t, before, "working")
 
-		update(t, m, m.spinner.Tick())
+		update(t, m, spinnerTickMsg{})
 
 		require.NotEqual(t, before, plain(m.render()), "the status spinner advances")
 	})
@@ -733,7 +771,7 @@ func TestModel(t *testing.T) {
 		cmd := update(t, m, pressEnter)
 		require.Equal(t, phasePreparing, m.phase)
 		require.NotNil(t, cmd)
-		update(t, m, cmd())
+		run(t, m, cmd)
 
 		require.Equal(t, phaseChat, m.phase)
 		view := plain(m.render())
@@ -802,7 +840,7 @@ func TestModel(t *testing.T) {
 
 		cmd := update(t, m, pressEnter)
 		require.Equal(t, phasePreparing, m.phase)
-		update(t, m, cmd())
+		run(t, m, cmd)
 
 		require.Equal(t, "coder", created)
 		require.Equal(t, phaseChat, m.phase)
@@ -816,6 +854,20 @@ func TestActivity(t *testing.T) {
 		m, _ := chatModel(t)
 
 		require.Empty(t, plain(m.activityLine()))
+	})
+
+	t.Run("animates the fluid mark", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+
+		first := plain(m.activityLine())
+		require.Contains(t, first, fluidFrames[0].mark, "the run opens on the first frame")
+
+		update(t, m, spinnerTickMsg{})
+
+		require.NotEqual(t, first, plain(m.activityLine()), "the mark advances")
+		require.Contains(t, plain(m.activityLine()), fluidFrames[1].mark)
 	})
 
 	t.Run("reports what the run is doing", func(t *testing.T) {
@@ -850,7 +902,7 @@ func TestActivity(t *testing.T) {
 		m, _ := chatModel(t)
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
-		require.Contains(t, plain(m.activityLine()), "esc interrupts")
+		require.Contains(t, plain(m.activityLine()), "esc to interrupt")
 
 		update(t, m, pressEscape)
 		require.Contains(t, plain(m.activityLine()), "esc again to interrupt")

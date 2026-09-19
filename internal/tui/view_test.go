@@ -407,6 +407,20 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "esc close")
 	})
 
+	t.Run("opens every identity line with the brand logo", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 24))
+
+		require.Contains(t, plain(m.render()), varavelLogo+" \u00b7 varavel rienda")
+
+		menu := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+		require.Contains(t, plain(menu.render()), varavelLogo+" \u00b7 varavel rienda")
+	})
+
 	t.Run("renders the alternate screen", func(t *testing.T) {
 		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, -1, nil)
 
@@ -594,7 +608,7 @@ func TestChatLayout(t *testing.T) {
 		update(t, m, windowMsg(60, 20))
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
-		update(t, m, m.spinner.Tick())
+		update(t, m, spinnerTickMsg{})
 
 		lines := strings.Split(plain(m.render()), "\n")
 		status := -1
