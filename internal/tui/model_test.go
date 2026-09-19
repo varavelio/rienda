@@ -246,7 +246,7 @@ func TestModel(t *testing.T) {
 		require.Equal(t, phaseChat, m.phase)
 	})
 
-	t.Run("keeps the selection in range", func(t *testing.T) {
+	t.Run("cycles through the agents", func(t *testing.T) {
 		m := newTestModel(
 			t,
 			[]agent.Agent{{ID: "coder"}, {ID: "writer"}},
@@ -255,10 +255,10 @@ func TestModel(t *testing.T) {
 		)
 
 		update(t, m, pressUp)
-		require.Equal(t, 0, m.cursor)
+		require.Equal(t, 1, m.cursor, "stepping up from the first agent wraps to the last")
+
 		update(t, m, pressDown)
-		update(t, m, pressDown)
-		require.Equal(t, 1, m.cursor)
+		require.Equal(t, 0, m.cursor, "stepping down from the last agent wraps to the first")
 	})
 
 	t.Run("reports preparation failures", func(t *testing.T) {
@@ -598,9 +598,18 @@ func TestModel(t *testing.T) {
 		update(t, m, pressSpace)
 		require.False(t, m.preferences.RenderMarkdown)
 
+		require.Equal(t, 2, m.settingCursor)
+
 		update(t, m, pressDown)
-		update(t, m, pressDown)
-		require.Equal(t, 2, m.settingCursor, "the cursor stays on the last option")
+		require.Equal(
+			t,
+			0,
+			m.settingCursor,
+			"stepping down from the last option wraps to the first",
+		)
+
+		update(t, m, pressUp)
+		require.Equal(t, 2, m.settingCursor, "stepping up from the first option wraps to the last")
 	})
 
 	t.Run("expands the tool output from the command center", func(t *testing.T) {
@@ -817,7 +826,7 @@ func TestModel(t *testing.T) {
 		require.Equal(t, phaseMenu, m.phase)
 	})
 
-	t.Run("keeps the session selection in range", func(t *testing.T) {
+	t.Run("cycles through the sessions", func(t *testing.T) {
 		m := newTestModelWith(t, modelConfig{
 			agents:   []agent.Agent{{ID: "coder"}},
 			selected: 0,
@@ -829,10 +838,10 @@ func TestModel(t *testing.T) {
 		m.phase = phaseSessions
 
 		update(t, m, pressUp)
-		require.Equal(t, 0, m.chosen)
+		require.Equal(t, 1, m.chosen, "stepping up from the first session wraps to the last")
+
 		update(t, m, pressDown)
-		update(t, m, pressDown)
-		require.Equal(t, 1, m.chosen)
+		require.Equal(t, 0, m.chosen, "stepping down from the last session wraps to the first")
 	})
 
 	t.Run("starts a new session from the menu", func(t *testing.T) {
@@ -846,6 +855,21 @@ func TestModel(t *testing.T) {
 		require.Nil(t, update(t, m, pressEnter))
 
 		require.Equal(t, phasePicker, m.phase)
+	})
+
+	t.Run("cycles through the menu entries", func(t *testing.T) {
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+		require.Equal(t, menuNew, m.menu)
+
+		update(t, m, pressUp)
+		require.Equal(t, menuContinue, m.menu, "stepping up from the first entry wraps to the last")
+
+		update(t, m, pressDown)
+		require.Equal(t, menuNew, m.menu, "stepping down from the last entry wraps to the first")
 	})
 
 	t.Run("prepares the only agent from the menu", func(t *testing.T) {
@@ -1020,6 +1044,39 @@ func TestStartPhase(t *testing.T) {
 			agents:   []agent.Agent{{ID: "coder"}, {ID: "writer"}},
 			selected: -1,
 		}))
+	})
+}
+
+// TestMoveCursor verifies the cyclic movement shared by every list of the
+// interface.
+func TestMoveCursor(t *testing.T) {
+	t.Run("moves within the list without wrapping", func(t *testing.T) {
+		require.Equal(t, 2, moveCursor(1, 1, 4))
+		require.Equal(t, 0, moveCursor(1, -1, 4))
+	})
+
+	t.Run("wraps around at both ends", func(t *testing.T) {
+		require.Equal(t, 0, moveCursor(3, 1, 4), "the last item steps down to the first")
+		require.Equal(t, 3, moveCursor(0, -1, 4), "the first item steps up to the last")
+	})
+
+	t.Run("handles single item lists", func(t *testing.T) {
+		require.Equal(t, 0, moveCursor(0, 1, 1))
+		require.Equal(t, 0, moveCursor(0, -1, 1))
+	})
+
+	t.Run("keeps the cursor on the first index of empty lists", func(t *testing.T) {
+		require.Equal(t, 0, moveCursor(0, 1, 0))
+		require.Equal(t, 0, moveCursor(0, -1, 0))
+	})
+
+	t.Run("ignores movements that cover the whole list", func(t *testing.T) {
+		require.Equal(t, 1, moveCursor(1, 5, 5))
+		require.Equal(t, 3, moveCursor(3, -5, 5))
+	})
+
+	t.Run("returns the first index when the cursor is stale", func(t *testing.T) {
+		require.Equal(t, 1, moveCursor(7, 0, 3))
 	})
 }
 

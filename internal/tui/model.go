@@ -220,6 +220,9 @@ const (
 	menuNew = iota
 	// menuContinue continues a previous session.
 	menuContinue
+
+	// menuCount is the number of entries of the start menu.
+	menuCount = menuContinue + 1
 )
 
 // sessionReadyMsg carries a prepared session into the interface.
@@ -512,13 +515,26 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	}
 }
 
+// moveCursor returns the index that results from moving a cursor delta
+// positions through a list of length items. The movement wraps around at both
+// ends, so stepping down from the last item lands on the first one and
+// stepping up from the first lands on the last, letting the user cycle through
+// the list instead of getting stuck at its ends. An empty list keeps the
+// cursor at its first index.
+func moveCursor(cursor, delta, length int) int {
+	if length <= 0 {
+		return 0
+	}
+	return ((cursor+delta)%length + length) % length
+}
+
 // handleMenuKey moves the menu selection or starts the chosen action.
 func (m *model) handleMenuKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
 	case keyUp, keyVimUp:
-		m.menu = menuNew
+		m.menu = moveCursor(m.menu, -1, menuCount)
 	case keyDown, keyVimDown:
-		m.menu = menuContinue
+		m.menu = moveCursor(m.menu, 1, menuCount)
 	case keyEnter:
 		if m.menu == menuNew {
 			return m.startNewSession()
@@ -545,13 +561,9 @@ func (m *model) handleSessionsKey(key tea.KeyPressMsg) tea.Cmd {
 	case keyEscape:
 		m.phase = phaseMenu
 	case keyUp, keyVimUp:
-		if m.chosen > 0 {
-			m.chosen--
-		}
+		m.chosen = moveCursor(m.chosen, -1, len(m.sessions))
 	case keyDown, keyVimDown:
-		if m.chosen < len(m.sessions)-1 {
-			m.chosen++
-		}
+		m.chosen = moveCursor(m.chosen, 1, len(m.sessions))
 	case keyEnter:
 		m.phase = phasePreparing
 		return m.prepareStoredSession()
@@ -563,13 +575,9 @@ func (m *model) handleSessionsKey(key tea.KeyPressMsg) tea.Cmd {
 func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
 	case keyUp, keyVimUp:
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.cursor = moveCursor(m.cursor, -1, len(m.agents))
 	case keyDown, keyVimDown:
-		if m.cursor < len(m.agents)-1 {
-			m.cursor++
-		}
+		m.cursor = moveCursor(m.cursor, 1, len(m.agents))
 	case keyEnter:
 		m.selected = m.cursor
 		m.phase = phasePreparing
@@ -615,13 +623,9 @@ func (m *model) handleSettingsKey(key tea.KeyPressMsg) tea.Cmd {
 	case keyEscape:
 		return m.closeSettings()
 	case keyUp, keyVimUp:
-		if m.settingCursor > 0 {
-			m.settingCursor--
-		}
+		m.settingCursor = moveCursor(m.settingCursor, -1, len(preferencesList))
 	case keyDown, keyVimDown:
-		if m.settingCursor < len(preferencesList)-1 {
-			m.settingCursor++
-		}
+		m.settingCursor = moveCursor(m.settingCursor, 1, len(preferencesList))
 	case keyEnter, keySpace:
 		m.togglePreference(m.settingCursor)
 	}
