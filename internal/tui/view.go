@@ -303,7 +303,7 @@ func (m *model) renderAssistantBlock(current *entry, width int) string {
 		return m.styles.assistant.block(width, m.assistantName(), current.text())
 	}
 
-	body := renderMarkdown(current.text(), width, m.styles.markdown)
+	body := m.markdown.render(current.text(), width, m.hasDarkBG)
 	label := m.styles.assistant.title.Render(m.assistantName())
 	return m.styles.assistant.styled(width, label, body)
 }

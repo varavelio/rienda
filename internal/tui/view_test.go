@@ -144,13 +144,15 @@ func TestView(t *testing.T) {
 			Reason: engine.EndReasonTurn,
 		})
 
-		view := plain(m.render())
+		view := strings.ReplaceAll(plain(m.render()), "\u00a0", " ")
 
 		require.Contains(t, view, "Title")
 		require.NotContains(t, view, "# Title", "the heading marker is consumed")
 		require.Contains(t, view, "• first")
-		require.Contains(t, view, "Use go test and bold.", "the inline markers are consumed")
+		require.Contains(t, view, "go test", "inline code keeps its text")
+		require.Contains(t, view, "bold", "emphasis keeps its text")
 		require.NotContains(t, view, "**")
+		require.NotContains(t, view, "`")
 	})
 
 	t.Run("aligns the answer with its label", func(t *testing.T) {
@@ -318,7 +320,7 @@ func TestView(t *testing.T) {
 		for range 30 {
 			sendEvent(t, m, engine.Event{
 				Type: engine.EventTextDelta,
-				Text: "line\n",
+				Text: "line\n\n",
 			})
 		}
 		sendEvent(t, m, engine.Event{

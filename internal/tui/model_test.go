@@ -392,7 +392,7 @@ func TestModel(t *testing.T) {
 		for range 40 {
 			sendEvent(t, m, engine.Event{
 				Type: engine.EventTextDelta,
-				Text: "line\n",
+				Text: "line\n\n",
 			})
 		}
 		sendEvent(t, m, engine.Event{

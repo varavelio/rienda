@@ -29,8 +29,6 @@ type styles struct {
 	thinking  section
 	tool      section
 	failure   section
-
-	markdown markdownStyles
 }
 
 // section groups the styles of one kind of conversation block.
@@ -124,30 +122,6 @@ func newStyles(isDark bool) styles {
 		failure: section{
 			title: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")),
 			body:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
-		},
-
-		markdown: markdownStyles{
-			headings: []lipgloss.Style{
-				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
-				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14")),
-				lipgloss.NewStyle().Bold(true),
-				lipgloss.NewStyle().Bold(true),
-				lipgloss.NewStyle().Bold(true),
-				lipgloss.NewStyle().Bold(true),
-			},
-			bold:     lipgloss.NewStyle().Bold(true),
-			italic:   lipgloss.NewStyle().Italic(true),
-			strike:   lipgloss.NewStyle().Strikethrough(true),
-			code:     lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
-			codeLine: lipgloss.NewStyle().Faint(true),
-			link:     lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("12")),
-			quote:    lipgloss.NewStyle().Italic(true).Faint(true),
-			quoteBar: lipgloss.NewStyle().Faint(true),
-			bullet:   lipgloss.NewStyle().Foreground(lipgloss.Color("14")),
-			rule:     lipgloss.NewStyle().Faint(true),
-
-			tableHead:   lipgloss.NewStyle().Bold(true),
-			tableBorder: lipgloss.NewStyle().Faint(true),
 		},
 	}
 }

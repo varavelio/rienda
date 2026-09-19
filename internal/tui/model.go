@@ -284,6 +284,7 @@ type model struct {
 	resumeSession sessionFactory
 	newRunContext contextFactory
 	styles        styles
+	markdown      markdownRenderer
 }
 
 // newModel builds the interface model.

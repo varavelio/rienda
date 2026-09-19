@@ -8,173 +8,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRenderMarkdown verifies the markdown formatting of the answers of the
-// model.
-func TestRenderMarkdown(t *testing.T) {
-	markdown := newStyles(true).markdown
-
-	// render returns the plain text of the rendered markdown, so the tests
-	// assert the structure without the styling.
+// TestMarkdownRenderer verifies the markdown rendering of the model answers.
+func TestMarkdownRenderer(t *testing.T) {
+	// render returns the plain text of a rendered answer, so the tests assert
+	// the structure without the styling.
 	render := func(text string, width int) string {
-		return ansi.Strip(renderMarkdown(text, width, markdown))
+		var renderer markdownRenderer
+		return ansi.Strip(renderer.render(text, width, true))
 	}
 
-	t.Run("renders headings aligned with the body", func(t *testing.T) {
-		lines := strings.Split(render("# Title\n\n## Sub", 40), "\n")
+	t.Run("renders the markdown structure", func(t *testing.T) {
+		out := render("# Title\n\nA paragraph with **bold** and `code`.\n\n- item", 80)
 
-		require.Equal(t, "Title", lines[0])
-		require.Equal(t, "", lines[1])
-		require.Equal(t, "Sub", lines[2])
+		require.Contains(t, out, "Title")
+		require.NotContains(t, out, "# Title", "the heading marker is consumed")
+		require.NotContains(t, out, "**", "the emphasis markers are consumed")
+		require.NotContains(t, out, "`", "the code markers are consumed")
+		require.Contains(t, out, "A paragraph with bold")
+		require.Contains(t, out, "code")
+		require.Contains(t, out, "• item")
 	})
 
-	t.Run("renders inline spans as their text", func(t *testing.T) {
-		for input, want := range map[string]string{
-			"a **b** c":  "a b c",
-			"a __b__ c":  "a b c",
-			"a *b* c":    "a b c",
-			"a _b_ c":    "a b c",
-			"a ~~b~~ c":  "a b c",
-			"a `b` c":    "a b c",
-			"see [d](x)": "see d",
-		} {
-			require.Equal(t, want, render(input, 40), input)
-		}
-	})
+	t.Run("renders tables as a grid", func(t *testing.T) {
+		out := render("| Name | Age |\n| --- | --- |\n| Alice | 30 |", 80)
 
-	t.Run("styles the spans it renders", func(t *testing.T) {
-		styled := renderMarkdown("**bold** and `code`", 40, markdown)
-
-		require.Contains(t, styled, "\x1b[1m", "bold carries its style")
-		require.Contains(t, styled, "\x1b[95m", "code carries its style") // color 13
-	})
-
-	t.Run("keeps underscores inside a word", func(t *testing.T) {
-		require.Equal(t, "call foo_bar_baz now", render("call foo_bar_baz now", 40))
-	})
-
-	t.Run("nests emphasis without dropping the outer style", func(t *testing.T) {
-		styled := renderMarkdown("**bold *both* bold**", 40, markdown)
-
-		require.Contains(t, styled, "\x1b[1;3m", "bold and italic combine into one sequence")
-		require.Equal(t, "bold both bold", ansi.Strip(styled))
-	})
-
-	t.Run("renders bullet lists", func(t *testing.T) {
-		require.Equal(t, "• one\n• two", render("- one\n- two", 40))
-	})
-
-	t.Run("renders ordered lists", func(t *testing.T) {
-		require.Equal(t, "1. one\n2. two", render("1. one\n2. two", 40))
-	})
-
-	t.Run("aligns wrapped list content under the marker", func(t *testing.T) {
-		lines := strings.Split(render("- "+strings.Repeat("word ", 12), 20), "\n")
-
-		require.Greater(t, len(lines), 1)
-		require.Contains(t, lines[0], "• word")
-		require.True(t, strings.HasPrefix(lines[1], "  "), "continuation aligns under the text")
-	})
-
-	t.Run("renders fenced code without its fences", func(t *testing.T) {
-		require.Equal(t, "x := 1\nreturn x", render("```go\nx := 1\nreturn x\n```", 40))
-	})
-
-	t.Run("renders blockquotes with a bar", func(t *testing.T) {
-		require.Equal(t, "│ quoted", render("> quoted", 40))
-	})
-
-	t.Run("renders thematic breaks", func(t *testing.T) {
-		require.Equal(t, strings.Repeat("─", 10), render("---", 10))
-	})
-
-	t.Run("renders a bordered table", func(t *testing.T) {
-		out := render("| Name | Age |\n| --- | --- |\n| Alice | 30 |", 40)
-
-		require.Contains(t, out, "┌")
-		require.Contains(t, out, "┼")
-		require.Contains(t, out, "└")
+		require.Contains(t, out, "│", "the table draws its column separators")
 		require.Contains(t, out, "Name")
+		require.Contains(t, out, "Age")
 		require.Contains(t, out, "Alice")
 		require.Contains(t, out, "30")
 	})
 
-	t.Run("detects a table without leading pipes", func(t *testing.T) {
-		out := render("Name | Age\n--- | ---\nAlice | 30", 40)
+	t.Run("renders blockquotes and code blocks", func(t *testing.T) {
+		out := render("> quoted\n\n```go\nfunc main() {}\n```", 80)
 
-		require.Contains(t, out, "┌")
-		require.Contains(t, out, "Alice")
-	})
-
-	t.Run("styles the header of the table", func(t *testing.T) {
-		styled := renderMarkdown("| Name |\n| --- |\n| Alice |", 40, markdown)
-
-		require.Contains(t, styled, "\x1b[1m", "the header is bold")
-	})
-
-	t.Run("aligns cells as the delimiter row declares", func(t *testing.T) {
-		require.Equal(t, "x    ", ansi.Strip(padCell("x", 5, alignLeft)))
-		require.Equal(t, "    x", ansi.Strip(padCell("x", 5, alignRight)))
-		require.Equal(t, "  x  ", ansi.Strip(padCell("x", 5, alignCenter)))
-	})
-
-	t.Run("aligns the columns of a table", func(t *testing.T) {
-		out := render("| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |", 80)
-
-		require.Contains(t, out, "│ a    │")
-		require.Contains(t, out, "│   b    │", "the center column centers its content")
-		require.Contains(t, out, "│     c │", "the right column right aligns its content")
-	})
-
-	t.Run("grows a row when a cell wraps", func(t *testing.T) {
-		out := render("| A | B |\n| --- | --- |\n| "+strings.Repeat("word ", 8)+"| short |", 24)
-
-		require.Greater(t, strings.Count(out, "│"), 6, "the wide cell wraps into more rows")
-	})
-
-	t.Run("keeps a table within the width", func(t *testing.T) {
-		src := "| alpha | beta | gamma |\n| --- | --- | --- |\n| " +
-			strings.Repeat("x", 40) + " | y | z |"
-
-		for _, width := range []int{1, 8, 12, 24, 40, 100} {
-			for line := range strings.SplitSeq(ansi.Strip(renderMarkdown(src, width, markdown)), "\n") {
-				require.LessOrEqual(
-					t,
-					ansi.StringWidth(line),
-					width,
-					"width %d line %q",
-					width,
-					line,
-				)
-			}
-		}
-	})
-
-	t.Run("does not treat a thematic break as a table", func(t *testing.T) {
-		out := render("a | b\n---", 20)
-
-		require.Contains(t, out, "a | b")
-		require.NotContains(t, out, "┌")
+		require.Contains(t, out, "quoted")
+		require.Contains(t, out, "func main() {}")
+		require.NotContains(t, out, "```", "the fence markers are consumed")
 	})
 
 	t.Run("keeps every line within the width", func(t *testing.T) {
-		text := strings.Join([]string{
-			"# " + strings.Repeat("heading ", 10),
-			"",
-			strings.Repeat("paragraph ", 20),
-			"",
-			"- " + strings.Repeat("item ", 20),
-			"",
-			"1. " + strings.Repeat("step ", 20),
-			"",
-			"> " + strings.Repeat("quote ", 20),
-			"",
-			"```",
-			strings.Repeat("code", 40),
-			"```",
-		}, "\n")
+		src := "## Heading\n\nA long token: https://example.com/aaaaaaaaaaaaaaaaaaaaaa\n\n" +
+			"| Name | Age | City |\n|:--|:-:|--:|\n| Alice | 30 | New York |\n\n" +
+			"```go\nfunc verylongfunctionname(argument string) string { return argument }\n```\n\n- bullet\n"
 
-		for _, width := range []int{1, 5, 20, 60} {
-			for line := range strings.SplitSeq(ansi.Strip(renderMarkdown(text, width, markdown)), "\n") {
+		for _, width := range []int{1, 10, 16, 24, 40, 80} {
+			for line := range strings.SplitSeq(ansi.Strip(render(src, width)), "\n") {
 				require.LessOrEqual(
 					t,
 					ansi.StringWidth(line),
@@ -185,5 +64,51 @@ func TestRenderMarkdown(t *testing.T) {
 				)
 			}
 		}
+	})
+
+	t.Run("aligns the content to the left", func(t *testing.T) {
+		require.Equal(t, "a paragraph line", render("a paragraph line", 80))
+	})
+
+	t.Run("trims the blank cells glamour pads the lines with", func(t *testing.T) {
+		var renderer markdownRenderer
+		styled := renderer.render("a paragraph line", 80, true)
+
+		require.NotContains(t, styled, "  ", "no run of padded cells survives")
+		require.NotContains(t, styled, "line ", "no padded cell survives")
+		require.True(t, strings.HasSuffix(styled, reset), "the line closes its styling")
+	})
+
+	t.Run("renders the same answer for both terminal backgrounds", func(t *testing.T) {
+		var dark, light markdownRenderer
+
+		require.Contains(t, ansi.Strip(dark.render("# Title", 80, true)), "Title")
+		require.Contains(t, ansi.Strip(light.render("# Title", 80, false)), "Title")
+	})
+
+	t.Run("falls back to the raw text without a width", func(t *testing.T) {
+		var renderer markdownRenderer
+
+		require.Equal(t, "# Title", renderer.render("# Title", 0, true))
+	})
+}
+
+// TestTrimTrailingBlank verifies the trimming of the blank cells glamour pads
+// the rendered lines with.
+func TestTrimTrailingBlank(t *testing.T) {
+	t.Run("drops padded cells and their styling", func(t *testing.T) {
+		line := "\x1b[38;5;252mhi\x1b[m" + strings.Repeat("\x1b[38;5;252m \x1b[m", 3)
+
+		require.Equal(t, "\x1b[38;5;252mhi"+reset, trimTrailingBlank(line))
+	})
+
+	t.Run("keeps a line that only holds styling empty", func(t *testing.T) {
+		require.Equal(t, "", trimTrailingBlank(strings.Repeat("\x1b[38;5;252m \x1b[m", 4)))
+	})
+
+	t.Run("stops before an OSC-8 hyperlink close", func(t *testing.T) {
+		line := "\x1b]8;;https://x\x1b\\link\x1b]8;;\x1b\\"
+
+		require.Equal(t, line+reset, trimTrailingBlank(line))
 	})
 }
