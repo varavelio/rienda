@@ -114,22 +114,24 @@ const (
 
 // preferences groups the options of the harness the command center toggles.
 type preferences struct {
-	// HideToolOutput shows the invocation of a tool without its output.
-	HideToolOutput bool
+	// ExpandToolOutput shows the whole output of a tool. When it is off only
+	// the trailing lines of the output are shown.
+	ExpandToolOutput bool
 
-	// HideThinking collapses the reasoning of the model to one line.
-	HideThinking bool
+	// ExpandThinking shows the whole reasoning of the model. When it is off
+	// only the trailing lines of the reasoning are shown.
+	ExpandThinking bool
 
 	// RenderMarkdown formats the answers of the model as markdown. When it is
 	// off the answers are shown as the model wrote them.
 	RenderMarkdown bool
 }
 
-// defaultPreferences returns the options of a new interface: the blocks that
-// grow while the model works start hidden and the answers of the model are
-// formatted as markdown.
+// defaultPreferences returns the options of a new interface: the output of a
+// tool and the reasoning of the model stay compact, previewing only their
+// trailing lines, and the answers of the model are formatted as markdown.
 func defaultPreferences() preferences {
-	return preferences{HideToolOutput: true, HideThinking: true, RenderMarkdown: true}
+	return preferences{RenderMarkdown: true}
 }
 
 // preference is one option the command center lists and toggles.
@@ -150,16 +152,16 @@ type preference struct {
 // preferencesList lists the options of the command center in display order.
 var preferencesList = []preference{
 	{
-		Label: "Hide tool output",
-		Note:  "show the invocation of a tool without its output",
-		IsOn:  func(current preferences) bool { return current.HideToolOutput },
-		Set:   func(current *preferences, on bool) { current.HideToolOutput = on },
+		Label: "Expand tool output",
+		Note:  "show the whole output of a tool instead of its last lines",
+		IsOn:  func(current preferences) bool { return current.ExpandToolOutput },
+		Set:   func(current *preferences, on bool) { current.ExpandToolOutput = on },
 	},
 	{
-		Label: "Hide thinking",
-		Note:  "collapse the reasoning of the model to a single line",
-		IsOn:  func(current preferences) bool { return current.HideThinking },
-		Set:   func(current *preferences, on bool) { current.HideThinking = on },
+		Label: "Expand thinking",
+		Note:  "show the whole reasoning of the model instead of its last lines",
+		IsOn:  func(current preferences) bool { return current.ExpandThinking },
+		Set:   func(current *preferences, on bool) { current.ExpandThinking = on },
 	},
 	{
 		Label: "Render markdown",

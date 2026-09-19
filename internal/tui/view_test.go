@@ -28,10 +28,11 @@ func plain(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-// showAllPreferences returns the preferences that reveal every block and keep
-// the markdown formatting, so the tests assert the full rendering.
+// showAllPreferences returns the preferences that expand every collapsible
+// block and keep the markdown formatting, so the tests assert the full
+// rendering.
 func showAllPreferences() preferences {
-	return preferences{HideToolOutput: false, HideThinking: false, RenderMarkdown: true}
+	return preferences{ExpandToolOutput: true, ExpandThinking: true, RenderMarkdown: true}
 }
 
 // TestView verifies the rendering of every phase of the interface.
@@ -236,8 +237,9 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "boom")
 	})
 
-	t.Run("hides the tool output by default", func(t *testing.T) {
+	t.Run("previews the last lines of the tool output by default", func(t *testing.T) {
 		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 24))
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
 		sendEvent(t, m, engine.Event{
@@ -246,16 +248,17 @@ func TestView(t *testing.T) {
 			ToolName:   "shell",
 			Arguments:  json.RawMessage(`{"command":"ls"}`),
 		})
-		sendEvent(t, m, engine.Event{
-			Type:       engine.EventToolOutput,
-			ToolCallID: "call_1",
-			Output:     "a.txt\n",
-		})
+		for _, line := range []string{"one", "two", "three", "four", "five"} {
+			sendEvent(t, m, engine.Event{
+				Type:       engine.EventToolOutput,
+				ToolCallID: "call_1",
+				Output:     line + "\n",
+			})
+		}
 		sendEvent(t, m, engine.Event{
 			Type:       engine.EventToolResult,
 			ToolCallID: "call_1",
-			Text:       "a.txt",
-			IsError:    true,
+			Text:       "five",
 		})
 		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
@@ -265,32 +268,35 @@ func TestView(t *testing.T) {
 		view := plain(m.render())
 
 		require.Contains(t, view, `shell {"command":"ls"}`)
-		require.NotContains(t, view, "a.txt")
+		require.Contains(t, view, "… three", "the preview is marked as a fragment")
+		require.Contains(t, view, "four")
+		require.Contains(t, view, "five")
+		require.NotContains(t, view, "one", "the earlier lines are dropped")
+		require.NotContains(t, view, "two")
 	})
 
-	t.Run("collapses the reasoning by default", func(t *testing.T) {
+	t.Run("previews the last lines of the reasoning by default", func(t *testing.T) {
 		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 24))
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
-		sendEvent(t, m, engine.Event{Type: engine.EventThinkingDelta, Text: "let me think"})
+		sendEvent(t, m, engine.Event{
+			Type: engine.EventThinkingDelta,
+			Text: "step one\nstep two\nstep three\nstep four",
+		})
 
 		view := plain(m.render())
 		require.Contains(t, view, "Thinking")
-		require.NotContains(t, view, "let me think")
-
-		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "done"})
-		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
-
-		view = plain(m.render())
-		require.Contains(t, view, "Thinking")
-		require.NotContains(t, view, "let me think")
-		require.Contains(t, view, "done")
+		require.Contains(t, view, "… step two")
+		require.Contains(t, view, "step three")
+		require.Contains(t, view, "step four")
+		require.NotContains(t, view, "step one", "the earlier reasoning is dropped")
 	})
 
 	t.Run("marks truncated invocations", func(t *testing.T) {
 		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, -1, nil)
 		m.width = 40
-		m.preferences.HideToolOutput = false
+		m.preferences.ExpandToolOutput = true
 
 		rendered := plain(m.renderToolEntry(&entry{
 			kind:      entryTool,
@@ -399,9 +405,9 @@ func TestView(t *testing.T) {
 		view := plain(m.render())
 
 		require.Contains(t, view, "Command center")
-		require.Contains(t, view, "› Hide tool output")
-		require.Contains(t, view, "[on]")
-		require.Contains(t, view, "Hide thinking")
+		require.Contains(t, view, "› Expand tool output")
+		require.Contains(t, view, "[off]")
+		require.Contains(t, view, "Expand thinking")
 		require.Contains(t, view, "Render markdown")
 		require.Contains(t, view, "enter toggle")
 		require.Contains(t, view, "esc close")
@@ -455,6 +461,29 @@ func TestView(t *testing.T) {
 		view = plain(m.render())
 		require.Contains(t, view, "session 19")
 		require.NotContains(t, view, "session 0")
+	})
+}
+
+// TestTailPreview verifies the preview of the trailing lines a collapsed block
+// shows.
+func TestTailPreview(t *testing.T) {
+	t.Run("returns an empty preview for empty text", func(t *testing.T) {
+		require.Empty(t, tailPreview("", 3))
+		require.Empty(t, tailPreview("   \n", 3))
+	})
+
+	t.Run("keeps a text that fits", func(t *testing.T) {
+		require.Equal(t, "one\ntwo", tailPreview("one\ntwo", 3))
+	})
+
+	t.Run("keeps the last lines and marks the cut", func(t *testing.T) {
+		text := "one\ntwo\nthree\nfour"
+
+		require.Equal(t, "… two\nthree\nfour", tailPreview(text, 3))
+	})
+
+	t.Run("ignores trailing blank lines", func(t *testing.T) {
+		require.Equal(t, "only", tailPreview("only\n\n\n", 3))
 	})
 }
 

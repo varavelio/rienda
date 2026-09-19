@@ -579,20 +579,20 @@ func TestModel(t *testing.T) {
 
 	t.Run("toggles the harness options", func(t *testing.T) {
 		m, _ := chatModel(t)
-		require.True(t, m.preferences.HideToolOutput)
-		require.True(t, m.preferences.HideThinking)
+		require.False(t, m.preferences.ExpandToolOutput, "the blocks start compact")
+		require.False(t, m.preferences.ExpandThinking, "the blocks start compact")
 		require.True(t, m.preferences.RenderMarkdown)
 
 		update(t, m, pressCtrlP)
 		update(t, m, pressEnter)
-		require.False(t, m.preferences.HideToolOutput)
+		require.True(t, m.preferences.ExpandToolOutput)
 
 		update(t, m, pressSpace)
-		require.True(t, m.preferences.HideToolOutput)
+		require.False(t, m.preferences.ExpandToolOutput)
 
 		update(t, m, pressDown)
 		update(t, m, pressSpace)
-		require.False(t, m.preferences.HideThinking)
+		require.True(t, m.preferences.ExpandThinking)
 
 		update(t, m, pressDown)
 		update(t, m, pressSpace)
@@ -603,8 +603,9 @@ func TestModel(t *testing.T) {
 		require.Equal(t, 2, m.settingCursor, "the cursor stays on the last option")
 	})
 
-	t.Run("shows the tool output toggled from the command center", func(t *testing.T) {
+	t.Run("expands the tool output from the command center", func(t *testing.T) {
 		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 24))
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
 		sendEvent(t, m, engine.Event{
@@ -615,19 +616,24 @@ func TestModel(t *testing.T) {
 		sendEvent(t, m, engine.Event{
 			Type:       engine.EventToolResult,
 			ToolCallID: "call_1",
-			Text:       "a.txt",
+			Text:       "first\nsecond\nthird\nfourth",
 		})
 		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
 			Reason: engine.EndReasonTurn,
 		})
-		require.NotContains(t, plain(m.render()), "a.txt")
+
+		compact := plain(m.render())
+		require.Contains(t, compact, "fourth", "the preview shows the trailing lines")
+		require.NotContains(t, compact, "first", "the preview drops the earlier lines")
 
 		update(t, m, pressCtrlP)
 		update(t, m, pressEnter)
 		update(t, m, pressEscape)
 
-		require.Contains(t, plain(m.render()), "a.txt")
+		expanded := plain(m.render())
+		require.Contains(t, expanded, "first", "expanding reveals the whole output")
+		require.Contains(t, expanded, "fourth")
 	})
 
 	t.Run("keeps the rendered conversation in sync", func(t *testing.T) {
@@ -955,7 +961,7 @@ func TestActivity(t *testing.T) {
 
 	t.Run("does not put a spinner in the blocks", func(t *testing.T) {
 		m, _ := chatModel(t)
-		m.preferences = preferences{HideThinking: true}
+		m.preferences = preferences{}
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
 		sendEvent(t, m, engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
@@ -965,12 +971,18 @@ func TestActivity(t *testing.T) {
 			engine.Event{Type: engine.EventToolCall, ToolCallID: "c1", ToolName: "shell"},
 		)
 
-		require.Equal(t, markerActivity+" Thinking", ansi.Strip(m.renderThinkingEntry(
-			&m.transcript.entries[1], 40,
-		)))
-		require.Equal(t, markerActivity+" shell", ansi.Strip(m.renderToolEntry(
-			&m.transcript.entries[2], 40,
-		)))
+		for _, block := range []string{
+			ansi.Strip(m.renderThinkingEntry(&m.transcript.entries[1], 40)),
+			ansi.Strip(m.renderToolEntry(&m.transcript.entries[2], 40)),
+		} {
+			require.NotContains(t, block, "▀▄▀", "the blocks carry no spinner")
+			require.NotContains(t, block, "■■■", "the blocks carry no spinner")
+			require.NotContains(t, block, "▄▀▄", "the blocks carry no spinner")
+		}
+		require.Contains(t, ansi.Strip(m.renderThinkingEntry(&m.transcript.entries[1], 40)),
+			markerActivity+" Thinking")
+		require.Contains(t, ansi.Strip(m.renderToolEntry(&m.transcript.entries[2], 40)),
+			markerActivity+" shell")
 	})
 }
 

@@ -19,6 +19,11 @@ const brand = "varavel rienda"
 // so a call carrying a huge argument cannot flood the conversation.
 const maxToolLabel = 400
 
+// previewLines caps how many trailing lines a collapsed block shows, so the
+// reader keeps a sense of what is happening without the block flooding the
+// conversation.
+const previewLines = 3
+
 // View renders the interface in the alternate screen.
 func (m *model) View() tea.View {
 	view := tea.NewView(m.render())
@@ -386,13 +391,37 @@ func (m *model) assistantName() string {
 }
 
 // renderThinkingEntry renders a reasoning block: the whole text when the
-// preferences ask for it, a collapsed line otherwise. The run in flight is
-// reported by the activity line, so the block carries no spinner of its own.
+// preference expands it, a preview of its trailing lines otherwise. The run in
+// flight is reported by the activity line, so the block carries no spinner of
+// its own.
 func (m *model) renderThinkingEntry(current *entry, width int) string {
-	if m.preferences.HideThinking {
-		return m.styles.thinking.block(width, "Thinking", "")
+	body := m.blockBody(current.text(), m.preferences.ExpandThinking)
+	return m.styles.thinking.block(width, "Thinking", body)
+}
+
+// blockBody returns the body of a collapsible block: the whole text when the
+// preference expands it, or a preview of its trailing lines otherwise.
+func (m *model) blockBody(text string, expanded bool) string {
+	if expanded {
+		return strings.TrimRight(text, "\n")
 	}
-	return m.styles.thinking.block(width, "Thinking", current.text())
+	return tailPreview(text, previewLines)
+}
+
+// tailPreview returns the last limit lines of text, prefixed with an ellipsis
+// when earlier lines were dropped, so a collapsed block stays a compact window
+// on its trailing content. An empty text yields an empty preview.
+func tailPreview(text string, limit int) string {
+	text = strings.TrimRight(text, "\n")
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+
+	lines := strings.Split(text, "\n")
+	if len(lines) <= limit {
+		return text
+	}
+	return "\u2026 " + strings.Join(lines[len(lines)-limit:], "\n")
 }
 
 // renderToolEntry renders a tool invocation. The preferences decide whether
@@ -412,15 +441,11 @@ func (m *model) renderToolEntry(current *entry, width int) string {
 		label += " " + m.styles.dim.Render(toolLabel(current.toolArguments))
 	}
 
-	if m.preferences.HideToolOutput {
-		return m.styles.tool.titled(width, label, "")
-	}
-
 	output := strings.TrimRight(current.text(), "\n")
 	if current.truncated {
 		output += "\n[output truncated]"
 	}
-	return m.styles.tool.titled(width, label, output)
+	return m.styles.tool.titled(width, label, m.blockBody(output, m.preferences.ExpandToolOutput))
 }
 
 // toolLabel compacts the arguments of an invocation into one line and caps how

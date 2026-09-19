@@ -32,7 +32,9 @@
 // status line occupies no room once the run is over, so the conversation grows
 // into its rows instead of leaving them blank.
 //
-// The command center (ctrl+p) holds the options of the harness, which start
-// hiding the tool output and the reasoning so that a working session stays
-// readable.
+// The command center (ctrl+p) holds the options of the harness. The tool
+// output and the reasoning start compact, previewing only their trailing lines
+// so a working session stays readable, and can be expanded to their full text;
+// the answers of the model can also be shown as plain text instead of
+// markdown.
 package tui
