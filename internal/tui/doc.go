@@ -24,7 +24,9 @@
 // doing at the moment, from the model writing an answer to a tool running,
 // together with the key that interrupts it. It is the only spinner: the
 // reasoning and tool blocks are static, and the footer under the input only
-// shows the token usage and the keys the interface listens to.
+// shows the token usage and the keys the interface listens to. The status line
+// occupies no room once the run is over, so the conversation grows into its
+// rows instead of leaving them blank.
 //
 // The command center (ctrl+p) holds the options of the harness, which start
 // hiding the tool output and the reasoning so that a working session stays

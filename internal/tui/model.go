@@ -27,9 +27,10 @@ const brandRows = 3
 // its two borders and its vertical padding.
 const inputBoxRows = 4
 
-// activityRows is the number of rows the status line between the transcript
-// and the input box occupies.
-const activityRows = 1
+// activityRows is the number of rows the status block occupies between the
+// transcript and the input box: a blank row above and below the status line,
+// so the run status breathes instead of touching the content or the prompt.
+const activityRows = 3
 
 // chatFooterRows is the number of rows the chat footer occupies under the
 // input box.
@@ -908,9 +909,30 @@ func (m *model) syncLayout() {
 	m.refreshTranscript()
 }
 
-// transcriptHeight returns the rows the transcript occupies.
+// transcriptHeight returns the rows the transcript occupies, computed from the
+// status block the terminal can actually afford.
 func (m *model) transcriptHeight() int {
-	return max(1, m.height-chatChrome-m.input.Height())
+	return max(
+		1,
+		m.height-brandRows-m.activityHeight()-inputBoxRows-chatFooterRows-m.input.Height(),
+	)
+}
+
+// activityHeight returns the rows the status block occupies between the
+// conversation and the prompt. While a run is in flight it is the full block,
+// with a blank row above and below the status line; once the run is over it
+// keeps a single blank row, so the content never touches the input. A very
+// short terminal falls back to a single row.
+func (m *model) activityHeight() int {
+	want := 1
+	if m.running {
+		want = activityRows
+	}
+	room := m.height - brandRows - inputBoxRows - chatFooterRows - m.input.Height() - minInputRows
+	if room >= want {
+		return want
+	}
+	return max(0, min(room, 1))
 }
 
 // invalidateTranscript drops the rendered conversation, used whenever

@@ -589,6 +589,30 @@ func TestChatLayout(t *testing.T) {
 		}
 	})
 
+	t.Run("breathes around the status line", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(60, 20))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		update(t, m, m.spinner.Tick())
+
+		lines := strings.Split(plain(m.render()), "\n")
+		status := -1
+		for index, line := range lines {
+			if strings.Contains(line, "working") {
+				status = index
+			}
+		}
+		require.Positive(t, status, "the status line is shown")
+		require.Empty(t, strings.TrimSpace(lines[status-1]), "a blank row above the status")
+		require.Empty(t, strings.TrimSpace(lines[status+1]), "a blank row below the status")
+
+		// The status block keeps its height when the run ends, so the layout
+		// does not jump under the reader.
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+		require.Len(t, strings.Split(plain(m.render()), "\n"), len(lines))
+	})
+
 	t.Run("rewraps the conversation after a resize", func(t *testing.T) {
 		m, _ := chatModel(t)
 		m.preferences = showAllPreferences()

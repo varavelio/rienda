@@ -208,19 +208,35 @@ func (m *model) viewPreparing() string {
 // viewChat renders the header, the conversation, the status line, the input
 // and the footer of the chat.
 func (m *model) viewChat() string {
-	return strings.Join([]string{
+	parts := []string{
 		strings.Join(m.headerRows(m.chatIdentity()), "\n"),
 		m.conversation.view(),
-		m.activityLine(),
-		m.viewInput(),
-		m.chatFooter(),
-	}, "\n")
+	}
+	// A status block the terminal cannot afford contributes no row at all.
+	if m.activityHeight() > 0 {
+		parts = append(parts, m.activityBlock())
+	}
+	parts = append(parts, m.viewInput(), m.chatFooter())
+	return strings.Join(parts, "\n")
 }
 
-// activityLine renders the single status row that closes the conversation: the
-// spinner and what the run is doing, with the key that interrupts it. The row
-// is blank while no run is in flight, so it doubles as the padding above the
-// input box.
+// activityBlock renders the status of the run in flight between the
+// conversation and the prompt, with a blank row above and below so the status
+// line never touches the content or the input box. A very short terminal keeps
+// only the status line while a run is in flight, and nothing while idle.
+func (m *model) activityBlock() string {
+	if m.activityHeight() == 0 {
+		return ""
+	}
+	if m.activityHeight() == 1 {
+		return m.activityLine()
+	}
+	return "\n" + m.activityLine() + "\n"
+}
+
+// activityLine renders the single status row that reports the run in flight:
+// the spinner and what it is doing, with the key that interrupts it. The row
+// is blank while no run is in flight, which keeps the block the same height.
 func (m *model) activityLine() string {
 	if !m.running {
 		return ""

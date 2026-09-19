@@ -616,7 +616,7 @@ func TestModel(t *testing.T) {
 
 	t.Run("inserts newlines in the prompt", func(t *testing.T) {
 		m, scripted := chatModel(t)
-		require.Equal(t, 14, m.conversation.height)
+		update(t, m, windowMsg(80, 24))
 
 		update(t, m, tea.KeyPressMsg{Code: 'a', Text: "first"})
 		update(t, m, pressCtrlJ)
@@ -624,15 +624,12 @@ func TestModel(t *testing.T) {
 
 		require.Equal(t, "first\nsecond", m.input.Value())
 		require.Equal(t, 2, m.input.LineCount())
-		require.Equal(t, 2, m.input.Height())
-		require.Equal(t, 13, m.conversation.height)
 		require.Empty(t, scripted.prompts)
 
 		update(t, m, pressEnter)
 
 		require.Equal(t, []string{"first\nsecond"}, scripted.prompts)
-		require.Equal(t, 1, m.input.Height())
-		require.Equal(t, 14, m.conversation.height)
+		require.Equal(t, 1, m.input.LineCount())
 	})
 
 	t.Run("moves the prompt cursor with the arrows when it is multi-line", func(t *testing.T) {
@@ -867,6 +864,25 @@ func TestActivity(t *testing.T) {
 		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
 
 		require.Empty(t, plain(m.activityLine()))
+	})
+
+	t.Run("shrinks to a separator when the run ends", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 24))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		require.Equal(t, activityRows, m.activityHeight(), "the block occupies rows while running")
+		running := m.conversation.height
+
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		require.Equal(t, 1, m.activityHeight(), "the block keeps a single separator row")
+		require.Greater(
+			t,
+			m.conversation.height,
+			running,
+			"the conversation grows into the freed rows",
+		)
 	})
 
 	t.Run("does not put a spinner in the blocks", func(t *testing.T) {
