@@ -37,4 +37,16 @@
 // so a working session stays readable, and can be expanded to their full text;
 // the answers of the model can also be shown as plain text instead of
 // markdown.
+//
+// An @ in the prompt opens the completion of the files of the project, so the
+// user never has to remember a path to point the model at a file. The
+// suggestions are ranked by how well they match what the user wrote, the
+// arrows move the highlight, and enter and tab complete the highlighted one by
+// writing its path where the query was, keeping the @ that opens the mention.
+// Escape cancels the completion without touching the prompt. A completed
+// directory keeps the completion open so the path can keep narrowing, while a
+// completed file closes it. The completion only writes the path: the model is
+// the one that reads the file it was pointed at. The listing follows the rules
+// of the project instead of the state of the machine, so the entries the
+// project ignores never show up.
 package tui

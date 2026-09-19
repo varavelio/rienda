@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/varavelio/rienda/internal/agent"
+	"github.com/varavelio/rienda/internal/filecomplete"
+	"github.com/varavelio/rienda/internal/files"
 	"github.com/varavelio/rienda/internal/harness"
 	"github.com/varavelio/rienda/internal/session"
 )
@@ -71,6 +74,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		newRunContext: func() (context.Context, context.CancelFunc) {
 			return context.WithCancel(context.Background())
 		},
+		completeFiles: newFileCompleter(opts),
 	})
 	defer app.Close()
 
@@ -79,6 +83,21 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return fmt.Errorf("tui: run interface: %w", err)
 	}
 	return app.fatal
+}
+
+// newFileCompleter returns the completion the prompt opens with an @, or nil
+// when the project it would list cannot be located. The interface then runs
+// without file completion instead of refusing to open.
+func newFileCompleter(opts options) fileCompleter {
+	project := opts.Workdir
+	if project == "" {
+		workdir, err := os.Getwd()
+		if err != nil {
+			return nil
+		}
+		project = workdir
+	}
+	return filecomplete.New(files.New(project))
 }
 
 // loadAgents returns the agent definitions available to the interface. It

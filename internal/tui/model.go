@@ -89,6 +89,7 @@ const (
 	keyEnter   = "enter"
 	keySpace   = "space"
 	keyEscape  = "esc"
+	keyTab     = "tab"
 	keyHome    = "home"
 	keyEnd     = "end"
 	keyPgUp    = "pgup"
@@ -273,6 +274,10 @@ type modelConfig struct {
 
 	// newRunContext creates the context of a run.
 	newRunContext contextFactory
+
+	// completeFiles suggests the project paths that match the mention query
+	// of the prompt, or nil when the interface offers no completion.
+	completeFiles fileCompleter
 }
 
 // model is the Bubble Tea model of the interactive interface.
@@ -317,6 +322,7 @@ type model struct {
 
 	transcript   transcript
 	conversation conversation
+	mention      mention
 	input        textarea.Model
 	spinner      spinner
 
@@ -327,6 +333,7 @@ type model struct {
 	newSession    sessionFactory
 	resumeSession sessionFactory
 	newRunContext contextFactory
+	completeFiles fileCompleter
 	styles        styles
 	markdown      markdownRenderer
 }
@@ -365,6 +372,7 @@ func newModel(cfg modelConfig) *model {
 		newSession:    cfg.newSession,
 		resumeSession: cfg.resumeSession,
 		newRunContext: cfg.newRunContext,
+		completeFiles: cfg.completeFiles,
 		styles:        styles,
 	}
 }
@@ -467,7 +475,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		m.syncLayout()
+		m.syncPrompt()
 		return m, cmd
 	}
 }
@@ -600,6 +608,7 @@ func (m *model) toggleSettings() tea.Cmd {
 	m.returnPhase = m.phase
 	m.phase = phaseSettings
 	m.settingCursor = 0
+	m.mention = mention{}
 	m.input.Blur()
 	return nil
 }
@@ -644,6 +653,10 @@ func (m *model) togglePreference(index int) {
 
 // handleChatKey submits prompts, interrupts runs and scrolls the transcript.
 func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
+	if cmd, handled := m.handleMentionKey(key); handled {
+		return cmd
+	}
+
 	switch key.String() {
 	case keyEscape:
 		return m.requestInterrupt()
@@ -670,7 +683,7 @@ func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(key)
-	m.syncLayout()
+	m.syncPrompt()
 	return cmd
 }
 
@@ -746,6 +759,7 @@ func (m *model) enterChat(prepared Session) tea.Cmd {
 	m.setActivity(activityIdle, "")
 	m.transcript = transcript{}
 	m.transcript.load(prepared.History())
+	m.mention = mention{}
 	m.input.Reset()
 	m.syncLayout()
 	m.invalidateTranscript()
@@ -761,6 +775,7 @@ func (m *model) submit() tea.Cmd {
 	}
 
 	m.input.Reset()
+	m.mention = mention{}
 	m.transcript.addUser(prompt)
 	m.setRunning(true)
 	m.setActivity(activityWorking, "")
@@ -956,7 +971,8 @@ func (m *model) syncLayout() {
 func (m *model) transcriptHeight() int {
 	return max(
 		1,
-		m.height-brandRows-m.activityHeight()-inputBoxRows-chatFooterRows-m.input.Height(),
+		m.height-brandRows-m.activityHeight()-m.mentionHeight()-inputBoxRows-chatFooterRows-
+			m.input.Height(),
 	)
 }
 
@@ -975,6 +991,24 @@ func (m *model) activityHeight() int {
 		return want
 	}
 	return max(0, min(room, 1))
+}
+
+// mentionHeight returns the rows the completion popup occupies between the
+// status block and the prompt, or zero when the popup is closed or the
+// terminal cannot spare a row for it beyond the conversation the interface
+// always keeps visible.
+func (m *model) mentionHeight() int {
+	items := len(m.mention.items)
+	if items == 0 {
+		return 0
+	}
+
+	room := m.height - brandRows - m.activityHeight() - inputBoxRows - chatFooterRows -
+		m.input.Height() - minTranscriptRows
+	if room <= 0 {
+		return 0
+	}
+	return min(items, room)
 }
 
 // invalidateTranscript drops the rendered conversation, used whenever

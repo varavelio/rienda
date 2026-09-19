@@ -256,6 +256,11 @@ func (m *model) viewChat() string {
 	if m.activityHeight() > 0 {
 		parts = append(parts, m.activityBlock())
 	}
+	// The completion popup shares the rows of the conversation, so it only
+	// takes the ones the terminal can spare.
+	if height := m.mentionHeight(); height > 0 {
+		parts = append(parts, m.mentionList(height))
+	}
 	parts = append(parts, m.viewInput(), m.chatFooter())
 	return strings.Join(parts, "\n")
 }
@@ -305,6 +310,19 @@ func (m *model) activityLabel() string {
 	}
 }
 
+// mentionList renders the completion popup, the suggestions of the mention the
+// prompt holds, inside the rows the terminal gives it. The highlighted
+// suggestion is the one the user accepts with enter.
+func (m *model) mentionList(rows int) string {
+	first, last := visibleWindow(m.mention.cursor, len(m.mention.items), rows)
+
+	lines := make([]string, 0, rows)
+	for index := first; index < last; index++ {
+		lines = append(lines, m.row(index == m.mention.cursor, m.mention.items[index].Path))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // chatIdentity renders the identity of the session: the brand followed by the
 // agent, the model and the session id.
 func (m *model) chatIdentity() string {
@@ -332,7 +350,7 @@ func (m *model) chatFooter() string {
 	if m.usageIn > 0 || m.usageOut > 0 {
 		parts = append(parts, fmt.Sprintf("tokens %d in · %d out", m.usageIn, m.usageOut))
 	}
-	parts = append(parts, "enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit")
+	parts = append(parts, "@ files · enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit")
 
 	return m.clip(m.styles.footer.Render(strings.Join(parts, " · ")))
 }
