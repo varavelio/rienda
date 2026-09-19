@@ -395,33 +395,38 @@ func (m *model) assistantName() string {
 // flight is reported by the activity line, so the block carries no spinner of
 // its own.
 func (m *model) renderThinkingEntry(current *entry, width int) string {
-	body := m.blockBody(current.text(), m.preferences.ExpandThinking)
+	body := m.blockBody(current.text(), m.preferences.ExpandThinking, width)
 	return m.styles.thinking.block(width, "Thinking", body)
 }
 
 // blockBody returns the body of a collapsible block: the whole text when the
 // preference expands it, or a preview of its trailing lines otherwise.
-func (m *model) blockBody(text string, expanded bool) string {
+func (m *model) blockBody(text string, expanded bool, width int) string {
 	if expanded {
 		return strings.TrimRight(text, "\n")
 	}
-	return tailPreview(text, previewLines)
+	return tailPreview(text, previewLines, width)
 }
 
-// tailPreview returns the last limit lines of text, prefixed with an ellipsis
-// when earlier lines were dropped, so a collapsed block stays a compact window
-// on its trailing content. An empty text yields an empty preview.
-func tailPreview(text string, limit int) string {
+// tailPreview returns a compact window on the tail of text, prefixed with an
+// ellipsis when earlier content was dropped. The window is measured in rows as
+// the terminal shows them: text is wrapped to width first, so a long paragraph
+// previews as the last limit rows and the block keeps a steady height whatever
+// the shape of the content. An empty text yields an empty preview.
+func tailPreview(text string, limit, width int) string {
 	text = strings.TrimRight(text, "\n")
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
 
-	lines := strings.Split(text, "\n")
-	if len(lines) <= limit {
-		return text
+	rows := strings.Split(wrap(text, width), "\n")
+	if len(rows) <= limit {
+		return strings.Join(rows, "\n")
 	}
-	return "\u2026 " + strings.Join(lines[len(lines)-limit:], "\n")
+
+	tail := rows[len(rows)-limit:]
+	tail[0] = clipText(width, "\u2026 "+tail[0])
+	return strings.Join(tail, "\n")
 }
 
 // renderToolEntry renders a tool invocation. The preferences decide whether
@@ -445,7 +450,8 @@ func (m *model) renderToolEntry(current *entry, width int) string {
 	if current.truncated {
 		output += "\n[output truncated]"
 	}
-	return m.styles.tool.titled(width, label, m.blockBody(output, m.preferences.ExpandToolOutput))
+	body := m.blockBody(output, m.preferences.ExpandToolOutput, width)
+	return m.styles.tool.titled(width, label, body)
 }
 
 // toolLabel compacts the arguments of an invocation into one line and caps how

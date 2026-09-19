@@ -293,6 +293,26 @@ func TestView(t *testing.T) {
 		require.NotContains(t, view, "step one", "the earlier reasoning is dropped")
 	})
 
+	t.Run("keeps a collapsed block three rows tall", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.width = 40
+		m.preferences = preferences{}
+
+		// A single long paragraph must preview as three rows, not one row per
+		// source line, so the block stays compact whatever the content shape.
+		rendered := plain(m.renderThinkingEntry(&entry{
+			kind:      entryThinking,
+			fragments: []string{strings.Repeat("word ", 60)},
+		}, m.width))
+
+		rows := strings.Split(rendered, "\n")
+		// The label, a blank row and the three rows of the preview.
+		require.Len(t, rows, 5)
+		require.Contains(t, rows[0], "Thinking")
+		require.Empty(t, rows[1])
+		require.True(t, strings.HasPrefix(rows[2], "… "), "the preview marks the cut")
+	})
+
 	t.Run("marks truncated invocations", func(t *testing.T) {
 		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, -1, nil)
 		m.width = 40
@@ -464,26 +484,40 @@ func TestView(t *testing.T) {
 	})
 }
 
-// TestTailPreview verifies the preview of the trailing lines a collapsed block
+// TestTailPreview verifies the preview of the trailing rows a collapsed block
 // shows.
 func TestTailPreview(t *testing.T) {
 	t.Run("returns an empty preview for empty text", func(t *testing.T) {
-		require.Empty(t, tailPreview("", 3))
-		require.Empty(t, tailPreview("   \n", 3))
+		require.Empty(t, tailPreview("", 3, 40))
+		require.Empty(t, tailPreview("   \n", 3, 40))
 	})
 
 	t.Run("keeps a text that fits", func(t *testing.T) {
-		require.Equal(t, "one\ntwo", tailPreview("one\ntwo", 3))
+		require.Equal(t, "one\ntwo", tailPreview("one\ntwo", 3, 40))
 	})
 
-	t.Run("keeps the last lines and marks the cut", func(t *testing.T) {
+	t.Run("keeps the last rows and marks the cut", func(t *testing.T) {
 		text := "one\ntwo\nthree\nfour"
 
-		require.Equal(t, "… two\nthree\nfour", tailPreview(text, 3))
+		require.Equal(t, "… two\nthree\nfour", tailPreview(text, 3, 40))
+	})
+
+	t.Run("counts the rows the terminal shows, not the source lines", func(t *testing.T) {
+		// A single long paragraph wraps into many rows: the preview keeps the
+		// last three of them, so the block stays a steady three rows tall.
+		text := strings.Repeat("word ", 60)
+		preview := tailPreview(text, 3, 40)
+
+		rows := strings.Split(preview, "\n")
+		require.Len(t, rows, 3, "the preview is three visible rows")
+		require.True(t, strings.HasPrefix(rows[0], "… "), "the cut is marked")
+		for _, row := range rows {
+			require.LessOrEqual(t, ansi.StringWidth(row), 40)
+		}
 	})
 
 	t.Run("ignores trailing blank lines", func(t *testing.T) {
-		require.Equal(t, "only", tailPreview("only\n\n\n", 3))
+		require.Equal(t, "only", tailPreview("only\n\n\n", 3, 40))
 	})
 }
 
