@@ -17,8 +17,10 @@
 // A run is followed through the conversation the model renders: the answers of
 // the agent, the reasoning of the model and the tool invocations with their
 // output. The conversation scrolls with the arrow keys, Page Up and Page Down
-// move a block at a time and Home and End jump to either end; the position is
-// kept while a run streams, so reading back never fights the incoming output.
+// move from turn to turn, landing on the prompts and the answers and skipping
+// the reasoning and the tool invocations, and Home and End jump to either end;
+// the position is kept while a run streams, so reading back never fights the
+// incoming output.
 //
 // A single status line closes the conversation and reports what the run is
 // doing at the moment, from the model writing an answer to a tool running,

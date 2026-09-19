@@ -490,24 +490,40 @@ func TestModel(t *testing.T) {
 		require.True(t, m.conversation.atBottom(), "end goes to the bottom")
 	})
 
-	t.Run("moves block by block with page up and page down", func(t *testing.T) {
+	t.Run("moves turn by turn with page up and page down", func(t *testing.T) {
 		m, _ := chatModel(t)
-		update(t, m, windowMsg(80, 16))
+		update(t, m, windowMsg(80, 24))
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
-		for range 12 {
-			sendEvent(t, m, engine.Event{
-				Type: engine.EventTextDelta,
-				Text: "para\n\n",
-			})
-		}
+		sendEvent(t, m, engine.Event{Type: engine.EventThinkingDelta, Text: "reasoning"})
+		sendEvent(
+			t,
+			m,
+			engine.Event{Type: engine.EventToolCall, ToolCallID: "c1", ToolName: "shell"},
+		)
+		sendEvent(t, m, engine.Event{Type: engine.EventToolResult, ToolCallID: "c1", Text: "ok"})
+		sendEvent(t, m, engine.Event{
+			Type: engine.EventTextDelta,
+			Text: strings.Repeat("answer line\n\n", 6),
+		})
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
 
 		update(t, m, pressHome)
+		require.Zero(t, m.conversation.offsetRows(), "home lands on the prompt, the first turn")
+
 		update(t, m, pressPgDown)
-		require.Positive(t, m.conversation.offsetRows(), "page down advances a block")
+		last := m.conversation.starts[m.conversation.blockCount()-1]
+		require.Equal(t, last, m.conversation.offsetRows(), "page down lands on the answer")
+		require.NotContains(
+			t,
+			plain(m.conversation.view()),
+			"reasoning",
+			"the reasoning is skipped",
+		)
+		require.NotContains(t, plain(m.conversation.view()), "shell", "the tool is skipped")
 
 		update(t, m, pressPgUp)
-		require.Zero(t, m.conversation.offsetRows(), "page up goes back a block")
+		require.Zero(t, m.conversation.offsetRows(), "page up returns to the prompt")
 	})
 
 	t.Run("grows the prompt without a line limit", func(t *testing.T) {

@@ -967,7 +967,7 @@ func (m *model) refreshTranscript() {
 	from := min(m.transcript.changedFrom(), m.conversation.blockCount())
 	m.conversation.truncate(from)
 	for index := from; index < len(m.transcript.entries); index++ {
-		m.conversation.appendBlock(m.renderEntry(index))
+		m.conversation.appendBlock(m.renderEntry(index), isTurn(m.transcript.entries[index].kind))
 	}
 	m.transcript.markRendered()
 }

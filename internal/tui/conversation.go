@@ -12,6 +12,12 @@ type conversation struct {
 	// is the total number of rows.
 	starts []int
 
+	// turns marks the blocks that open a turn of the conversation, the user
+	// messages and the answers of the agent. The reader jumps between them,
+	// skipping the activities that only add noise, such as the reasoning and
+	// the tool invocations.
+	turns []bool
+
 	// height is the number of rows the window shows.
 	height int
 
@@ -35,14 +41,16 @@ func (c *conversation) blockCount() int {
 	return len(c.starts) - 1
 }
 
-// appendBlock renders one block at the end of the conversation. An empty text
-// keeps an empty block, so the block indexes stay aligned with the transcript.
-// The window follows the new rows only while it rests on the bottom.
-func (c *conversation) appendBlock(text string) {
+// appendBlock renders one block at the end of the conversation, marking it as
+// a turn when the block opens one. An empty text keeps an empty block, so the
+// block indexes stay aligned with the transcript. The window follows the new
+// rows only while it rests on the bottom.
+func (c *conversation) appendBlock(text string, turn bool) {
 	if text != "" {
 		c.rows = append(c.rows, strings.Split(text, "\n")...)
 	}
 	c.starts = append(c.starts, len(c.rows))
+	c.turns = append(c.turns, turn)
 	if c.follow {
 		c.offset = c.maxOffset()
 	}
@@ -53,6 +61,7 @@ func (c *conversation) truncate(index int) {
 	index = min(max(index, 0), c.blockCount())
 	c.rows = c.rows[:c.starts[index]]
 	c.starts = c.starts[:index+1]
+	c.turns = c.turns[:index]
 }
 
 // invalidate drops every rendered block, used when something the rendering
@@ -88,26 +97,34 @@ func (c *conversation) scroll(delta int) {
 	c.move(c.offsetRows() + delta)
 }
 
-// scrollBlock moves the window to the start of the previous block when the
-// direction is negative, or of the next block when it is positive, so the
-// reader advances message by message.
+// scrollBlock moves the window to the turn that opens the previous message
+// when the direction is negative, or the next one when it is positive, so the
+// reader walks the conversation message by message. Only the blocks that open a
+// turn are stops: the reasoning and the tool invocations are skipped. When
+// there is no turn further in that direction, the window reaches the end of the
+// conversation.
 func (c *conversation) scrollBlock(direction int) {
 	offset := c.offsetRows()
-	target := c.maxOffset()
+	target := -1
 	if direction < 0 {
-		target = 0
-		for _, start := range c.starts {
-			if start >= offset {
+		for i := c.blockCount() - 1; i >= 0; i-- {
+			if c.turns[i] && c.starts[i] < offset {
+				target = c.starts[i]
 				break
 			}
-			target = start
+		}
+		if target < 0 {
+			target = 0
 		}
 	} else {
-		for _, start := range c.starts {
-			if start > offset {
-				target = start
+		for i := 0; i < c.blockCount(); i++ {
+			if c.turns[i] && c.starts[i] > offset {
+				target = c.starts[i]
 				break
 			}
+		}
+		if target < 0 {
+			target = c.maxOffset()
 		}
 	}
 	c.move(target)

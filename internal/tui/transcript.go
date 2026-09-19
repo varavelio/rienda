@@ -30,6 +30,14 @@ const (
 	entryError
 )
 
+// isTurn reports whether an entry opens a turn of the conversation: a message
+// written by the user or an answer of the agent. The remaining kinds, the
+// reasoning, the tool invocations and the notices, are activities of a turn and
+// not stops the reader jumps between.
+func isTurn(kind entryKind) bool {
+	return kind == entryUser || kind == entryAssistant
+}
+
 // entry is one block of the conversation transcript. For tool entries the text
 // carries the output streamed by the invocation.
 //
