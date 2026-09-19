@@ -13,6 +13,7 @@ import (
 
 	"github.com/varavelio/rienda/internal/agent"
 	"github.com/varavelio/rienda/internal/engine"
+	"github.com/varavelio/rienda/internal/filecomplete"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 )
@@ -275,9 +276,9 @@ type modelConfig struct {
 	// newRunContext creates the context of a run.
 	newRunContext contextFactory
 
-	// completeFiles suggests the project paths that match the mention query
-	// of the prompt, or nil when the interface offers no completion.
-	completeFiles fileCompleter
+	// scanFiles reads the project paths that complete a mention, or nil when
+	// the interface offers no completion.
+	scanFiles fileScanner
 }
 
 // model is the Bubble Tea model of the interactive interface.
@@ -326,6 +327,10 @@ type model struct {
 	input        textarea.Model
 	spinner      spinner
 
+	// candidates holds the paths of the project the mentions complete
+	// against, read again whenever a mention opens.
+	candidates []filecomplete.Suggestion
+
 	width     int
 	height    int
 	hasDarkBG bool
@@ -333,7 +338,7 @@ type model struct {
 	newSession    sessionFactory
 	resumeSession sessionFactory
 	newRunContext contextFactory
-	completeFiles fileCompleter
+	scanFiles     fileScanner
 	styles        styles
 	markdown      markdownRenderer
 }
@@ -372,7 +377,7 @@ func newModel(cfg modelConfig) *model {
 		newSession:    cfg.newSession,
 		resumeSession: cfg.resumeSession,
 		newRunContext: cfg.newRunContext,
-		completeFiles: cfg.completeFiles,
+		scanFiles:     cfg.scanFiles,
 		styles:        styles,
 	}
 }
@@ -452,6 +457,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case engineEventsMsg:
 		return m, m.handleEvents(msg)
+	case filesScannedMsg:
+		m.applyScan(msg)
+		return m, nil
 	case interruptTimeoutMsg:
 		m.handleInterruptTimeout(msg)
 		return m, nil
@@ -475,8 +483,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		m.syncPrompt()
-		return m, cmd
+		return m, tea.Batch(cmd, m.syncPrompt())
 	}
 }
 
@@ -683,8 +690,7 @@ func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(key)
-	m.syncPrompt()
-	return cmd
+	return tea.Batch(cmd, m.syncPrompt())
 }
 
 // scrollTranscript moves the conversation window one row with the given arrow

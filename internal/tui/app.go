@@ -74,7 +74,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		newRunContext: func() (context.Context, context.CancelFunc) {
 			return context.WithCancel(context.Background())
 		},
-		completeFiles: newFileCompleter(opts),
+		scanFiles: newFileScanner(opts),
 	})
 	defer app.Close()
 
@@ -85,10 +85,10 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 	return app.fatal
 }
 
-// newFileCompleter returns the completion the prompt opens with an @, or nil
-// when the project it would list cannot be located. The interface then runs
-// without file completion instead of refusing to open.
-func newFileCompleter(opts options) fileCompleter {
+// newFileScanner returns the read that completes the mentions of the prompt,
+// or nil when the project it would list cannot be located. The interface then
+// runs without file completion instead of refusing to open.
+func newFileScanner(opts options) fileScanner {
 	project := opts.Workdir
 	if project == "" {
 		workdir, err := os.Getwd()
@@ -97,7 +97,11 @@ func newFileCompleter(opts options) fileCompleter {
 		}
 		project = workdir
 	}
-	return filecomplete.New(files.New(project))
+
+	listing := files.New(project)
+	return func() ([]filecomplete.Suggestion, error) {
+		return filecomplete.List(listing)
+	}
 }
 
 // loadAgents returns the agent definitions available to the interface. It

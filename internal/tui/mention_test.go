@@ -16,6 +16,52 @@ import (
 // pressTab completes the highlighted suggestion of a mention.
 var pressTab = tea.KeyPressMsg{Code: tea.KeyTab}
 
+// project is a scripted read of the files of a project. Its items can change
+// between reads, so a test hands the interface a project that gains a file
+// while the interface runs.
+type project struct {
+	items []filecomplete.Suggestion
+	err   error
+}
+
+// scan answers with the files the project holds.
+func (p *project) scan() ([]filecomplete.Suggestion, error) {
+	return p.items, p.err
+}
+
+// paths returns the paths of a list of suggestions.
+func paths(suggestions []filecomplete.Suggestion) []string {
+	found := make([]string, 0, len(suggestions))
+	for _, suggestion := range suggestions {
+		found = append(found, suggestion.Path)
+	}
+	return found
+}
+
+// mentionSuggestions returns the files a project offers in the tests.
+func mentionSuggestions() []filecomplete.Suggestion {
+	return []filecomplete.Suggestion{
+		{Path: "internal/tui/model.go"},
+		{Path: "internal/tui/view.go"},
+	}
+}
+
+// mentionModel returns a chatting model that completes mentions by reading the
+// given project, already read once.
+func mentionModel(t *testing.T, p *project) (*model, *fakeSession) {
+	t.Helper()
+
+	m, scripted := chatModel(t)
+	m.candidates = p.items
+	m.scanFiles = p.scan
+	return m, scripted
+}
+
+// testProject returns a project that offers the usual files.
+func testProject() *project {
+	return &project{items: mentionSuggestions()}
+}
+
 // typeText feeds every rune of text to the model as a key press, the way a
 // user types it.
 func typeText(t *testing.T, m *model, text string) {
@@ -28,45 +74,6 @@ func typeText(t *testing.T, m *model, text string) {
 		}
 		update(t, m, tea.KeyPressMsg{Code: char, Text: string(char)})
 	}
-}
-
-// completerFunc adapts a function to the fileCompleter interface.
-type completerFunc func(query string, limit int) ([]filecomplete.Suggestion, error)
-
-// Complete calls the function the completer was built from.
-func (f completerFunc) Complete(query string, limit int) ([]filecomplete.Suggestion, error) {
-	return f(query, limit)
-}
-
-// recordingCompleter answers with a fixed set of suggestions and records the
-// queries it receives, so a test can assert when the model asks for them.
-type recordingCompleter struct {
-	suggestions []filecomplete.Suggestion
-	queries     []string
-}
-
-// Complete records the query and returns the scripted suggestions.
-func (c *recordingCompleter) Complete(query string, limit int) ([]filecomplete.Suggestion, error) {
-	c.queries = append(c.queries, query)
-	return c.suggestions, nil
-}
-
-// mentionSuggestions returns the paths a completion offers in the tests.
-func mentionSuggestions() []filecomplete.Suggestion {
-	return []filecomplete.Suggestion{
-		{Path: "internal/tui/model.go"},
-		{Path: "internal/tui/view.go"},
-	}
-}
-
-// mentionModel returns a chatting model that completes mentions with the given
-// completer.
-func mentionModel(t *testing.T, complete fileCompleter) (*model, *fakeSession) {
-	t.Helper()
-
-	m, scripted := chatModel(t)
-	m.completeFiles = complete
-	return m, scripted
 }
 
 // TestMentionToken verifies the detection of the mention that ends at the
@@ -127,26 +134,32 @@ func TestMentionToken(t *testing.T) {
 // TestMention verifies the file completion of the prompt.
 func TestMention(t *testing.T) {
 	t.Run("opens the completion when the prompt holds a mention", func(t *testing.T) {
-		completer := &recordingCompleter{suggestions: mentionSuggestions()}
-		m, _ := mentionModel(t, completer)
+		m, _ := mentionModel(t, testProject())
 
-		typeText(t, m, "@mo")
+		typeText(t, m, "@")
 
 		require.True(t, m.mention.active)
-		require.Equal(t, "mo", m.mention.query)
+		require.Empty(t, m.mention.query)
 		require.Equal(t, mentionSuggestions(), m.mention.items)
-		require.Equal(t, []string{"", "m", "mo"}, completer.queries, "one query per change")
 		require.Contains(t, plain(m.render()), "internal/tui/model.go")
 	})
 
-	t.Run("leaves the prompt alone without a mention", func(t *testing.T) {
-		completer := &recordingCompleter{suggestions: mentionSuggestions()}
-		m, _ := mentionModel(t, completer)
+	t.Run("narrows the suggestions as the query grows", func(t *testing.T) {
+		m, _ := mentionModel(t, testProject())
 
-		typeText(t, m, "read user@example.com")
+		typeText(t, m, "@mo")
+		require.Equal(t, []string{"internal/tui/model.go"}, paths(m.mention.items))
+
+		typeText(t, m, "del")
+		require.Equal(t, []string{"internal/tui/model.go"}, paths(m.mention.items))
+	})
+
+	t.Run("leaves the prompt alone without a mention", func(t *testing.T) {
+		m, _ := mentionModel(t, testProject())
+
+		typeText(t, m, "write to user@example.com")
 
 		require.False(t, m.mention.active)
-		require.Empty(t, completer.queries)
 	})
 
 	t.Run("runs without a completion", func(t *testing.T) {
@@ -158,9 +171,67 @@ func TestMention(t *testing.T) {
 		require.Equal(t, "@mo", m.input.Value())
 	})
 
+	t.Run("reads the project again when a mention opens", func(t *testing.T) {
+		m, _ := mentionModel(t, testProject())
+
+		m.input.SetValue("@")
+		m.input.SetCursorColumn(1)
+		cmd := m.syncMention()
+		require.NotNil(t, cmd, "opening a mention reads the project again")
+
+		run(t, m, cmd)
+		require.Equal(t, mentionSuggestions(), m.mention.items)
+
+		require.Nil(t, m.syncMention(), "typing inside a mention does not read the project again")
+	})
+
+	t.Run("shows a file created while the interface runs", func(t *testing.T) {
+		scripted := testProject()
+		m, _ := mentionModel(t, scripted)
+
+		typeText(t, m, "@")
+		require.NotContains(t, paths(m.mention.items), "internal/tui/mention.go")
+
+		// The project gains a file, and the user opens the completion again.
+		scripted.items = append(scripted.items, filecomplete.Suggestion{
+			Path: "internal/tui/mention.go",
+		})
+		m.input.Reset()
+		m.mention = mention{}
+		typeText(t, m, "@")
+
+		require.NotContains(
+			t,
+			paths(m.mention.items),
+			"internal/tui/mention.go",
+			"the restart shows the listing known so far",
+		)
+
+		run(t, m, m.scanFilesCmd())
+
+		require.Contains(
+			t,
+			paths(m.mention.items),
+			"internal/tui/mention.go",
+			"the read lands and the new file shows up",
+		)
+	})
+
+	t.Run("keeps the listing when the project cannot be read", func(t *testing.T) {
+		scripted := testProject()
+		m, _ := mentionModel(t, scripted)
+		typeText(t, m, "@")
+		require.Len(t, m.mention.items, 2)
+
+		scripted.err = errors.New("files: list: permission denied")
+		run(t, m, m.scanFilesCmd())
+
+		require.Len(t, m.mention.items, 2, "a read that fails keeps the paths already known")
+	})
+
 	t.Run("cycles the highlight through the suggestions", func(t *testing.T) {
-		m, _ := mentionModel(t, &recordingCompleter{suggestions: mentionSuggestions()})
-		typeText(t, m, "@mo")
+		m, _ := mentionModel(t, testProject())
+		typeText(t, m, "@")
 
 		update(t, m, pressUp)
 		require.Equal(t, 1, m.mention.cursor, "stepping up from the first suggestion wraps")
@@ -170,10 +241,9 @@ func TestMention(t *testing.T) {
 	})
 
 	t.Run("completes the highlighted suggestion with enter", func(t *testing.T) {
-		m, scripted := mentionModel(t, &recordingCompleter{suggestions: mentionSuggestions()})
+		m, scripted := mentionModel(t, testProject())
 		typeText(t, m, "@vi")
 
-		update(t, m, pressDown)
 		update(t, m, pressEnter)
 
 		require.Equal(t, "@internal/tui/view.go ", m.input.Value())
@@ -183,7 +253,7 @@ func TestMention(t *testing.T) {
 	})
 
 	t.Run("completes the highlighted suggestion with tab", func(t *testing.T) {
-		m, scripted := mentionModel(t, &recordingCompleter{suggestions: mentionSuggestions()})
+		m, scripted := mentionModel(t, testProject())
 		typeText(t, m, "@mo")
 
 		update(t, m, pressTab)
@@ -193,7 +263,7 @@ func TestMention(t *testing.T) {
 	})
 
 	t.Run("keeps the characters written around the mention", func(t *testing.T) {
-		m, _ := mentionModel(t, &recordingCompleter{suggestions: mentionSuggestions()})
+		m, _ := mentionModel(t, testProject())
 		m.input.SetValue("read @mo now")
 		m.input.SetCursorColumn(8)
 		m.syncPrompt()
@@ -204,7 +274,7 @@ func TestMention(t *testing.T) {
 	})
 
 	t.Run("cancels the completion with escape", func(t *testing.T) {
-		m, _ := mentionModel(t, &recordingCompleter{suggestions: mentionSuggestions()})
+		m, _ := mentionModel(t, testProject())
 		typeText(t, m, "@mo")
 
 		update(t, m, pressEscape)
@@ -215,8 +285,7 @@ func TestMention(t *testing.T) {
 	})
 
 	t.Run("keeps the completion closed until the mention changes", func(t *testing.T) {
-		completer := &recordingCompleter{suggestions: mentionSuggestions()}
-		m, _ := mentionModel(t, completer)
+		m, _ := mentionModel(t, testProject())
 		typeText(t, m, "@mo")
 		update(t, m, pressEscape)
 
@@ -226,7 +295,6 @@ func TestMention(t *testing.T) {
 			m.mention.active,
 			"a refresh that does not change the mention keeps it closed",
 		)
-		require.Len(t, completer.queries, 3, "the canceled mention is not queried again")
 
 		typeText(t, m, "d")
 		require.True(t, m.mention.active)
@@ -234,8 +302,10 @@ func TestMention(t *testing.T) {
 	})
 
 	t.Run("keeps the completion open when the accepted path is a directory", func(t *testing.T) {
-		directory := []filecomplete.Suggestion{{Path: "internal/tui/", IsDir: true}}
-		m, _ := mentionModel(t, &recordingCompleter{suggestions: directory})
+		scripted := &project{items: []filecomplete.Suggestion{
+			{Path: "internal/tui/", IsDir: true},
+		}}
+		m, _ := mentionModel(t, scripted)
 		typeText(t, m, "@tui")
 
 		update(t, m, pressEnter)
@@ -246,9 +316,7 @@ func TestMention(t *testing.T) {
 	})
 
 	t.Run("engages the mention without suggestions", func(t *testing.T) {
-		m, _ := mentionModel(t, completerFunc(
-			func(string, int) ([]filecomplete.Suggestion, error) { return nil, nil },
-		))
+		m, _ := mentionModel(t, &project{})
 
 		typeText(t, m, "@zzz")
 
@@ -258,22 +326,20 @@ func TestMention(t *testing.T) {
 	})
 
 	t.Run("closes the completion when the project cannot be listed", func(t *testing.T) {
-		m, _ := mentionModel(t, completerFunc(
-			func(string, int) ([]filecomplete.Suggestion, error) {
-				return nil, errors.New("files: list: permission denied")
-			},
-		))
+		m, _ := mentionModel(t, &project{err: errors.New("files: list: permission denied")})
 
 		typeText(t, m, "@mo")
+		run(t, m, m.scanFilesCmd())
 
-		require.False(t, m.mention.active)
+		require.True(t, m.mention.active)
+		require.Empty(t, m.mention.items)
 		require.Zero(t, m.mentionHeight())
 	})
 
 	t.Run("shares the rows of the conversation with the popup", func(t *testing.T) {
-		m, _ := mentionModel(t, &recordingCompleter{suggestions: mentionSuggestions()})
+		m, _ := mentionModel(t, testProject())
 		update(t, m, windowMsg(80, 30))
-		typeText(t, m, "@mo")
+		typeText(t, m, "@")
 
 		lines := strings.Split(ansi.Strip(m.render()), "\n")
 		border := slices.IndexFunc(lines, func(line string) bool {

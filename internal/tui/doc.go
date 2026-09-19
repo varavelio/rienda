@@ -46,7 +46,8 @@
 // Escape cancels the completion without touching the prompt. A completed
 // directory keeps the completion open so the path can keep narrowing, while a
 // completed file closes it. The completion only writes the path: the model is
-// the one that reads the file it was pointed at. The listing follows the rules
-// of the project instead of the state of the machine, so the entries the
-// project ignores never show up.
+// the one that reads the file it was pointed at. Every mention reads the
+// project again in the background, so a file created while the interface runs
+// shows up, and the listing follows the rules of the project instead of the
+// state of the machine, so the entries the project ignores never show up.
 package tui

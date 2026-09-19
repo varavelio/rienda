@@ -17,13 +17,17 @@ const mentionGlyph = '@'
 // at once, so the completion popup never takes over the conversation.
 const maxMentionItems = 8
 
-// fileCompleter suggests the project paths that match the mention query of the
-// prompt. The filecomplete package provides the production implementation,
-// which keeps the model free of the filesystem.
-type fileCompleter interface {
-	// Complete returns up to limit suggestions whose path best matches query,
-	// best match first.
-	Complete(query string, limit int) ([]filecomplete.Suggestion, error)
+// fileScanner reads the paths of the project that complete a mention. It runs
+// outside the update loop, so the interface never waits for the project to be
+// read, and it is called again whenever a mention opens, so a file created
+// while the interface runs shows up. The filecomplete package provides the
+// production implementation, which keeps the model free of the filesystem.
+type fileScanner func() ([]filecomplete.Suggestion, error)
+
+// filesScannedMsg carries the paths of the project read again.
+type filesScannedMsg struct {
+	items []filecomplete.Suggestion
+	err   error
 }
 
 // mention is the state of the file completion the prompt opens with an @.
@@ -71,15 +75,17 @@ func mentionToken(value string, row, col int) (string, bool) {
 }
 
 // syncMention follows the mention the prompt holds and refreshes the
-// suggestions it offers. It runs every time the prompt may have changed and
-// asks the completer only when the mention itself changed, so typing outside a
-// mention costs nothing.
-func (m *model) syncMention() {
-	if m.completeFiles == nil || m.phase != phaseChat {
+// suggestions it offers. It returns the command that reads the project again
+// when a mention opens, so a file created while the interface runs shows up;
+// every other change only re-ranks the paths already known, which costs
+// nothing.
+func (m *model) syncMention() tea.Cmd {
+	if m.scanFiles == nil || m.phase != phaseChat {
 		m.mention = mention{}
-		return
+		return nil
 	}
 
+	opened := !m.mention.active
 	query, ok := mentionToken(m.input.Value(), m.input.Line(), m.input.Column())
 	switch {
 	case !ok:
@@ -91,24 +97,60 @@ func (m *model) syncMention() {
 	default:
 		m.mention = m.suggest(query)
 	}
+	if opened && m.mention.active {
+		return m.scanFilesCmd()
+	}
+	return nil
 }
 
 // syncPrompt refreshes everything that follows from the prompt: the completion
 // of its mention and the layout, whose rows the popup shares with the
 // conversation. It is called once the prompt may have changed.
-func (m *model) syncPrompt() {
-	m.syncMention()
+func (m *model) syncPrompt() tea.Cmd {
+	cmd := m.syncMention()
+	m.syncLayout()
+	return cmd
+}
+
+// scanFilesCmd returns the command that reads the project again and reports
+// its paths as a filesScannedMsg. The read runs outside the update loop, so a
+// slow filesystem never stalls the interface, and it never fails the prompt:
+// a read that fails keeps the paths already known.
+func (m *model) scanFilesCmd() tea.Cmd {
+	if m.scanFiles == nil {
+		return nil
+	}
+
+	scan := m.scanFiles
+	return func() tea.Msg {
+		items, err := scan()
+		return filesScannedMsg{items: items, err: err}
+	}
+}
+
+// applyScan keeps the paths of the project read again and updates the
+// suggestions of the mention in progress, so a file created while the
+// interface runs shows up without the user reopening the completion. It keeps
+// the highlighted suggestion when it still exists.
+func (m *model) applyScan(msg filesScannedMsg) {
+	if msg.err != nil {
+		return
+	}
+
+	m.candidates = msg.items
+	if !m.mention.active {
+		return
+	}
+
+	m.mention.items = filecomplete.Rank(m.candidates, m.mention.query, maxMentionItems)
+	m.mention.cursor = min(m.mention.cursor, max(0, len(m.mention.items)-1))
 	m.syncLayout()
 }
 
-// suggest asks the completer for the suggestions of a query. A listing that
-// fails leaves the popup closed, so a project that cannot be read never blocks
-// the prompt.
+// suggest returns the mention of a query, ranking the paths already known of
+// the project.
 func (m *model) suggest(query string) mention {
-	items, err := m.completeFiles.Complete(query, maxMentionItems)
-	if err != nil {
-		return mention{}
-	}
+	items := filecomplete.Rank(m.candidates, query, maxMentionItems)
 	return mention{active: true, query: query, items: items}
 }
 
@@ -132,7 +174,7 @@ func (m *model) handleMentionKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.dismissMention()
 		return nil, true
 	case keyEnter, keyTab:
-		return nil, m.acceptMention()
+		return m.acceptMention()
 	case keyUp:
 		m.moveMention(-1)
 		return nil, true
@@ -152,13 +194,12 @@ func (m *model) moveMention(direction int) {
 // acceptMention completes the highlighted suggestion. It reports whether there
 // was one to complete, so enter still sends the prompt when the mention offers
 // nothing.
-func (m *model) acceptMention() bool {
+func (m *model) acceptMention() (tea.Cmd, bool) {
 	if len(m.mention.items) == 0 {
-		return false
+		return nil, false
 	}
 
-	m.completeMention(m.mention.items[m.mention.cursor])
-	return true
+	return m.completeMention(m.mention.items[m.mention.cursor]), true
 }
 
 // completeMention replaces the mention query with the accepted path while
@@ -166,13 +207,13 @@ func (m *model) acceptMention() bool {
 // model reads the file and the interface only spells its path. A file is
 // followed by a space, which closes the popup; a directory keeps it open so
 // the user can keep narrowing the path inside it.
-func (m *model) completeMention(suggestion filecomplete.Suggestion) {
+func (m *model) completeMention(suggestion filecomplete.Suggestion) tea.Cmd {
 	m.eraseMentionQuery()
 	m.input.InsertString(suggestion.Path)
 	if !suggestion.IsDir {
 		m.input.InsertString(" ")
 	}
-	m.syncPrompt()
+	return m.syncPrompt()
 }
 
 // eraseMentionQuery deletes the query written after the mention and leaves
