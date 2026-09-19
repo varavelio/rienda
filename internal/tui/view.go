@@ -305,7 +305,7 @@ func (m *model) renderAssistantBlock(current *entry, width int) string {
 
 	body := m.markdown.render(current.text(), width, m.hasDarkBG)
 	label := m.styles.assistant.title.Render(m.assistantName())
-	return m.styles.assistant.styled(width, label, body)
+	return m.styles.assistant.rendered(width, label, body)
 }
 
 // divider returns the rule that separates two conversation blocks.

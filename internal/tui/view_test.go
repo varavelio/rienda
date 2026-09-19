@@ -169,7 +169,8 @@ func TestView(t *testing.T) {
 
 		lines := strings.Split(plain(m.render()), "\n")
 
-		require.Contains(t, lines, "coder", "the answer carries the agent label")
+		require.Contains(t, lines, markerTurn+" coder", "the answer carries its label")
+		require.Contains(t, lines, markerTurn+" You", "the prompt carries its label")
 		require.Contains(t, lines, "plain answer", "the body aligns with the label")
 	})
 
@@ -447,11 +448,11 @@ func TestView(t *testing.T) {
 func TestSectionBlock(t *testing.T) {
 	styles := newStyles(true)
 
-	t.Run("wraps the body aligned with the label", func(t *testing.T) {
+	t.Run("opens the label with a marker and aligns the body to it", func(t *testing.T) {
 		block := styles.user.block(40, "You", "one two three four five six seven eight nine ten")
 		lines := strings.Split(ansi.Strip(block), "\n")
 
-		require.Equal(t, "You", lines[0])
+		require.Equal(t, markerTurn+" You", lines[0])
 		require.Equal(t, "", lines[1])
 		require.False(t, strings.HasPrefix(lines[2], " "), "the body aligns with the label")
 		require.Contains(t, lines[2], "one two")
@@ -461,13 +462,31 @@ func TestSectionBlock(t *testing.T) {
 	})
 
 	t.Run("keeps an empty body to its label", func(t *testing.T) {
-		require.Equal(t, "Thinking", ansi.Strip(styles.thinking.block(20, "Thinking", "")))
+		require.Equal(
+			t,
+			markerActivity+" Thinking",
+			ansi.Strip(styles.thinking.block(20, "Thinking", "")),
+		)
 	})
 
 	t.Run("keeps a label that already carries its styling", func(t *testing.T) {
 		label := styles.tool.title.Render("shell") + " " + styles.dim.Render(`{"command":"ls"}`)
 
-		require.Equal(t, label, styles.tool.titled(40, label, ""))
+		require.Equal(
+			t,
+			styles.tool.markerStyle.Render(markerActivity)+" "+label,
+			styles.tool.titled(40, label, ""),
+		)
+	})
+
+	t.Run("colors the marker with the label", func(t *testing.T) {
+		block := styles.user.block(40, "You", "")
+
+		require.Equal(
+			t,
+			styles.user.markerStyle.Render(markerTurn)+" "+styles.user.title.Render("You"),
+			block,
+		)
 	})
 
 	t.Run("wraps a label that does not fit", func(t *testing.T) {

@@ -6,6 +6,17 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// Marker glyphs open the labels of the conversation blocks. A solid bar opens
+// a turn and a thin one opens an activity inside a turn, so the eye can tell
+// where a turn starts at a glance.
+const (
+	// markerTurn opens the labels of the turns of the conversation.
+	markerTurn = "▌"
+	// markerActivity opens the labels of the activities inside a turn, such
+	// as the reasoning and the tool calls.
+	markerActivity = "│"
+)
+
 // styles groups the styles of the interface. Foreground colors come from the
 // sixteen ANSI colors so the interface adapts to every terminal theme; the
 // rules adapt to the terminal background.
@@ -33,6 +44,15 @@ type styles struct {
 
 // section groups the styles of one kind of conversation block.
 type section struct {
+	// marker is the glyph that opens the label, marking where the block
+	// starts. A solid marker opens a turn and a thin one opens an activity
+	// inside a turn.
+	marker string
+
+	// markerStyle styles the marker, so it can carry the color of the label
+	// without inheriting the styling the glyph does not render well.
+	markerStyle lipgloss.Style
+
 	// title styles the label of the block.
 	title lipgloss.Style
 
@@ -52,20 +72,29 @@ func (s section) block(width int, label, body string) string {
 // breaks into several lines instead of running past the terminal.
 func (s section) titled(width int, label, body string) string {
 	if body == "" {
-		return s.styled(width, label, "")
+		return s.rendered(width, label, "")
 	}
-	return s.styled(width, label, s.body.Render(wrap(body, width)))
+	return s.rendered(width, label, s.body.Render(wrap(body, width)))
 }
 
-// styled renders a conversation block whose body is already rendered and
+// rendered renders a conversation block whose body is already rendered and
 // wrapped, which the markdown answers use so their styling survives. The label
 // is wrapped to the width of the block; the body is emitted as is.
-func (s section) styled(width int, label, body string) string {
-	lines := strings.Split(wrapLabel(label, width), "\n")
+func (s section) rendered(width int, label, body string) string {
+	lines := strings.Split(wrapLabel(s.mark(label), width), "\n")
 	if body != "" {
 		lines = append(lines, "", body)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// mark prefixes the marker glyph to an already styled label, opening the block
+// with the color of its kind.
+func (s section) mark(label string) string {
+	if s.marker == "" {
+		return label
+	}
+	return s.markerStyle.Render(s.marker) + " " + label
 }
 
 // wrapLabel wraps a label that already carries styling to width columns. It
@@ -104,24 +133,34 @@ func newStyles(isDark bool) styles {
 			Padding(1, 1),
 
 		user: section{
-			title: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
-			body:  lipgloss.NewStyle(),
+			marker:      markerTurn,
+			markerStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
+			title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
+			body:        lipgloss.NewStyle(),
 		},
 		assistant: section{
-			title: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
-			body:  lipgloss.NewStyle(),
+			marker:      markerTurn,
+			markerStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
+			title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
+			body:        lipgloss.NewStyle(),
 		},
 		thinking: section{
-			title: lipgloss.NewStyle().Faint(true).Italic(true),
-			body:  lipgloss.NewStyle().Faint(true).Italic(true),
+			marker:      markerActivity,
+			markerStyle: lipgloss.NewStyle().Faint(true),
+			title:       lipgloss.NewStyle().Faint(true).Italic(true),
+			body:        lipgloss.NewStyle().Faint(true).Italic(true),
 		},
 		tool: section{
-			title: lipgloss.NewStyle().Foreground(lipgloss.Color("14")),
-			body:  lipgloss.NewStyle().Faint(true),
+			marker:      markerActivity,
+			markerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("14")),
+			title:       lipgloss.NewStyle().Foreground(lipgloss.Color("14")),
+			body:        lipgloss.NewStyle().Faint(true),
 		},
 		failure: section{
-			title: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")),
-			body:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
+			marker:      markerTurn,
+			markerStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")),
+			title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")),
+			body:        lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
 		},
 	}
 }
