@@ -27,8 +27,9 @@ const brandRows = 3
 // its two borders and its vertical padding.
 const inputBoxRows = 4
 
-// footerGapRows is the padding between the transcript and the input box.
-const footerGapRows = 1
+// activityRows is the number of rows the status line between the transcript
+// and the input box occupies.
+const activityRows = 1
 
 // chatFooterRows is the number of rows the chat footer occupies under the
 // input box.
@@ -44,7 +45,7 @@ const listFooterRows = 4
 
 // chatChrome is the number of rows the chat phase reserves outside the
 // transcript and the input.
-const chatChrome = brandRows + footerGapRows + inputBoxRows + chatFooterRows
+const chatChrome = brandRows + activityRows + inputBoxRows + chatFooterRows
 
 // listChrome is the number of rows the list phases (the start menu, the
 // session list and the agent picker) reserve outside their rows.
@@ -93,6 +94,21 @@ const (
 	keyPgDown  = "pgdown"
 	keyVimUp   = "k"
 	keyVimDown = "j"
+)
+
+// activity is what a run is doing at the moment, reported by the single status
+// spinner that closes the conversation.
+type activity int
+
+const (
+	// activityIdle marks a run that is not in flight.
+	activityIdle activity = iota
+	// activityWorking marks the model producing an answer.
+	activityWorking
+	// activityThinking marks the model reasoning.
+	activityThinking
+	// activityTool marks a tool invocation running.
+	activityTool
 )
 
 // preferences groups the options of the harness the command center toggles.
@@ -272,6 +288,11 @@ type model struct {
 	usageIn  int
 	usageOut int
 
+	// activity is what the run in flight is doing, shown by the status
+	// spinner. activityTool names the tool it belongs to.
+	activity     activity
+	activityTool string
+
 	// confirmInterrupt reports that an escape press armed an interruption
 	// request that waits for a second press. interruptSeq numbers those
 	// requests so a stale timeout cannot drop a newer one.
@@ -416,12 +437,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		if m.running {
-			// The spinners of the tool and reasoning blocks live inside the
-			// cached conversation, so the blocks that animate need a refresh.
-			m.transcript.touchSpinners(m.preferences.HideThinking)
-			m.refreshTranscript()
-		}
 		return m, cmd
 	default:
 		var cmd tea.Cmd
@@ -694,6 +709,7 @@ func (m *model) enterChat(prepared Session) tea.Cmd {
 	m.cancel = nil
 	m.events = nil
 	m.setRunning(false)
+	m.setActivity(activityIdle, "")
 	m.transcript = transcript{}
 	m.transcript.load(prepared.History())
 	m.input.Reset()
@@ -713,6 +729,7 @@ func (m *model) submit() tea.Cmd {
 	m.input.Reset()
 	m.transcript.addUser(prompt)
 	m.setRunning(true)
+	m.setActivity(activityWorking, "")
 	m.syncLayout()
 	m.refreshTranscript()
 
@@ -740,6 +757,7 @@ func (m *model) handleEvents(events []engine.Event) tea.Cmd {
 // applyEvent folds one engine event into the interface state.
 func (m *model) applyEvent(event engine.Event) {
 	m.transcript.apply(event)
+	m.trackActivity(event)
 
 	switch event.Type {
 	case engine.EventMessageEnd:
@@ -750,6 +768,29 @@ func (m *model) applyEvent(event engine.Event) {
 	case engine.EventRunEnd:
 		m.finishRun(event.Reason)
 	}
+}
+
+// trackActivity records what the run is doing so the status spinner reports
+// it: the model writing an answer, the model reasoning or a tool running. A
+// finished tool hands back to the model, which is what the run waits for next.
+func (m *model) trackActivity(event engine.Event) {
+	switch event.Type {
+	case engine.EventTextDelta:
+		m.setActivity(activityWorking, "")
+	case engine.EventThinkingDelta:
+		m.setActivity(activityThinking, "")
+	case engine.EventToolCall, engine.EventToolOutput:
+		m.setActivity(activityTool, event.ToolName)
+	case engine.EventToolResult:
+		m.setActivity(activityWorking, "")
+	}
+}
+
+// setActivity records the activity of the run. The status line is rendered
+// from it on every frame, so nothing else needs to be refreshed.
+func (m *model) setActivity(next activity, tool string) {
+	m.activity = next
+	m.activityTool = tool
 }
 
 // setRunning records whether a run is in flight, dropping the rendered
@@ -767,6 +808,7 @@ func (m *model) finishRun(reason engine.EndReason) {
 	m.setRunning(false)
 	m.cancel = nil
 	m.events = nil
+	m.setActivity(activityIdle, "")
 	m.clearInterrupt()
 
 	if reason == engine.EndReasonInterrupted {

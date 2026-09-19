@@ -78,7 +78,7 @@ func TestView(t *testing.T) {
 		m.input.SetValue("hello")
 		update(t, m, pressEnter)
 
-		require.Contains(t, plain(m.render()), "working…")
+		require.Contains(t, plain(m.render()), "working")
 
 		sendEvent(t, m, engine.Event{
 			Type: engine.EventThinkingDelta,

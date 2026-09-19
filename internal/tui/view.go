@@ -205,16 +205,46 @@ func (m *model) viewPreparing() string {
 	return strings.Join(rows, "\n")
 }
 
-// viewChat renders the header, the conversation, the input and the footer of
-// the chat.
+// viewChat renders the header, the conversation, the status line, the input
+// and the footer of the chat.
 func (m *model) viewChat() string {
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
+	return strings.Join([]string{
 		strings.Join(m.headerRows(m.chatIdentity()), "\n"),
 		m.conversation.view(),
+		m.activityLine(),
 		m.viewInput(),
 		m.chatFooter(),
-	)
+	}, "\n")
+}
+
+// activityLine renders the single status row that closes the conversation: the
+// spinner and what the run is doing, with the key that interrupts it. The row
+// is blank while no run is in flight, so it doubles as the padding above the
+// input box.
+func (m *model) activityLine() string {
+	if !m.running {
+		return ""
+	}
+
+	hint := m.styles.footer.Render("esc interrupts")
+	if m.confirmInterrupt {
+		hint = m.styles.notice.Render("esc again to interrupt")
+	}
+	line := m.spinner.View() + m.styles.activity.Render(m.activityLabel()) +
+		m.styles.footer.Render(" · ") + hint
+	return m.clip(line)
+}
+
+// activityLabel describes what the run in flight is doing.
+func (m *model) activityLabel() string {
+	switch m.activity {
+	case activityThinking:
+		return "thinking"
+	case activityTool:
+		return "running " + m.activityTool
+	default:
+		return "working"
+	}
 }
 
 // chatIdentity renders the identity of the session: the brand followed by the
@@ -228,39 +258,25 @@ func (m *model) chatIdentity() string {
 	return m.styles.title.Render(brand) + m.styles.header.Render(" · "+strings.Join(parts, " · "))
 }
 
-// viewInput renders the prompt input inside a box, padded from the transcript
-// above.
+// viewInput renders the prompt input inside a box.
 func (m *model) viewInput() string {
-	return "\n" + m.styles.inputBox.Width(max(1, m.width)).Render(m.input.View())
+	return m.styles.inputBox.Width(max(1, m.width)).Render(m.input.View())
 }
 
-// chatFooter renders the row under the input box: the run in flight or the
-// token usage, together with the keys the interface listens to.
+// chatFooter renders the fixed row under the input box: the token usage and
+// the keys the interface listens to. The run in flight is reported by the
+// activity line above the input, not here.
 func (m *model) chatFooter() string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
 	if !m.conversation.atBottom() {
 		parts = append(parts, "↑ scrolled")
 	}
-
-	switch {
-	case m.running:
-		hint := "esc interrupts"
-		if m.confirmInterrupt {
-			hint = "esc again to interrupt"
-		}
-		parts = append(parts, m.spinner.View()+" working… · "+hint)
-	case m.usageIn > 0 || m.usageOut > 0:
-		parts = append(parts, fmt.Sprintf(
-			"tokens %d in · %d out · enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit",
-			m.usageIn,
-			m.usageOut,
-		))
-	default:
-		parts = append(parts, "enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit")
+	if m.usageIn > 0 || m.usageOut > 0 {
+		parts = append(parts, fmt.Sprintf("tokens %d in · %d out", m.usageIn, m.usageOut))
 	}
+	parts = append(parts, "enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit")
 
-	text := m.clip(m.styles.footer.Render(strings.Join(parts, " · ")))
-	return text
+	return m.clip(m.styles.footer.Render(strings.Join(parts, " · ")))
 }
 
 // renderEntry renders the transcript entry at the given index as a
@@ -285,7 +301,7 @@ func (m *model) renderBlock(index int) string {
 	case entryAssistant:
 		return m.renderAssistantBlock(current, width)
 	case entryThinking:
-		return m.renderThinkingEntry(current, width, m.active(index))
+		return m.renderThinkingEntry(current, width)
 	case entryTool:
 		return m.renderToolEntry(current, width)
 	case entryNotice:
@@ -313,30 +329,19 @@ func (m *model) divider() string {
 	return strings.Join([]string{"", m.ruleLine(m.styles.divider), ""}, "\n")
 }
 
-// active reports whether the model is still writing the entry at the given
-// index, which is the last one of a run in flight.
-func (m *model) active(index int) bool {
-	return m.running && index == len(m.transcript.entries)-1
-}
-
 // assistantName returns the name shown for the answers of the agent.
 func (m *model) assistantName() string {
 	return m.session.Info().Agent
 }
 
 // renderThinkingEntry renders a reasoning block: the whole text when the
-// preferences ask for it, a spinner while it streams and a collapsed line
-// afterwards otherwise.
-func (m *model) renderThinkingEntry(current *entry, width int, active bool) string {
-	if !m.preferences.HideThinking {
-		return m.styles.thinking.block(width, "Thinking", current.text())
+// preferences ask for it, a collapsed line otherwise. The run in flight is
+// reported by the activity line, so the block carries no spinner of its own.
+func (m *model) renderThinkingEntry(current *entry, width int) string {
+	if m.preferences.HideThinking {
+		return m.styles.thinking.block(width, "Thinking", "")
 	}
-
-	label := "Thinking"
-	if active {
-		label = m.spinner.View() + " " + label
-	}
-	return m.styles.thinking.titled(width, m.styles.thinking.title.Render(label), "")
+	return m.styles.thinking.block(width, "Thinking", current.text())
 }
 
 // renderToolEntry renders a tool invocation. The preferences decide whether
@@ -354,9 +359,6 @@ func (m *model) renderToolEntry(current *entry, width int) string {
 	label := name.Render(current.toolName)
 	if current.toolArguments != "" {
 		label += " " + m.styles.dim.Render(toolLabel(current.toolArguments))
-	}
-	if !current.toolDone {
-		label = m.spinner.View() + " " + label
 	}
 
 	if m.preferences.HideToolOutput {

@@ -102,21 +102,6 @@ func (t *transcript) touch(index int) {
 	}
 }
 
-// touchSpinners marks the entries that render an advancing spinner: a tool
-// that has not finished and, when the reasoning is hidden, the reasoning block
-// still streaming.
-func (t *transcript) touchSpinners(hideThinking bool) {
-	for index := range t.entries {
-		if current := &t.entries[index]; current.kind == entryTool && !current.toolDone {
-			t.touch(index)
-		}
-	}
-	last := len(t.entries) - 1
-	if hideThinking && last >= 0 && t.entries[last].kind == entryThinking {
-		t.touch(last)
-	}
-}
-
 // push appends an entry and marks it, together with the one before it, as
 // stale: an entry renders differently once it is no longer the last one.
 func (t *transcript) push(current entry) {

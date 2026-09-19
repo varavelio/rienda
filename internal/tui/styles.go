@@ -29,6 +29,7 @@ type styles struct {
 	divider     lipgloss.Style
 	notice      lipgloss.Style
 	footer      lipgloss.Style
+	activity    lipgloss.Style
 	on          lipgloss.Style
 	off         lipgloss.Style
 	errorText   lipgloss.Style
@@ -123,6 +124,7 @@ func newStyles(isDark bool) styles {
 			Foreground(lightDark(lipgloss.Color("246"), lipgloss.Color("242"))),
 		notice:      lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
 		footer:      lipgloss.NewStyle().Faint(true),
+		activity:    lipgloss.NewStyle(),
 		on:          lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
 		off:         lipgloss.NewStyle().Faint(true),
 		errorText:   lipgloss.NewStyle().Foreground(lipgloss.Color("9")),

@@ -239,46 +239,6 @@ func TestTranscript(t *testing.T) {
 		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
 		require.Equal(t, 1, conversation.changedFrom(), "the entry before it changes too")
 	})
-
-	t.Run("marks the entries that animate", func(t *testing.T) {
-		conversation := transcript{}
-		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
-		conversation.apply(engine.Event{
-			Type:       engine.EventToolCall,
-			ToolCallID: "call_1",
-			ToolName:   "shell",
-		})
-		conversation.apply(engine.Event{
-			Type:       engine.EventToolCall,
-			ToolCallID: "call_2",
-			ToolName:   "shell",
-		})
-		conversation.markRendered()
-
-		conversation.touchSpinners(true)
-		require.Equal(t, 1, conversation.changedFrom())
-
-		conversation.markRendered()
-		conversation.apply(engine.Event{
-			Type:       engine.EventToolResult,
-			ToolCallID: "call_1",
-			Text:       "done",
-		})
-		conversation.markRendered()
-
-		conversation.touchSpinners(true)
-		require.Equal(t, 2, conversation.changedFrom())
-	})
-
-	t.Run("does not mark reasoning that is shown", func(t *testing.T) {
-		conversation := transcript{}
-		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
-		conversation.markRendered()
-
-		conversation.touchSpinners(false)
-
-		require.Equal(t, 1, conversation.changedFrom())
-	})
 }
 
 // TestCutRunes verifies rune-safe truncation.

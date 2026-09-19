@@ -18,7 +18,15 @@
 // the agent, the reasoning of the model and the tool invocations with their
 // output. The conversation scrolls with the arrow keys, Page Up and Page Down
 // move a block at a time and Home and End jump to either end; the position is
-// kept while a run streams, so reading back never fights the incoming output. The command center (ctrl+p) holds the options of the harness, which
-// start hiding the tool output and the reasoning so that a working session
-// stays readable.
+// kept while a run streams, so reading back never fights the incoming output.
+//
+// A single status line closes the conversation and reports what the run is
+// doing at the moment, from the model writing an answer to a tool running,
+// together with the key that interrupts it. It is the only spinner: the
+// reasoning and tool blocks are static, and the footer under the input only
+// shows the token usage and the keys the interface listens to.
+//
+// The command center (ctrl+p) holds the options of the harness, which start
+// hiding the tool output and the reasoning so that a working session stays
+// readable.
 package tui

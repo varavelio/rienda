@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 
 	"github.com/varavelio/rienda/internal/agent"
@@ -669,21 +670,16 @@ func TestModel(t *testing.T) {
 		require.NotNil(t, update(t, m, m.spinner.Tick()))
 	})
 
-	t.Run("advances the spinner of the blocks in flight", func(t *testing.T) {
+	t.Run("animates the status spinner while a run is in flight", func(t *testing.T) {
 		m, _ := chatModel(t)
 		m.input.SetValue("go")
 		update(t, m, pressEnter)
-		sendEvent(t, m, engine.Event{
-			Type:       engine.EventToolCall,
-			ToolCallID: "call_1",
-			ToolName:   "shell",
-		})
-		before := m.conversation.view()
+		before := plain(m.render())
+		require.Contains(t, before, "working")
 
 		update(t, m, m.spinner.Tick())
 
-		require.NotEqual(t, before, m.conversation.view())
-		require.Contains(t, plain(m.conversation.view()), "shell")
+		require.NotEqual(t, before, plain(m.render()), "the status spinner advances")
 	})
 
 	t.Run("quits with ctrl+c", func(t *testing.T) {
@@ -813,6 +809,84 @@ func TestModel(t *testing.T) {
 
 		require.Equal(t, "coder", created)
 		require.Equal(t, phaseChat, m.phase)
+	})
+}
+
+// TestActivity verifies the single status line that reports what a run is
+// doing at the end of the conversation.
+func TestActivity(t *testing.T) {
+	t.Run("is blank while no run is in flight", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		require.Empty(t, plain(m.activityLine()))
+	})
+
+	t.Run("reports what the run is doing", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		require.Contains(t, plain(m.activityLine()), "working")
+
+		sendEvent(t, m, engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
+		require.Contains(t, plain(m.activityLine()), "thinking")
+
+		sendEvent(
+			t,
+			m,
+			engine.Event{Type: engine.EventToolCall, ToolCallID: "c1", ToolName: "shell"},
+		)
+		require.Contains(t, plain(m.activityLine()), "running shell")
+
+		sendEvent(t, m, engine.Event{Type: engine.EventToolResult, ToolCallID: "c1", Text: "ok"})
+		require.Contains(
+			t,
+			plain(m.activityLine()),
+			"working",
+			"a finished tool hands back to the model",
+		)
+
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "answer"})
+		require.Contains(t, plain(m.activityLine()), "working")
+	})
+
+	t.Run("carries the interrupt hint and arms it", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		require.Contains(t, plain(m.activityLine()), "esc interrupts")
+
+		update(t, m, pressEscape)
+		require.Contains(t, plain(m.activityLine()), "esc again to interrupt")
+	})
+
+	t.Run("clears when the run ends", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		require.Empty(t, plain(m.activityLine()))
+	})
+
+	t.Run("does not put a spinner in the blocks", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.preferences = preferences{HideThinking: true}
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
+		sendEvent(
+			t,
+			m,
+			engine.Event{Type: engine.EventToolCall, ToolCallID: "c1", ToolName: "shell"},
+		)
+
+		require.Equal(t, markerActivity+" Thinking", ansi.Strip(m.renderThinkingEntry(
+			&m.transcript.entries[1], 40,
+		)))
+		require.Equal(t, markerActivity+" shell", ansi.Strip(m.renderToolEntry(
+			&m.transcript.entries[2], 40,
+		)))
 	})
 }
 
