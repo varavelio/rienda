@@ -235,11 +235,13 @@ func (m *model) preferenceLine(index int) string {
 	return m.clip(label + "  " + m.styles.dim.Render(option.Note))
 }
 
-// viewPreparing renders the session preparation screen.
+// viewPreparing renders the session preparation screen. It names what is
+// being opened through the label recorded when the preparation started, so it
+// never indexes a selection that may not exist.
 func (m *model) viewPreparing() string {
 	rows := m.headerRows(m.brandIdentity())
 	mark := m.styles.dim.Render(m.spinner.View())
-	rows = append(rows, mark+" preparing the session of "+m.agents[m.selected].ID, "")
+	rows = append(rows, mark+" preparing the session of "+m.preparing, "")
 	return strings.Join(rows, "\n")
 }
 

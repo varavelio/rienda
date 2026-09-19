@@ -72,6 +72,26 @@ func TestView(t *testing.T) {
 		require.Contains(t, plain(m.render()), "preparing the session of coder")
 	})
 
+	t.Run("renders the session preparation without a selected agent", func(t *testing.T) {
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: -1,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+
+		update(t, m, windowMsg(80, 24))
+		update(t, m, pressDown)
+		update(t, m, pressEnter)
+		cmd := update(t, m, pressEnter)
+
+		// The runtime renders the preparation phase before the asynchronous
+		// command that opens the session delivers its message, so the screen
+		// must render without a selected agent.
+		require.Equal(t, phasePreparing, m.phase)
+		require.NotNil(t, cmd)
+		require.Contains(t, plain(m.render()), "preparing the session of coder")
+	})
+
 	t.Run("renders the conversation", func(t *testing.T) {
 		m, _ := chatModel(t)
 		m.preferences = showAllPreferences()

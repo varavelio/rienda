@@ -291,6 +291,12 @@ type model struct {
 	usageIn  int
 	usageOut int
 
+	// preparing names what the preparation phase is opening, shown by its
+	// screen. It is set when the phase starts so the screen never has to
+	// derive it from the current selection, which may not exist when a stored
+	// session brings its own agent.
+	preparing string
+
 	// activity is what the run in flight is doing, shown by the status
 	// spinner. activityTool names the tool it belongs to.
 	activity     activity
@@ -348,6 +354,7 @@ func newModel(cfg modelConfig) *model {
 		selected:      cfg.selected,
 		sessions:      cfg.sessions,
 		phase:         startPhase(cfg),
+		preparing:     selectedAgentID(cfg),
 		preferences:   defaultPreferences(),
 		input:         input,
 		conversation:  newConversation(),
@@ -382,6 +389,16 @@ func startPhase(cfg modelConfig) phase {
 	default:
 		return phasePicker
 	}
+}
+
+// selectedAgentID returns the ID of the preselected agent, or the empty
+// string when the user has not chosen one. It lets the preparation screen name
+// its agent before the selection exists.
+func selectedAgentID(cfg modelConfig) string {
+	if cfg.selected < 0 || cfg.selected >= len(cfg.agents) {
+		return ""
+	}
+	return cfg.agents[cfg.selected].ID
 }
 
 // newInputStyles builds the styles of the prompt input.
@@ -686,16 +703,20 @@ func (m *model) scrollTranscriptBlock(key tea.KeyPressMsg) {
 func (m *model) prepareNewSession() tea.Cmd {
 	prepare := m.newSession
 	agentID := m.agents[m.selected].ID
+	m.preparing = agentID
 	return tea.Batch(m.spin(), sessionCommand(func() (Session, error) { return prepare(agentID) }))
 }
 
 // prepareStoredSession returns the command that opens the selected session.
+// The session brings its own agent, so the label names the session instead of
+// an agent of the current selection, which may be empty.
 func (m *model) prepareStoredSession() tea.Cmd {
 	prepare := m.resumeSession
-	sessionID := m.sessions[m.chosen].ID
+	info := m.sessions[m.chosen]
+	m.preparing = info.Agent
 	return tea.Batch(
 		m.spin(),
-		sessionCommand(func() (Session, error) { return prepare(sessionID) }),
+		sessionCommand(func() (Session, error) { return prepare(info.ID) }),
 	)
 }
 
