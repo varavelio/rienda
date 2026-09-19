@@ -481,6 +481,13 @@ func TestModel(t *testing.T) {
 		}
 
 		require.Equal(t, 41, strings.Count(m.input.Value(), "\n")+1, "every line is kept")
+		require.LessOrEqual(
+			t,
+			m.input.Height(),
+			maxInputRows,
+			"the input stays a reasonable height",
+		)
+		require.Equal(t, maxInputRows, m.input.Height(), "the input grows up to the cap")
 	})
 
 	t.Run("opens and closes the command center", func(t *testing.T) {

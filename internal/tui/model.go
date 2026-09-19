@@ -60,6 +60,10 @@ const inputPromptWidth = 2
 // minInputRows is the smallest the prompt input can grow to, a single line.
 const minInputRows = 1
 
+// maxInputRows is the tallest the prompt input grows to, so a long prompt
+// never takes over the interface. The input scrolls its content beyond that.
+const maxInputRows = 10
+
 // minTranscriptRows is the number of conversation rows kept visible however
 // tall the prompt input grows, so a long prompt never hides the answer.
 const minTranscriptRows = 3
@@ -844,10 +848,12 @@ func (m *model) resize(width, height int) {
 }
 
 // syncInputHeight caps the visible rows of the prompt input so a long prompt
-// never hides the conversation: the input grows as tall as the content needs
-// up to the rows left over once a window of the transcript is reserved.
+// neither hides the conversation nor takes over the interface: the input grows
+// with its content up to maxInputRows, or fewer on a short terminal where even
+// that would leave no room for the transcript.
 func (m *model) syncInputHeight() {
-	m.input.MaxHeight = max(minInputRows, m.height-chatChrome-minTranscriptRows)
+	room := m.height - chatChrome - minTranscriptRows
+	m.input.MaxHeight = max(minInputRows, min(maxInputRows, room))
 }
 
 // syncLayout resizes the transcript when the input height changed.
