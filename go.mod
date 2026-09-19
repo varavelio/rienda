@@ -7,8 +7,10 @@ require (
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.6
+	github.com/boyter/gocodewalker v1.5.1
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/nodivbyzero/try v1.1.0
+	github.com/sahilm/fuzzy v0.1.3
 	github.com/stretchr/testify v1.12.1
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3
 	go.yaml.in/yaml/v3 v3.0.5
@@ -26,6 +28,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/danwakefield/fnmatch v0.0.0-20160403171240-cbb64ac3d964 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
 	github.com/gofrs/uuid/v5 v5.3.2 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
