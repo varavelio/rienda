@@ -3,8 +3,7 @@ package tui
 import "strings"
 
 // conversation holds the rendered rows of the transcript, grouped by block, and
-// the window of rows the interface shows. It keeps the newest rows visible
-// unless the user scrolled away.
+// the window of rows the interface shows.
 type conversation struct {
 	// rows holds every rendered row, oldest first.
 	rows []string
@@ -18,11 +17,17 @@ type conversation struct {
 
 	// offset is the index of the first visible row.
 	offset int
+
+	// follow keeps the window pinned to the newest rows as they arrive. It is
+	// set while the window rests on the bottom and cleared when the user
+	// scrolls away, so a re-render of an earlier block cannot drag the window
+	// back to the bottom.
+	follow bool
 }
 
 // newConversation builds an empty conversation with a window of one row.
 func newConversation() conversation {
-	return conversation{starts: []int{0}, height: 1}
+	return conversation{starts: []int{0}, height: 1, follow: true}
 }
 
 // blockCount returns the number of blocks the conversation holds.
@@ -32,13 +37,13 @@ func (c *conversation) blockCount() int {
 
 // appendBlock renders one block at the end of the conversation. An empty text
 // keeps an empty block, so the block indexes stay aligned with the transcript.
+// The window follows the new rows only while it rests on the bottom.
 func (c *conversation) appendBlock(text string) {
-	atBottom := c.atBottom()
 	if text != "" {
 		c.rows = append(c.rows, strings.Split(text, "\n")...)
 	}
 	c.starts = append(c.starts, len(c.rows))
-	if atBottom {
+	if c.follow {
 		c.offset = c.maxOffset()
 	}
 }
@@ -80,7 +85,49 @@ func (c *conversation) maxOffset() int {
 // scroll moves the window by the given number of rows, negative towards the
 // oldest ones and positive towards the newest ones.
 func (c *conversation) scroll(delta int) {
-	c.offset = min(max(c.offsetRows()+delta, 0), c.maxOffset())
+	c.move(c.offsetRows() + delta)
+}
+
+// scrollBlock moves the window to the start of the previous block when the
+// direction is negative, or of the next block when it is positive, so the
+// reader advances message by message.
+func (c *conversation) scrollBlock(direction int) {
+	offset := c.offsetRows()
+	target := c.maxOffset()
+	if direction < 0 {
+		target = 0
+		for _, start := range c.starts {
+			if start >= offset {
+				break
+			}
+			target = start
+		}
+	} else {
+		for _, start := range c.starts {
+			if start > offset {
+				target = start
+				break
+			}
+		}
+	}
+	c.move(target)
+}
+
+// scrollToTop moves the window to the oldest rows.
+func (c *conversation) scrollToTop() {
+	c.move(0)
+}
+
+// scrollToBottom moves the window to the newest rows and follows them again.
+func (c *conversation) scrollToBottom() {
+	c.move(c.maxOffset())
+}
+
+// move places the window at the given row, clamping it to the rows the
+// conversation holds, and records whether it rests on the bottom.
+func (c *conversation) move(offset int) {
+	c.offset = min(max(offset, 0), c.maxOffset())
+	c.follow = c.atBottom()
 }
 
 // view returns the visible rows, padded above so a conversation shorter than

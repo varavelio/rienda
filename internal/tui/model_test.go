@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"image/color"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -76,6 +77,9 @@ var (
 	pressCtrlJ  = tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}
 	pressCtrlP  = tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
 	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
+	pressPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
+	pressHome   = tea.KeyPressMsg{Code: tea.KeyHome}
+	pressEnd    = tea.KeyPressMsg{Code: tea.KeyEnd}
 )
 
 // windowMsg builds a terminal resize message.
@@ -405,6 +409,78 @@ func TestModel(t *testing.T) {
 		update(t, m, pressUp)
 
 		require.Less(t, m.conversation.offsetRows(), before)
+	})
+
+	t.Run("keeps the scroll position while the run streams", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 20))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		for range 20 {
+			sendEvent(t, m, engine.Event{
+				Type: engine.EventTextDelta,
+				Text: "para\n\n",
+			})
+		}
+
+		update(t, m, pressPgUp)
+		scrolled := m.conversation.offsetRows()
+		require.Less(t, scrolled, m.conversation.maxOffset(), "the window scrolled up")
+
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "more\n\n"})
+
+		require.Equal(t, scrolled, m.conversation.offsetRows(), "the stream must not drag it back")
+	})
+
+	t.Run("jumps to the top and the bottom with home and end", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 20))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		for range 20 {
+			sendEvent(t, m, engine.Event{
+				Type: engine.EventTextDelta,
+				Text: "para\n\n",
+			})
+		}
+
+		update(t, m, pressHome)
+		require.Zero(t, m.conversation.offsetRows(), "home goes to the top")
+
+		update(t, m, pressEnd)
+		require.True(t, m.conversation.atBottom(), "end goes to the bottom")
+	})
+
+	t.Run("moves block by block with page up and page down", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 16))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		for range 12 {
+			sendEvent(t, m, engine.Event{
+				Type: engine.EventTextDelta,
+				Text: "para\n\n",
+			})
+		}
+
+		update(t, m, pressHome)
+		update(t, m, pressPgDown)
+		require.Positive(t, m.conversation.offsetRows(), "page down advances a block")
+
+		update(t, m, pressPgUp)
+		require.Zero(t, m.conversation.offsetRows(), "page up goes back a block")
+	})
+
+	t.Run("grows the prompt without a line limit", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 30))
+
+		for range 40 {
+			update(t, m, tea.KeyPressMsg{Code: 'x', Text: "x"})
+			update(t, m, pressCtrlJ)
+		}
+
+		require.Equal(t, 41, strings.Count(m.input.Value(), "\n")+1, "every line is kept")
 	})
 
 	t.Run("opens and closes the command center", func(t *testing.T) {

@@ -16,7 +16,9 @@
 //
 // A run is followed through the conversation the model renders: the answers of
 // the agent, the reasoning of the model and the tool invocations with their
-// output. The command center (ctrl+p) holds the options of the harness, which
+// output. The conversation scrolls with the arrow keys, Page Up and Page Down
+// move a block at a time and Home and End jump to either end; the position is
+// kept while a run streams, so reading back never fights the incoming output. The command center (ctrl+p) holds the options of the harness, which
 // start hiding the tool output and the reasoning so that a working session
 // stays readable.
 package tui

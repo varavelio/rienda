@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"math"
 	"strings"
 	"time"
 
@@ -56,8 +57,12 @@ const inputGutterWidth = 4
 // inputPromptWidth is the width of the prompt shown at the first input line.
 const inputPromptWidth = 2
 
-// maxInputLines caps how many lines the prompt input grows to.
-const maxInputLines = 8
+// minInputRows is the smallest the prompt input can grow to, a single line.
+const minInputRows = 1
+
+// minTranscriptRows is the number of conversation rows kept visible however
+// tall the prompt input grows, so a long prompt never hides the answer.
+const minTranscriptRows = 3
 
 // maxEventBurst caps how many events one update folds, so a flood of events
 // cannot stall the interface.
@@ -78,6 +83,8 @@ const (
 	keyEnter   = "enter"
 	keySpace   = "space"
 	keyEscape  = "esc"
+	keyHome    = "home"
+	keyEnd     = "end"
 	keyPgUp    = "pgup"
 	keyPgDown  = "pgdown"
 	keyVimUp   = "k"
@@ -295,15 +302,18 @@ func newModel(cfg modelConfig) *model {
 	input.Placeholder = "Ask the agent something"
 	input.ShowLineNumbers = false
 	input.DynamicHeight = true
-	input.MinHeight = 1
-	input.MaxHeight = maxInputLines
+	input.MinHeight = minInputRows
+	// The prompt grows with its content without bound; only its visible height
+	// is capped, so the input scrolls instead of refusing further lines.
+	input.MaxContentHeight = math.MaxInt
+	input.MaxHeight = minInputRows
 	input.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("shift+enter", "alt+enter", "ctrl+j"),
 		key.WithHelp("shift+enter", "insert newline"),
 	)
 	input.SetPromptFunc(inputPromptWidth, inputPrompt)
 	input.SetStyles(newInputStyles(styles, defaultDarkBackground))
-	input.SetHeight(1)
+	input.SetHeight(minInputRows)
 
 	return &model{
 		agents:        cfg.agents,
@@ -601,8 +611,14 @@ func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 		}
 		m.scrollTranscript(key)
 		return nil
+	case keyHome:
+		m.conversation.scrollToTop()
+		return nil
+	case keyEnd:
+		m.conversation.scrollToBottom()
+		return nil
 	case keyPgUp, keyPgDown:
-		m.scrollTranscript(key)
+		m.scrollTranscriptBlock(key)
 		return nil
 	}
 
@@ -612,25 +628,32 @@ func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
-// scrollTranscript moves the conversation window with the given key.
+// scrollTranscript moves the conversation window one row with the given arrow
+// key.
 func (m *model) scrollTranscript(key tea.KeyPressMsg) {
-	m.conversation.scroll(scrollDelta(key, m.conversation.height))
+	m.conversation.scroll(scrollDelta(key))
 }
 
-// scrollDelta returns the rows a scroll key moves, negative towards the newest
+// scrollDelta returns the rows an arrow key moves, negative towards the newest
 // rows and positive towards the oldest ones.
-func scrollDelta(key tea.KeyPressMsg, page int) int {
+func scrollDelta(key tea.KeyPressMsg) int {
 	switch key.String() {
 	case keyUp:
 		return -1
 	case keyDown:
 		return 1
-	case keyPgUp:
-		return -page
-	case keyPgDown:
-		return page
 	}
 	return 0
+}
+
+// scrollTranscriptBlock moves the conversation window to the previous block
+// with Page Up, or to the next one with Page Down.
+func (m *model) scrollTranscriptBlock(key tea.KeyPressMsg) {
+	direction := 1
+	if key.String() == keyPgUp {
+		direction = -1
+	}
+	m.conversation.scrollBlock(direction)
 }
 
 // prepareNewSession returns the command that creates the session of the
@@ -815,8 +838,16 @@ func (m *model) resize(width, height int) {
 	m.width = width
 	m.height = height
 	m.input.SetWidth(max(1, width-inputGutterWidth))
+	m.syncInputHeight()
 	m.invalidateTranscript()
 	m.refreshTranscript()
+}
+
+// syncInputHeight caps the visible rows of the prompt input so a long prompt
+// never hides the conversation: the input grows as tall as the content needs
+// up to the rows left over once a window of the transcript is reserved.
+func (m *model) syncInputHeight() {
+	m.input.MaxHeight = max(minInputRows, m.height-chatChrome-minTranscriptRows)
 }
 
 // syncLayout resizes the transcript when the input height changed.
