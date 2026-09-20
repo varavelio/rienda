@@ -17,10 +17,15 @@ const projectInstructionsFile = "AGENTS.md"
 // project instructions appended to it.
 const projectInstructionsSeparator = "\n\n---\n\n"
 
-// projectInstructionsPreamble introduces the project instructions and states
-// that the model must follow them.
-const projectInstructionsPreamble = "The content below holds the instructions for working on " +
-	"the current project. You MUST follow them."
+// projectInstructionsTemplate injects AGENTS.md instructions by keeping the system
+// directive outside and using a clean, single-level XML container for the file content.
+const projectInstructionsTemplate = `
+CRITICAL: The project instructions loaded from AGENTS.md inside <project_instructions> are mandatory guidelines for this workspace. You MUST strictly adhere to them for every task. The ONLY exception is if the user explicitly instructs you to bypass or override a specific rule in the active conversation.
+
+<project_instructions source="AGENTS.md">
+%s
+</project_instructions>
+`
 
 // systemPrompt builds the system instruction of the next turn: the system
 // prompt of the agent followed by the instructions of the project the session
@@ -28,19 +33,24 @@ const projectInstructionsPreamble = "The content below holds the instructions fo
 // AGENTS.md applies to the next request even when earlier turns sent different
 // content.
 func (e *Engine) systemPrompt() (string, error) {
+	systemPrompt := strings.TrimSpace(e.agent.SystemPrompt)
+
 	instructions, err := e.projectInstructions()
 	if err != nil {
 		return "", err
 	}
-	if instructions == "" {
-		return e.agent.SystemPrompt, nil
+	if strings.TrimSpace(instructions) == "" {
+		return systemPrompt, nil
 	}
 
-	section := projectInstructionsPreamble + "\n\n" + instructions
-	if strings.TrimSpace(e.agent.SystemPrompt) == "" {
+	section := fmt.Sprintf(projectInstructionsTemplate, instructions)
+	section = strings.TrimSpace(section)
+
+	if systemPrompt == "" {
 		return section, nil
 	}
-	return e.agent.SystemPrompt + projectInstructionsSeparator + section, nil
+
+	return systemPrompt + projectInstructionsSeparator + section, nil
 }
 
 // projectInstructions returns the instructions of the project the session runs
