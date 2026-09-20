@@ -99,18 +99,25 @@ func New(cfg Config) (*Engine, error) {
 	}, nil
 }
 
-// request builds the provider request of the next turn from the stored history.
-func (e *Engine) request() *llm.Request {
+// request builds the provider request of the next turn from the stored
+// history. The system prompt is rebuilt on every turn so the instructions of
+// the project the session runs in stay current.
+func (e *Engine) request() (*llm.Request, error) {
+	system, err := e.systemPrompt()
+	if err != nil {
+		return nil, err
+	}
+
 	return &llm.Request{
 		Model:       e.model.ID,
-		System:      e.agent.SystemPrompt,
+		System:      system,
 		Messages:    e.store.History(),
 		Tools:       e.tools.definitions,
 		MaxTokens:   e.model.MaxTokens,
 		Temperature: e.model.Temperature,
 		TopP:        e.model.TopP,
 		Thinking:    e.thinking(),
-	}
+	}, nil
 }
 
 // thinking returns the extended thinking configuration of the run. It is nil

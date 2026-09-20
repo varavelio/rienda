@@ -260,7 +260,8 @@ func TestRequest(t *testing.T) {
 			},
 		})
 
-		request := engine.request()
+		request, err := engine.request()
+		require.NoError(t, err)
 
 		require.Equal(t, "wire-model", request.Model)
 		require.Equal(t, "be nice", request.System)
@@ -273,7 +274,8 @@ func TestRequest(t *testing.T) {
 	t.Run("leaves unset generation settings untouched", func(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{Model: Model{ID: "wire-model"}})
 
-		request := engine.request()
+		request, err := engine.request()
+		require.NoError(t, err)
 
 		require.Zero(t, request.MaxTokens)
 		require.Nil(t, request.Temperature)
@@ -289,6 +291,22 @@ func TestRequest(t *testing.T) {
 		}})
 		require.NoError(t, err)
 
-		require.Equal(t, store.History(), engine.request().Messages)
+		request, err := engine.request()
+		require.NoError(t, err)
+		require.Equal(t, store.History(), request.Messages)
+	})
+
+	t.Run("includes the project instructions in the system prompt", func(t *testing.T) {
+		dir := t.TempDir()
+		writeProjectInstructions(t, dir, "Use tabs.")
+		engine, _ := newTestEngine(t, Config{
+			Agent:   agent.Agent{SystemPrompt: "be nice"},
+			Workdir: dir,
+		})
+
+		request, err := engine.request()
+		require.NoError(t, err)
+		require.Contains(t, request.System, "be nice")
+		require.Contains(t, request.System, "Use tabs.")
 	})
 }

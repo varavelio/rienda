@@ -6,8 +6,13 @@
 // calls, the caller cancels the context, or a failure aborts it.
 //
 // The session is the source of truth: every request is rebuilt from the stored
-// history, so a run can stop and resume at any time. A run always leaves that
-// history valid for every provider:
+// history, so a run can stop and resume at any time. The system prompt is
+// rebuilt on every turn too: the instructions of the project the session runs
+// in, read from AGENTS.md in the working directory, are appended to the system
+// prompt of the agent and sent current, so an edit to that file applies to the
+// next request even when earlier turns sent different content.
+//
+// A run always leaves that history valid for every provider:
 //
 //   - A partial model response is never persisted, so a failed or canceled
 //     stream leaves the history ending in a user message.

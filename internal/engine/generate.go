@@ -222,7 +222,12 @@ func (e *Engine) streamTurn(
 	ctx context.Context,
 	events chan<- Event,
 ) (turn, bool, error) {
-	stream, err := e.client.Stream(ctx, e.request())
+	request, err := e.request()
+	if err != nil {
+		return turn{}, false, err
+	}
+
+	stream, err := e.client.Stream(ctx, request)
 	if err != nil {
 		return turn{}, false, fmt.Errorf("engine: stream response: %w", err)
 	}
