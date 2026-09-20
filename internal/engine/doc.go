@@ -8,9 +8,11 @@
 // The session is the source of truth: every request is rebuilt from the stored
 // history, so a run can stop and resume at any time. The system prompt is
 // rebuilt on every turn too: the instructions of the project the session runs
-// in, read from AGENTS.md in the working directory, are appended to the system
-// prompt of the agent and sent current, so an edit to that file applies to the
-// next request even when earlier turns sent different content.
+// in, read from the first project instruction file that exists in the working
+// directory (AGENTS.md, agents.md, AGENTS.MD, CLAUDE.md, claude.md or
+// CLAUDE.MD, in that order), are appended to the system prompt of the agent
+// and sent current, so an edit to that file applies to the next request even
+// when earlier turns sent different content.
 //
 // A run always leaves that history valid for every provider:
 //
