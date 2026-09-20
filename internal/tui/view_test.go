@@ -210,6 +210,33 @@ func TestView(t *testing.T) {
 		require.Contains(t, lines, "plain answer", "the body aligns with the label")
 	})
 
+	t.Run("closes the turn with the time it took", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 40))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "all set"})
+		m.runStart = time.Now().Add(-90 * time.Second)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		view := plain(m.render())
+		footnote := "took " + formatElapsed(90*time.Second)
+
+		require.Contains(t, view, footnote)
+		require.Greater(
+			t,
+			strings.Index(view, footnote),
+			strings.Index(view, "all set"),
+			"the time closes the turn under the answer",
+		)
+		require.Contains(
+			t,
+			strings.Split(view, "\n"),
+			footnote,
+			"the footnote aligns with the body, without left padding",
+		)
+	})
+
 	t.Run("shows raw markdown when the rendering is disabled", func(t *testing.T) {
 		m, _ := chatModel(t)
 		update(t, m, windowMsg(80, 40))
@@ -825,6 +852,31 @@ func TestFormatAge(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, formatAge(test.moment))
+		})
+	}
+}
+
+// TestFormatElapsed verifies how long a turn took, rounded to the nearest
+// second so the count stays steady while a run streams.
+func TestFormatElapsed(t *testing.T) {
+	tests := []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{name: "under half a second rounds down", d: 400 * time.Millisecond, want: "0s"},
+		{name: "over half a second rounds up", d: 1500 * time.Millisecond, want: "2s"},
+		{name: "seconds", d: 8 * time.Second, want: "8s"},
+		{name: "a whole minute", d: time.Minute, want: "1m0s"},
+		{name: "minutes and seconds", d: 65 * time.Second, want: "1m5s"},
+		{name: "a long turn", d: 90 * time.Second, want: "1m30s"},
+		{name: "a whole hour", d: 3 * time.Hour, want: "3h0m0s"},
+		{name: "beyond a day", d: 50 * time.Hour, want: "50h0m0s"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, formatElapsed(test.d))
 		})
 	}
 }

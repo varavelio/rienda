@@ -371,6 +371,10 @@ type model struct {
 	usageIn  int
 	usageOut int
 
+	// runStart is when the run in flight started, kept to report how long the
+	// turn takes. It is the zero time while no run is in flight.
+	runStart time.Time
+
 	// preparing names what the preparation phase is opening, shown by its
 	// screen. It is set when the phase starts so the screen never has to
 	// derive it from the current selection, which may not exist when a stored
@@ -1044,6 +1048,7 @@ func (m *model) submit() tea.Cmd {
 	m.syncLayout()
 	m.refreshTranscript()
 
+	m.runStart = time.Now()
 	ctx, cancel := m.newRunContext()
 	m.cancel = cancel
 	m.events = m.session.Run(ctx, prompt)
@@ -1131,15 +1136,27 @@ func (m *model) setRunning(running bool) {
 
 // finishRun marks the run as finished and reports unusual endings.
 func (m *model) finishRun(reason engine.EndReason) {
+	m.recordElapsed()
+	if reason == engine.EndReasonInterrupted {
+		m.transcript.addNotice("the run was interrupted")
+	}
+
 	m.setRunning(false)
 	m.cancel = nil
 	m.events = nil
 	m.setActivity(activityIdle, "")
 	m.clearInterrupt()
+}
 
-	if reason == engine.EndReasonInterrupted {
-		m.transcript.addNotice("the run was interrupted")
+// recordElapsed closes the turn in flight with the time the agent worked on it,
+// and clears the start of the run. It does nothing when no run was in flight.
+func (m *model) recordElapsed() {
+	if m.runStart.IsZero() {
+		return
 	}
+
+	m.transcript.finishTurn(time.Since(m.runStart))
+	m.runStart = time.Time{}
 }
 
 // requestInterrupt asks the user to confirm the interruption of the run in

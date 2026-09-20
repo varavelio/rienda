@@ -1214,6 +1214,53 @@ func TestActivity(t *testing.T) {
 	})
 }
 
+// TestRunElapsed verifies the time the agent took to answer a turn: the timer
+// starts with the prompt, follows the run while it is in flight and closes the
+// turn with the time it took once the run ends.
+func TestRunElapsed(t *testing.T) {
+	t.Run("starts the timer when the prompt is sent", func(t *testing.T) {
+		m, _ := chatModel(t)
+		require.True(t, m.runStart.IsZero(), "no run is in flight before the prompt")
+
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+
+		require.False(t, m.runStart.IsZero(), "the timer starts with the run")
+	})
+
+	t.Run("shows the time in flight beside the status line", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		m.runStart = time.Now().Add(-2 * time.Minute)
+
+		require.Contains(t, plain(m.activityLine()), formatElapsed(2*time.Minute))
+	})
+
+	t.Run("closes the turn with the time it took", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "answer"})
+
+		m.runStart = time.Now().Add(-90 * time.Second)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		require.True(t, m.runStart.IsZero(), "the timer stops with the run")
+		last := m.transcript.entries[len(m.transcript.entries)-1]
+		require.Equal(t, entryAssistant, last.kind, "the time closes the answer")
+		require.GreaterOrEqual(t, last.elapsed, 90*time.Second)
+	})
+
+	t.Run("does nothing while no run is in flight", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		m.recordElapsed()
+
+		require.Empty(t, m.transcript.entries)
+	})
+}
+
 // TestStartPhase verifies the phase the interface opens with.
 func TestStartPhase(t *testing.T) {
 	definitions := []agent.Agent{{ID: "coder"}}

@@ -56,6 +56,9 @@ type entry struct {
 	joinedLen int
 	size      int
 
+	// elapsed is how long the turn took, recorded on the entry that closes it.
+	elapsed time.Duration
+
 	// Tool fields are only meaningful for entryTool entries.
 	toolCallID    string
 	toolName      string
@@ -132,6 +135,19 @@ func (t *transcript) addUser(text string) {
 // addNotice appends an informational notice.
 func (t *transcript) addNotice(text string) {
 	t.push(entry{kind: entryNotice, fragments: []string{text}})
+}
+
+// finishTurn records how long the turn in flight took on the entry that closes
+// it, the last one, so the interface shows the time under the last message of
+// the turn. It does nothing while the transcript holds no entry.
+func (t *transcript) finishTurn(elapsed time.Duration) {
+	if len(t.entries) == 0 {
+		return
+	}
+
+	last := len(t.entries) - 1
+	t.entries[last].elapsed = elapsed
+	t.touch(last)
 }
 
 // load seeds the transcript with the messages of a stored conversation,

@@ -121,6 +121,24 @@ func TestTranscript(t *testing.T) {
 		require.Equal(t, entryNotice, conversation.entries[1].kind)
 	})
 
+	t.Run("records the time a turn took on its last entry", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.addUser("hello")
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "hi"})
+		conversation.finishTurn(90 * time.Second)
+
+		require.Len(t, conversation.entries, 2)
+		require.Zero(t, conversation.entries[0].elapsed, "only the closing entry carries it")
+		require.Equal(t, 90*time.Second, conversation.entries[1].elapsed)
+	})
+
+	t.Run("ignores a turn that produced no entry", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.finishTurn(time.Second)
+
+		require.Empty(t, conversation.entries)
+	})
+
 	t.Run("records retried model calls as notices", func(t *testing.T) {
 		conversation := transcript{}
 		conversation.apply(engine.Event{

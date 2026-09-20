@@ -199,6 +199,13 @@ func formatAge(moment time.Time) string {
 	}
 }
 
+// formatElapsed renders how long a turn took for a person to read, rounded to
+// the nearest second so the count stays steady while a run streams instead of
+// flickering through fractions of a second, as in "8s", "1m30s" or "3h0m0s".
+func formatElapsed(d time.Duration) string {
+	return d.Round(time.Second).String()
+}
+
 // viewPicker renders the list of agents to choose from, narrowed by the query
 // typed into it.
 func (m *model) viewPicker() string {
@@ -334,6 +341,8 @@ func (m *model) activityLine() string {
 	}
 	line := m.styles.dim.Render(m.spinner.View()) + " " +
 		m.styles.activity.Render(m.activityLabel()) +
+		m.styles.footer.Render(" · ") +
+		m.styles.dim.Render(formatElapsed(time.Since(m.runStart))) +
 		m.styles.footer.Render(" · ") + hint
 	return m.clip(line)
 }
@@ -407,10 +416,20 @@ func (m *model) renderEntry(index int) string {
 }
 
 // renderBlock renders the content of the transcript entry at the given index.
+// The entry that closes a run also carries the time the turn took, shown as a
+// faint footnote under its content.
 func (m *model) renderBlock(index int) string {
 	current := &m.transcript.entries[index]
-	width := m.width
+	block := m.renderBlockBody(current, m.width)
+	if current.elapsed > 0 {
+		block += "\n\n" + m.renderElapsed(current.elapsed)
+	}
+	return block
+}
 
+// renderBlockBody renders the content of a transcript entry without the
+// footnote that closes a turn.
+func (m *model) renderBlockBody(current *entry, width int) string {
 	switch current.kind {
 	case entryUser:
 		return m.styles.user.block(width, "You", current.text())
@@ -438,6 +457,13 @@ func (m *model) renderAssistantBlock(current *entry, width int) string {
 	body := m.markdown.render(current.text(), width, m.hasDarkBG)
 	label := m.styles.assistant.title.Render(m.assistantName())
 	return m.styles.assistant.rendered(width, label, body)
+}
+
+// renderElapsed renders how long a turn took as a faint footnote under the last
+// message of the turn, so the reader sees the time the agent worked at the end
+// of every answer.
+func (m *model) renderElapsed(elapsed time.Duration) string {
+	return m.clip(m.styles.dim.Render("took " + formatElapsed(elapsed)))
 }
 
 // divider returns the rule that separates two conversation blocks.
