@@ -32,16 +32,37 @@ const treeGap = "   "
 // message never floods the tree however wide the terminal is.
 const treeMessageMax = 96
 
+// treeGutter opens every row of the tree with the mark that places its turn in
+// the conversation, in a column of its own: the dot of the branch the session
+// runs and the dot of the turn the session is at. The turns of the branches the
+// session left behind keep the column blank, so the marks of every row stay
+// aligned whatever the tree holds and the reader follows the branch the session
+// runs by scanning that column, instead of looking for a mark after each
+// message.
+const (
+	// treeBranchMark opens the rows of the branch the session runs, which is
+	// the conversation the next turn continues.
+	treeBranchMark = "●"
+	// treeCurrentMark opens the row of the turn the session is at, from which
+	// the next message hangs.
+	treeCurrentMark = "●"
+	// treeGutterGap fills the gutter of a turn of a branch the session left
+	// behind, so a row that carries no mark keeps the column.
+	treeGutterGap = " "
+)
+
 // treeMessageReserve is the columns a row keeps outside the message of its
-// turn: the author, the connector that places the turn and the marks that close
-// the row, which the message must never push out of it. It counts the runes of
-// the widest of each, because the connector and the marks are single glyphs the
-// terminal draws in one column each. The columns of the levels above the turn
-// are measured apart, because they grow with its depth.
-var treeMessageReserve = utf8.RuneCountInString("Agent (agent): ") +
-	utf8.RuneCountInString("└─ ") +
-	utf8.RuneCountInString("  ✓ ●") +
-	utf8.RuneCountInString("› ")
+// turn: the cursor, the gutter that marks the branch, the author and the
+// connector that places the turn, which the message must never push out of it.
+// It counts the runes of the widest of each, because the cursor, the gutter and
+// the connector are single glyphs the terminal draws in one column each. The
+// columns of the levels above the turn are measured apart, because they grow
+// with its depth.
+var treeMessageReserve = utf8.RuneCountInString("Agent (agent): ") + // the author
+	utf8.RuneCountInString("└─ ") + // the connector that places the turn
+	utf8.RuneCountInString("› ") + // the cursor of a row
+	utf8.RuneCountInString(treeCurrentMark) + // the mark of the gutter
+	utf8.RuneCountInString("  ") // the gutter blank and the one before the message
 
 // tree is the session tree the interface navigates: the turns of the
 // conversation, the query that narrows them and the input that edits the tag

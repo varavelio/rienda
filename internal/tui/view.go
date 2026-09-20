@@ -315,9 +315,14 @@ func (m *model) viewTree() string {
 }
 
 // treeIdentity renders the identity of the tree screen, closing it with the
-// legend of the marks that place a turn in the tree.
+// legend of the marks that place a turn in the tree. The legend writes both
+// marks with the styles the rows use, so it shows what tells the branch from
+// the turn the session is at instead of naming two marks that read the same.
 func (m *model) treeIdentity() string {
-	return m.brandIdentity() + m.styles.header.Render(" · tree · ✓ branch · ● current")
+	header := m.styles.header
+	return m.brandIdentity() + header.Render(" · tree · ") +
+		m.styles.dim.Render(treeBranchMark) + header.Render(" branch · ") +
+		m.styles.branch.Bold(true).Render(treeCurrentMark) + header.Render(" current")
 }
 
 // treeInputRow renders the input of the tree: the tag of the highlighted turn
@@ -343,41 +348,51 @@ func (m *model) treeHints() string {
 	}
 }
 
-// treeLine renders one turn of the tree with the connector that places it, the
-// author and the message, the tag that labels it and the markers of the branch
-// it belongs to. The highlighted row drops the colors of its parts, so the
-// highlight styles the whole line instead of stopping where a colored label
-// inside it ends.
+// treeLine renders one turn of the tree: the cursor that opens the highlighted
+// row, the gutter that marks the branch the turn belongs to and the turn
+// itself. The cursor styles only the message of the turn, so the mark, the tag
+// and the author keep the colors that tell them apart while the reader walks
+// the tree.
 func (m *model) treeLine(position int) string {
 	node := m.tree.nodes[m.tree.filter.shown[position]]
-	line := m.treeTurn(node)
-	if position == m.tree.filter.cursor {
-		return m.row(true, ansi.Strip(line))
+	highlighted := position == m.tree.filter.cursor
+
+	cursor := "  "
+	if highlighted {
+		cursor = "› "
 	}
-	return m.clip("  " + line)
+	return m.clip(cursor + m.treeGutter(node) + " " + m.treeTurn(node, highlighted))
 }
 
-// treeTurn renders the content of one turn of the tree, without the leading
-// spaces of its row or the highlight over it. The tag leads the row, before the
-// author and the message, so it stays visible however long the message is; the
-// message is cut to the room the row leaves it, and the marks that place the
-// turn in the tree close it.
-func (m *model) treeTurn(node treeNode) string {
+// treeTurn renders the content of one turn of the tree, without the cursor and
+// the gutter that open its row: the connector that places the turn, the tag
+// that labels it, its author and its message. The tag leads the turn, before
+// the author and the message, so it stays visible however long the message is,
+// and the message is cut to the room the row leaves it.
+func (m *model) treeTurn(node treeNode, highlighted bool) string {
 	line := treeGuides(node.guides) + treeConnector(node)
 	if node.entry.Tag != "" {
 		line += m.styles.tag.Render("#"+node.entry.Tag) + " "
 	}
 	line += m.treeNameStyle(node.entry).Render(treeName(node.entry, m.session.Info().Agent))
-	line += " " + clipText(m.treeMessageWidth(node), node.text)
-	if marks := treeMarks(node); marks != "" {
-		line += "  " + m.styles.branch.Render(marks)
-	}
+	line += " " + m.treeMessage(node, highlighted)
 	return line
+}
+
+// treeMessage returns the message of one turn of the tree, cut to the room its
+// row leaves it and written in the color of the highlight when the row holds
+// the cursor.
+func (m *model) treeMessage(node treeNode, highlighted bool) string {
+	text := clipText(m.treeMessageWidth(node), node.text)
+	if highlighted {
+		return m.styles.selected.Render(text)
+	}
+	return text
 }
 
 // treeMessageWidth returns the columns the message of a turn may take, so a
 // long message never floods the tree: it never grows past treeMessageMax, and a
-// narrow row shows what the room the marks leave it allows. A row too narrow to
+// narrow row shows what the room the gutter leaves it allows. A row too narrow to
 // leave the message any room shows it whole, which the terminal clips.
 func (m *model) treeMessageWidth(node treeNode) int {
 	room := m.width - treeMessageReserve - len(node.guides)*len(treeLevel)
@@ -447,18 +462,19 @@ func (m *model) treeNameStyle(entry session.Entry) lipgloss.Style {
 	return m.styles.assistant.title
 }
 
-// treeMarks returns the markers that place a turn in the tree: the check of
-// the branch the session leaves open and the dot of the turn the session is
-// at.
-func treeMarks(node treeNode) string {
-	marks := make([]string, 0, 2)
-	if node.active {
-		marks = append(marks, "✓")
+// treeGutter returns the cell the tree opens the row of a turn with: the dot of
+// the turn the session is at, written bright, the dot of the rest of the branch
+// the session runs, written faint, and a blank for the turns of the branches
+// the session left behind.
+func (m *model) treeGutter(node treeNode) string {
+	switch {
+	case node.current:
+		return m.styles.branch.Bold(true).Render(treeCurrentMark)
+	case node.active:
+		return m.styles.dim.Render(treeBranchMark)
+	default:
+		return treeGutterGap
 	}
-	if node.current {
-		marks = append(marks, "●")
-	}
-	return strings.Join(marks, " ")
 }
 
 // viewPreparing renders the session preparation screen. It names what is

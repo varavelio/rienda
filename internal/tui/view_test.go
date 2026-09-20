@@ -491,12 +491,66 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "You: fix the parser")
 		require.Contains(t, view, "Agent (coder): it is fixed")
 		require.Contains(t, view, "└─", "a turn hangs from the turn it follows")
-		require.Contains(t, view, "✓", "the branch the session runs is marked")
-		require.Contains(t, view, "●", "the turn the session is at is marked")
-		require.Contains(t, view, "› ", "the highlight opens the row of the turn")
+		require.Contains(t, view, "● You: fix the parser", "the branch the session runs is marked")
+		require.Contains(
+			t,
+			view,
+			"› ●",
+			"the turn the session is at opens with the cursor and its mark",
+		)
 		require.Contains(t, view, "enter rewind")
 		require.Contains(t, view, "ctrl+f fold")
 		require.Contains(t, view, "esc back")
+	})
+
+	t.Run("marks the branch and the turn the session is at", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "fix the parser"),
+			textMessage(llm.RoleAssistant, "done"),
+		)
+
+		view := m.render()
+
+		require.Contains(
+			t,
+			view,
+			"\x1b[2m●\x1b[m",
+			"the turns of the branch the session runs carry a faint mark",
+		)
+		require.Contains(
+			t,
+			view,
+			"\x1b[1;92m●\x1b[m",
+			"the turn the session is at carries a bright mark",
+		)
+		require.Contains(
+			t,
+			view,
+			"  \x1b[2m●\x1b[m \x1b[1;95mYou:\x1b[m",
+			"the mark opens the row of the turn, before its author",
+		)
+	})
+
+	t.Run("styles only the message of the highlighted row", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "fix the parser"),
+			textMessage(llm.RoleAssistant, "done"),
+		)
+
+		view := m.render()
+
+		require.Contains(
+			t,
+			view,
+			"\x1b[1;92mAgent (coder):\x1b[m \x1b[1;94mdone\x1b[m",
+			"the highlight styles the message, after the author keeps its own color",
+		)
+		require.Contains(
+			t,
+			view,
+			"› \x1b[1;92m●\x1b[m ",
+			"the highlighted row keeps the mark of the turn it holds",
+		)
 	})
 
 	t.Run("renders the branch a turn of the tree opens", func(t *testing.T) {
@@ -547,7 +601,7 @@ func TestView(t *testing.T) {
 		view := plain(m.render())
 
 		require.Contains(t, view, "You:", "a narrow row keeps the author of the turn")
-		require.Contains(t, view, "✓ ●", "the marks the row closes with survive the cut")
+		require.Contains(t, view, "› ● You:", "the cursor and the mark of the turn survive the cut")
 		for line := range strings.SplitSeq(m.render(), "\n") {
 			require.LessOrEqual(
 				t,
@@ -592,9 +646,9 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "#bug")
 		require.Regexp(
 			t,
-			`(?m)^  #bug `,
+			`(?m)^  ● #bug `,
 			view,
-			"the tag leads the row, before the author and the message",
+			"the tag follows the mark, before the author and the message",
 		)
 		require.Contains(t, m.render(), "\x1b[93m#bug", "the tag carries the color of the tags")
 	})

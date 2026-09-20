@@ -39,8 +39,8 @@ type styles struct {
 	on  lipgloss.Style
 	off lipgloss.Style
 
-	// tag styles the label of a turn of the tree and branch styles the
-	// markers that place a turn in it.
+	// tag styles the label of a turn of the tree and branch styles the marks
+	// that place a turn in the branch the session runs.
 	tag         lipgloss.Style
 	branch      lipgloss.Style
 	errorText   lipgloss.Style

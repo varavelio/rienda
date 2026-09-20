@@ -61,8 +61,11 @@
 // starts from. The turns are drawn in the order the conversation grew, each
 // subtree under the turn it follows and connected to it by the vertical lines
 // of the levels above, so a branch opened from a turn of the past lands beside
-// that turn instead of at the end of the tree. The turns of the active branch
-// are checked, the turn the session is at carries a dot, and enter returns the
+// that turn instead of at the end of the tree. Every row opens with the mark of
+// the branch its turn belongs to, drawn in a column of its own: a faint dot for
+// the turns of the branch the session runs, a bright one for the turn the
+// session is at and a blank for the turns of the branches it left behind, so
+// the branch the conversation runs reads down that column. Enter returns the
 // session to the highlighted turn, leaving the turns that followed it in the
 // tree as a branch of their own. Returning to a prompt rewinds to the turn
 // before it and offers the prompt in the input, ready to be edited and sent
