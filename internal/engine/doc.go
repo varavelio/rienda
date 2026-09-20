@@ -21,11 +21,12 @@
 //     explains why.
 //
 // Streaming a model response is retried with exponential backoff while the
-// failure is transient and none of the response reached the caller, so a
-// dropped connection or an overloaded provider stays invisible. From the first
-// streamed delta on the response is never restarted, because repeating it
-// would repeat the output the caller already saw; a failure past that point
-// ends the run.
+// failure is transient, so a dropped connection or an overloaded provider
+// stays invisible. A transient failure that arrives after part of the response
+// reached the caller is retried too: the retry reports Discard so the consumer
+// drops the partial response before the next attempt streams it again, and the
+// restarted answer is never shown twice. Only a failure that repeating cannot
+// overcome, or the exhaustion of the attempts, ends the run.
 //
 // Consumers follow a run through the channel returned by Run, which always
 // closes after a run_end event.

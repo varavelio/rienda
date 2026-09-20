@@ -28,7 +28,8 @@ const (
 	// EventMessageEnd closes an assistant message after it is persisted.
 	EventMessageEnd EventType = "message_end"
 	// EventRetry reports that a model call failed with a transient error and
-	// is being retried after a backoff.
+	// is being retried after a backoff. Discard reports that the failed
+	// attempt streamed output the consumer must drop.
 	EventRetry EventType = "retry"
 	// EventRunEnd closes a run. It is the last event of every channel.
 	EventRunEnd EventType = "run_end"
@@ -127,6 +128,11 @@ type Event struct {
 	// number of the attempt that failed and the wait before the next one.
 	Attempt int           `json:"attempt,omitempty"`
 	RetryIn time.Duration `json:"retryIn,omitempty"`
+
+	// Discard reports, in an EventRetry, that the failed attempt already
+	// streamed output, which the consumer must drop before the retried
+	// response replaces it.
+	Discard bool `json:"discard,omitempty"`
 
 	// Reason explains why the run ended in EventRunEnd.
 	Reason EndReason `json:"reason,omitempty"`

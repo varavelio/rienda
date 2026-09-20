@@ -145,14 +145,21 @@ func (responsesStream) payloads(turn Turn, sequence int, model string) ([]string
 		output = append(output, item)
 	}
 
-	payload := &responsesPayload{ID: id, Model: model, Status: responsesCompleted, Output: output}
-	if turn.Usage != nil {
-		payload.Usage = &responsesUsage{
-			InputTokens:  turn.Usage.InputTokens,
-			OutputTokens: turn.Usage.OutputTokens,
+	if !turn.Truncate {
+		payload := &responsesPayload{
+			ID:     id,
+			Model:  model,
+			Status: responsesCompleted,
+			Output: output,
 		}
+		if turn.Usage != nil {
+			payload.Usage = &responsesUsage{
+				InputTokens:  turn.Usage.InputTokens,
+				OutputTokens: turn.Usage.OutputTokens,
+			}
+		}
+		builder.add(responsesEnvelope{Type: "response.completed", Response: payload})
 	}
-	builder.add(responsesEnvelope{Type: "response.completed", Response: payload})
 
 	payloads, err := builder.done()
 	if err != nil {

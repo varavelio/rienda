@@ -89,8 +89,10 @@ func (chatStream) payloads(turn Turn, sequence int, model string) ([]string, err
 			Usage:   usage,
 		})
 	}
-	choice(chatCompletionChunkChoice{FinishReason: chatFinishReason(turn)})
-	builder.addRaw(chatDone)
+	if !turn.Truncate {
+		choice(chatCompletionChunkChoice{FinishReason: chatFinishReason(turn)})
+		builder.addRaw(chatDone)
+	}
 
 	payloads, err := builder.done()
 	if err != nil {

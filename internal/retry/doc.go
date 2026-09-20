@@ -9,7 +9,9 @@
 // The policy is a sane default, not a setting: no caller configures it, so
 // every mode behaves the same way.
 //
-// A caller that already delivered the output of a failed call must wrap its
-// error with Permanent before returning it, because repeating the call would
-// repeat what the user already saw.
+// A caller whose failure already delivered output it cannot take back wraps
+// the error with Permanent before returning it, because repeating the call
+// would repeat what the user already saw. A caller that can retract what it
+// delivered, as the engine does with a streamed response, retries instead and
+// reports the retraction to its own consumer.
 package retry

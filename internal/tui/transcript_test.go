@@ -136,6 +136,87 @@ func TestTranscript(t *testing.T) {
 		require.Contains(t, conversation.entries[0].text(), "overloaded")
 	})
 
+	t.Run("drops the partial response of a discarded attempt", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: "thinking"})
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "partial"})
+		conversation.apply(engine.Event{
+			Type:    engine.EventRetry,
+			Attempt: 1,
+			RetryIn: 250 * time.Millisecond,
+			Error:   "stream ended before [DONE]",
+			Discard: true,
+		})
+
+		require.Len(t, conversation.entries, 1)
+		require.Equal(t, entryNotice, conversation.entries[0].kind)
+		require.Contains(t, conversation.entries[0].text(), "restarting the response")
+
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "recovered"})
+		require.Len(t, conversation.entries, 2)
+		require.Equal(t, "recovered", conversation.entries[1].text())
+	})
+
+	t.Run("drops every partial response of consecutive attempts", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "first partial"})
+		conversation.apply(engine.Event{
+			Type:    engine.EventRetry,
+			Attempt: 1,
+			RetryIn: time.Second,
+			Error:   "truncated",
+			Discard: true,
+		})
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "second partial"})
+		conversation.apply(engine.Event{
+			Type:    engine.EventRetry,
+			Attempt: 2,
+			RetryIn: time.Second,
+			Error:   "truncated",
+			Discard: true,
+		})
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "recovered"})
+
+		require.Len(t, conversation.entries, 3)
+		require.Equal(t, entryNotice, conversation.entries[0].kind)
+		require.Equal(t, entryNotice, conversation.entries[1].kind)
+		require.Equal(t, entryAssistant, conversation.entries[2].kind)
+		require.Equal(t, "recovered", conversation.entries[2].text())
+	})
+
+	t.Run("keeps an earlier answer when an attempt is discarded", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "first"})
+		conversation.apply(engine.Event{
+			Type:       engine.EventMessageEnd,
+			StopReason: llm.StopReasonToolUse,
+		})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+		})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolResult,
+			ToolCallID: "call_1",
+			Text:       "ok",
+		})
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "second"})
+		conversation.apply(engine.Event{
+			Type:    engine.EventRetry,
+			Attempt: 1,
+			RetryIn: 250 * time.Millisecond,
+			Error:   "dropped",
+			Discard: true,
+		})
+
+		require.Len(t, conversation.entries, 3)
+		require.Equal(t, entryAssistant, conversation.entries[0].kind)
+		require.Equal(t, "first", conversation.entries[0].text())
+		require.Equal(t, entryTool, conversation.entries[1].kind)
+		require.Equal(t, entryNotice, conversation.entries[2].kind)
+	})
+
 	t.Run("ignores output of unknown calls", func(t *testing.T) {
 		conversation := transcript{}
 		conversation.apply(

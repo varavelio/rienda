@@ -145,6 +145,43 @@ func TestRender(t *testing.T) {
 		require.Contains(t, stderr.String(), "overloaded")
 	})
 
+	t.Run("drops the partial answer of a discarded attempt", func(t *testing.T) {
+		stdout, stderr := &strings.Builder{}, &strings.Builder{}
+
+		err := render(eventsOf(
+			engine.Event{Type: engine.EventTextDelta, Text: "partial"},
+			engine.Event{
+				Type:    engine.EventRetry,
+				Attempt: 1,
+				RetryIn: 250 * time.Millisecond,
+				Error:   "stream ended before [DONE]",
+				Discard: true,
+			},
+			engine.Event{Type: engine.EventTextDelta, Text: "recovered"},
+			engine.Event{Type: engine.EventMessageEnd},
+			engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn},
+		), stdout, stderr)
+
+		require.NoError(t, err)
+		require.Equal(t, "recovered\n", stdout.String())
+		require.Contains(t, stderr.String(), "restarting the response")
+	})
+
+	t.Run("writes the answer only once the response completes", func(t *testing.T) {
+		stdout, stderr := &strings.Builder{}, &strings.Builder{}
+
+		err := render(eventsOf(
+			engine.Event{Type: engine.EventTextDelta, Text: "hel"},
+			engine.Event{Type: engine.EventTextDelta, Text: "lo"},
+			engine.Event{Type: engine.EventMessageEnd},
+			engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn},
+		), stdout, stderr)
+
+		require.NoError(t, err)
+		require.Equal(t, "hello\n", stdout.String())
+		require.Empty(t, stderr.String())
+	})
+
 	t.Run("reports run failures", func(t *testing.T) {
 		stdout, stderr := &strings.Builder{}, &strings.Builder{}
 

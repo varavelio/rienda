@@ -60,6 +60,12 @@ type Turn struct {
 	// JSON error body instead of streaming a response, which lets a test
 	// script a provider failure.
 	Status int
+
+	// Truncate drops the terminal events that close the response, so the
+	// stream ends in the middle of its payloads, as a connection dropped
+	// while the model was still answering. The text and the tool calls of the
+	// turn are still streamed before the cut.
+	Truncate bool
 }
 
 // Call describes one tool invocation requested by a model response.

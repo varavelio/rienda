@@ -13,20 +13,34 @@ import (
 // render consumes the events of a run, writing the assistant text to stdout
 // and the tool activity and retry notices to stderr. It returns an error when
 // the run does not end by finishing its turn.
+//
+// The text of the response in flight is held back and written when the
+// response completes or when the run ends, so a transient failure that
+// discards a partial response leaves nothing of it on standard output: the
+// retried response is the only one printed.
 func render(events <-chan engine.Event, stdout, stderr io.Writer) error {
 	streamed := map[string]bool{}
 	pending := false
+	var attempt strings.Builder
 	var failure error
+
+	flush := func() error {
+		if attempt.Len() == 0 {
+			return nil
+		}
+		text := attempt.String()
+		attempt.Reset()
+		if _, err := io.WriteString(stdout, text); err != nil {
+			return fmt.Errorf("render: write assistant text: %w", err)
+		}
+		pending = !strings.HasSuffix(text, "\n")
+		return nil
+	}
 
 	for event := range events {
 		switch event.Type {
 		case engine.EventTextDelta:
-			if _, err := io.WriteString(stdout, event.Text); err != nil {
-				return fmt.Errorf("render: write assistant text: %w", err)
-			}
-			if event.Text != "" {
-				pending = !strings.HasSuffix(event.Text, "\n")
-			}
+			attempt.WriteString(event.Text)
 		case engine.EventToolCall:
 			if err := flushLine(stdout, &pending); err != nil {
 				return err
@@ -48,16 +62,25 @@ func render(events <-chan engine.Event, stdout, stderr io.Writer) error {
 				return err
 			}
 		case engine.EventMessageEnd:
+			if err := flush(); err != nil {
+				return err
+			}
 			if err := flushLine(stdout, &pending); err != nil {
 				return err
 			}
 		case engine.EventRetry:
+			if event.Discard {
+				attempt.Reset()
+			}
 			if err := renderRetry(stderr, event); err != nil {
 				return err
 			}
 		case engine.EventError:
 			failure = errors.New(event.Error)
 		case engine.EventRunEnd:
+			if err := flush(); err != nil {
+				return err
+			}
 			if err := flushLine(stdout, &pending); err != nil {
 				return err
 			}
@@ -103,11 +126,17 @@ func renderToolResult(w io.Writer, event engine.Event, streamed bool) error {
 }
 
 // renderRetry reports a model call that failed with a transient error and is
-// being retried before any of its output reached standard output.
+// being retried. A retry that discarded a partial response says that the
+// response restarts, because the partial answer is not written to stdout.
 func renderRetry(w io.Writer, event engine.Event) error {
+	action := "retrying"
+	if event.Discard {
+		action = "restarting the response"
+	}
 	if _, err := fmt.Fprintf(
 		w,
-		"transient error, retrying in %s: %s\n",
+		"transient error, %s in %s: %s\n",
+		action,
 		event.RetryIn.Round(time.Millisecond),
 		event.Error,
 	); err != nil {

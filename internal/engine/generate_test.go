@@ -214,13 +214,63 @@ func TestGenerate(t *testing.T) {
 		require.Equal(t, []EventType{EventRetry, EventTextDelta}, eventTypes(events))
 	})
 
-	t.Run("does not restart a response that reached the caller", func(t *testing.T) {
+	t.Run("restarts a response truncated after it reached the caller", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{
+			{
+				events: []llm.StreamEvent{{Type: llm.StreamTextDelta, Text: "partial"}},
+				nextErr: fmt.Errorf(
+					"openai-chat-completions: stream ended before [DONE]: %w",
+					io.ErrUnexpectedEOF,
+				),
+			},
+			{events: []llm.StreamEvent{
+				{Type: llm.StreamTextDelta, Text: "recovered"},
+				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+			}},
+		}}
+		engine, _ := newTestEngine(t, Config{Client: client})
+
+		response, events := generateTurn(t, engine)
+
+		require.Equal(t, "recovered", response.blocks[0].Text)
+		require.Len(t, client.requests, 2)
+		require.Equal(
+			t,
+			[]EventType{EventTextDelta, EventRetry, EventTextDelta},
+			eventTypes(events),
+		)
+		require.True(t, events[1].Discard)
+		require.Equal(t, "partial", events[0].Text)
+		require.Contains(t, events[1].Error, "before [DONE]")
+	})
+
+	t.Run("marks a retry that streamed no output as no discard", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{
+			{nextErr: &llm.Error{
+				Provider: "test",
+				Kind:     llm.ErrorKindOverloaded,
+				Message:  "overloaded",
+			}},
+			{events: []llm.StreamEvent{
+				{Type: llm.StreamTextDelta, Text: "recovered"},
+				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+			}},
+		}}
+		engine, _ := newTestEngine(t, Config{Client: client})
+
+		_, events := generateTurn(t, engine)
+
+		require.Equal(t, []EventType{EventRetry, EventTextDelta}, eventTypes(events))
+		require.False(t, events[0].Discard)
+	})
+
+	t.Run("does not restart a response that failed permanently", func(t *testing.T) {
 		client := &fakeClient{scripts: []script{{
 			events: []llm.StreamEvent{{Type: llm.StreamTextDelta, Text: "partial"}},
 			nextErr: &llm.Error{
 				Provider: "test",
-				Kind:     llm.ErrorKindServer,
-				Message:  "dropped",
+				Kind:     llm.ErrorKindInvalidRequest,
+				Message:  "rejected",
 			},
 		}}}
 		engine, _ := newTestEngine(t, Config{Client: client})
@@ -230,7 +280,7 @@ func TestGenerate(t *testing.T) {
 		close(events)
 		collected := collect(events)
 
-		require.ErrorContains(t, err, "dropped")
+		require.ErrorContains(t, err, "rejected")
 		require.Len(t, client.requests, 1)
 		require.Equal(t, []EventType{EventTextDelta}, eventTypes(collected))
 	})

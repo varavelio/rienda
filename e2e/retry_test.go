@@ -31,6 +31,28 @@ func TestRunRetriesTransientFailures(t *testing.T) {
 	require.Equal(t, requests[0].Path, requests[1].Path)
 }
 
+// TestRunRestartsATruncatedStream verifies that a stream dropped in the middle
+// of the response, the failure a real provider hits as "stream ended before
+// [DONE]", is retried and that only the answer of the recovered attempt reaches
+// standard output: the partial text of the truncated one is discarded.
+func TestRunRestartsATruncatedStream(t *testing.T) {
+	truncated := harness.Text("partial answer")
+	truncated.Chunks = 4
+	truncated.Truncate = true
+
+	app := newApp(t, truncated, harness.Text("recovered"))
+
+	result := app.Run(t, "run", "-a", "coder", "-p", "say hello")
+
+	result.RequireSuccess(t)
+	require.Equal(t, "recovered\n", result.Stdout)
+	require.NotContains(t, result.Stdout, "partial")
+	require.Contains(t, result.Stderr, "restarting the response")
+	require.Contains(t, result.Stderr, "before [DONE]")
+
+	require.Len(t, app.Provider().Requests(), 2)
+}
+
 // TestRunGivesUpAfterRepeatedFailures verifies that a provider that never
 // recovers fails the run instead of retrying forever.
 func TestRunGivesUpAfterRepeatedFailures(t *testing.T) {

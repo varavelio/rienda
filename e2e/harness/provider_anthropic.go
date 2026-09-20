@@ -92,16 +92,18 @@ func (anthropicStream) payloads(turn Turn, sequence int, model string) ([]string
 		stop(current)
 	}
 
-	stopReason := "end_turn"
-	if len(turn.Calls) > 0 {
-		stopReason = "tool_use"
+	if !turn.Truncate {
+		stopReason := "end_turn"
+		if len(turn.Calls) > 0 {
+			stopReason = "tool_use"
+		}
+		builder.add(anthropicEnvelope{
+			Type:  "message_delta",
+			Delta: &anthropicBlockDelta{StopReason: stopReason},
+			Usage: &anthropicUsage{OutputTokens: usage.OutputTokens},
+		})
+		builder.add(anthropicEnvelope{Type: "message_stop"})
 	}
-	builder.add(anthropicEnvelope{
-		Type:  "message_delta",
-		Delta: &anthropicBlockDelta{StopReason: stopReason},
-		Usage: &anthropicUsage{OutputTokens: usage.OutputTokens},
-	})
-	builder.add(anthropicEnvelope{Type: "message_stop"})
 
 	payloads, err := builder.done()
 	if err != nil {

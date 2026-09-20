@@ -216,6 +216,9 @@ func (t *transcript) apply(event engine.Event) {
 	case engine.EventToolResult:
 		t.finishTool(event.ToolCallID, event.IsError, event.Text)
 	case engine.EventRetry:
+		if event.Discard {
+			t.discard()
+		}
 		t.addNotice(retryNotice(event))
 	case engine.EventError:
 		t.push(entry{kind: entryError, fragments: []string{event.Error}})
@@ -223,13 +226,37 @@ func (t *transcript) apply(event engine.Event) {
 }
 
 // retryNotice describes a model call that failed transiently and is being
-// retried, so the pause before the next attempt never reads as a hang.
+// retried, so the pause before the next attempt never reads as a hang. A
+// retry that discarded a partial response says so, because the answer the
+// reader was watching disappears before the new one streams.
 func retryNotice(event engine.Event) string {
+	action := "retrying"
+	if event.Discard {
+		action = "restarting the response"
+	}
 	return fmt.Sprintf(
-		"transient error, retrying in %s: %s",
+		"transient error, %s in %s: %s",
+		action,
 		event.RetryIn.Round(time.Millisecond),
 		event.Error,
 	)
+}
+
+// discard drops the entries a failed attempt streamed, so the retried response
+// replaces the partial one instead of appending to it. A stream only produces
+// reasoning and answer text before it fails, so the trailing entries of those
+// kinds are removed and the first entry of any other kind stops the rollback.
+// That leaves everything an earlier turn wrote, its answer and its tool
+// invocations included, untouched.
+func (t *transcript) discard() {
+	for len(t.entries) > 0 {
+		last := t.entries[len(t.entries)-1]
+		if last.kind != entryAssistant && last.kind != entryThinking {
+			break
+		}
+		t.entries = t.entries[:len(t.entries)-1]
+	}
+	t.touch(len(t.entries))
 }
 
 // appendText extends the last entry of the given kind, starting a new one when
