@@ -45,13 +45,30 @@
 // into its rows instead of leaving them blank.
 //
 // The command center (ctrl+p) starts a new session, reopens the list that
-// starts a new one or continues a previous one, and holds the options of the
-// harness. The tool output and the reasoning start compact, previewing only
-// their trailing lines so a working session stays readable, and can be
-// expanded to their full text; the answers of the model can also be shown as
-// plain text instead of markdown. A new session taken from the command center
-// leaves the conversation behind and starts an empty one, while the reopened
-// list also returns to the conversation it was opened over.
+// starts a new one or continues a previous one, shows the tree of the session,
+// and holds the options of the harness. The tool output and the reasoning start
+// compact, previewing only their trailing lines so a working session stays
+// readable, and can be expanded to their full text; the answers of the model
+// can also be shown as plain text instead of markdown. A new session taken from
+// the command center leaves the conversation behind and starts an empty one,
+// while the reopened list also returns to the conversation it was opened over.
+//
+// The tree of the session (ctrl+t) shows the whole conversation instead of the
+// branch the interface runs: one node per turn, a prompt of the user or an
+// answer of the agent, labeled with its author and its message. The tool
+// invocations and the reasoning are not nodes: they belong to the turn around
+// them and travel with the branch, so a branch keeps the context of the turn it
+// starts from. The turns of the active branch are checked, the turn the session
+// is at carries a dot, and enter returns the session to the highlighted turn,
+// leaving the turns that followed it in the tree as a branch of their own.
+// Returning to a prompt rewinds to the turn before it and offers the prompt in
+// the input, ready to be edited and sent again, which is the same as returning
+// to the answer it followed. The message that follows opens a branch when the
+// turn it hangs from already has turns after it, which the row above the prompt
+// announces, and continues the branch when that turn closes it. A turn can also
+// carry a tag (ctrl+t), a word the user attaches to it to find it again, which
+// the tree shows beside the turn in a color of its own and the query matches
+// along with the message.
 //
 // An @ in the prompt opens the completion of the files of the project, so the
 // user never has to remember a path to point the model at a file. The

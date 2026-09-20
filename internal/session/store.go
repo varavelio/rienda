@@ -239,14 +239,15 @@ func (s *Store) Info() Info {
 	return s.info
 }
 
-// Entries returns a copy of the loaded entries in append order. Entries share
-// their content with the store and must not be mutated.
+// Entries returns a copy of the loaded entries of the tree in append order,
+// which is what lets a caller walk the whole conversation, branches included.
+// Entries share their content with the store and must not be mutated.
 func (s *Store) Entries() []Entry {
 	return slices.Clone(s.entries)
 }
 
 // Leaf returns the ID of the active leaf, empty when the session has no
-// messages.
+// messages or when the leaf was moved before the first one.
 func (s *Store) Leaf() string {
 	return s.leaf
 }
@@ -304,9 +305,11 @@ func (s *Store) walk(index int) []Entry {
 }
 
 // Append persists a message entry after the entry identified by ParentID, or
-// after the active leaf when ParentID is empty. The entry identifier comes
-// from the store generator, and the returned entry carries it together with
-// the parent and the creation time.
+// after the active leaf when ParentID is empty. Appending after an entry that
+// already has messages opens a branch beside them, and the appended entry
+// becomes the active leaf. The entry identifier comes from the store
+// generator, and the returned entry carries it together with the parent and the
+// creation time.
 func (s *Store) Append(ctx context.Context, entry Entry) (Entry, error) {
 	if s.file == nil {
 		return Entry{}, errors.New("session: the store is closed")
@@ -368,6 +371,78 @@ func (s *Store) Append(ctx context.Context, entry Entry) (Entry, error) {
 		s.info.Title = titleFromMessage(entry.Message)
 	}
 	return entry, nil
+}
+
+// SetLeaf moves the active leaf of the tree to the entry identified by id, so
+// the next message appended without an explicit parent continues from it. An
+// empty id moves the leaf before the first message, which appends the next one
+// at the root of the tree. A move never rewrites the file: it appends a marker
+// of its own, so the branch the session leaves behind stays recoverable.
+//
+// Moving the leaf to the entry that already holds it changes nothing, which
+// keeps a session that returns to where it stands from writing markers it does
+// not need.
+func (s *Store) SetLeaf(id string) error {
+	if s.file == nil {
+		return errors.New("session: the store is closed")
+	}
+	if id != "" && !s.known(id) {
+		return fmt.Errorf("session: unknown entry %q", id)
+	}
+	if s.leaf == id {
+		return nil
+	}
+
+	line, err := encodeLine(storedLeaf{
+		Kind:      KindLeaf,
+		TargetID:  id,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := s.file.Write(line); err != nil {
+		return fmt.Errorf("session: write %s: %w", s.path, err)
+	}
+
+	s.leaf = id
+	return nil
+}
+
+// SetTag replaces the tag of the entry identified by id, an empty tag removing
+// the one it carries. A tag labels a turn the user wants to find again, and it
+// is recorded by a marker of its own, so the message it labels never changes.
+//
+// Setting the tag the entry already carries changes nothing.
+func (s *Store) SetTag(id, tag string) error {
+	if s.file == nil {
+		return errors.New("session: the store is closed")
+	}
+	index, found := s.index[id]
+	if !found {
+		return fmt.Errorf("session: unknown entry %q", id)
+	}
+
+	tag = strings.TrimSpace(tag)
+	if s.entries[index].Tag == tag {
+		return nil
+	}
+
+	line, err := encodeLine(storedTag{
+		Kind:      KindTag,
+		TargetID:  id,
+		CreatedAt: time.Now().UTC(),
+		Tag:       tag,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := s.file.Write(line); err != nil {
+		return fmt.Errorf("session: write %s: %w", s.path, err)
+	}
+
+	s.entries[index].Tag = tag
+	return nil
 }
 
 // Close releases the session file. It is safe to call more than once.

@@ -250,12 +250,9 @@ func TestView(t *testing.T) {
 		require.NotContains(t, plain(m.render()), "# Title", "the heading renders as markdown")
 
 		update(t, m, pressCtrlP)
-		update(t, m, pressDown)
-		update(t, m, pressDown)
-		update(t, m, pressDown)
-		update(t, m, pressDown)
+		typeFilter(t, m, "Render markdown")
 		update(t, m, pressEnter)
-		update(t, m, pressEscape)
+		update(t, m, pressCtrlP)
 
 		require.Contains(t, plain(m.render()), "# Title", "the raw markdown shows again")
 	})
@@ -480,6 +477,62 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "╭")
 		require.Contains(t, view, "╰")
 		require.Contains(t, view, "Ask the agent something")
+	})
+
+	t.Run("renders the session tree", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "fix the parser"),
+			textMessage(llm.RoleAssistant, "it is fixed"),
+		)
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "Session tree")
+		require.Contains(t, view, "You: fix the parser")
+		require.Contains(t, view, "Agent (coder): it is fixed")
+		require.Contains(t, view, "└─", "a turn hangs from the turn it follows")
+		require.Contains(t, view, "✓", "the branch the session runs is marked")
+		require.Contains(t, view, "●", "the turn the session is at is marked")
+		require.Contains(t, view, "› ", "the highlight opens the row of the turn")
+		require.Contains(t, view, "enter return to the turn")
+		require.Contains(t, view, "esc back")
+	})
+
+	t.Run("renders the branch a turn of the tree opens", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "one"),
+			textMessage(llm.RoleAssistant, "first"),
+			textMessage(llm.RoleUser, "two"),
+			textMessage(llm.RoleAssistant, "second"),
+		)
+		// The session returns to the first answer and writes again from it,
+		// which opens a branch beside the turn that followed it.
+		update(t, m, pressUp)
+		update(t, m, pressUp)
+		update(t, m, pressEnter)
+		m.input.SetValue("again")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+		update(t, m, pressCtrlT)
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "You: one")
+		require.Contains(t, view, "├─ You: two", "the turns the session left keep their branch")
+		require.Contains(t, view, "└─ You: again", "the branch the session opened closes the group")
+	})
+
+	t.Run("shows the tag that labels a turn", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "fix the parser"),
+			textMessage(llm.RoleAssistant, "done"),
+		)
+		turn := stored.store.Entries()[0]
+		require.NoError(t, stored.store.SetTag(turn.ID, "bug"))
+		m.buildTree()
+
+		require.Contains(t, plain(m.render()), "#bug")
+		require.Contains(t, m.render(), "\x1b[95m#bug", "the tag carries the color of the tags")
 	})
 
 	t.Run("renders the command center", func(t *testing.T) {

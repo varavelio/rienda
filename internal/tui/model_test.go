@@ -16,16 +16,24 @@ import (
 
 	"github.com/varavelio/rienda/internal/agent"
 	"github.com/varavelio/rienda/internal/engine"
+	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 )
 
-// fakeSession is a scripted Session implementation.
+// fakeSession is a scripted Session implementation. It serves the entries it
+// holds as its whole tree and, since it branches nothing of its own, as its
+// active branch too: the tests that exercise branching open a session over a
+// real store instead.
 type fakeSession struct {
 	info         session.Info
 	entries      []session.Entry
 	events       chan engine.Event
 	prompts      []string
+	leaves       []string
+	tags         map[string]string
+	leafErr      error
+	tagErr       error
 	canceled     chan struct{}
 	canceledOnce sync.Once
 	closed       bool
@@ -47,8 +55,32 @@ func newFakeSession() *fakeSession {
 // Info returns the session metadata.
 func (s *fakeSession) Info() session.Info { return s.info }
 
-// Entries returns the stored entries of the session.
-func (s *fakeSession) Entries() []session.Entry { return s.entries }
+// Branch returns the entries of the active branch of the session.
+func (s *fakeSession) Branch() []session.Entry { return s.entries }
+
+// Tree returns the stored entries of the session.
+func (s *fakeSession) Tree() []session.Entry { return s.entries }
+
+// SetLeaf records the entry the session is moved to.
+func (s *fakeSession) SetLeaf(id string) error {
+	if s.leafErr != nil {
+		return s.leafErr
+	}
+	s.leaves = append(s.leaves, id)
+	return nil
+}
+
+// SetTag records the tag of an entry.
+func (s *fakeSession) SetTag(id, tag string) error {
+	if s.tagErr != nil {
+		return s.tagErr
+	}
+	if s.tags == nil {
+		s.tags = make(map[string]string)
+	}
+	s.tags[id] = tag
+	return nil
+}
 
 // Run records the prompt and returns the scripted event channel.
 func (s *fakeSession) Run(ctx context.Context, prompt string) <-chan engine.Event {
@@ -77,11 +109,139 @@ var (
 	pressCtrlD  = tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
 	pressCtrlJ  = tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}
 	pressCtrlP  = tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
+	pressCtrlT  = tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}
 	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
 	pressPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
 	pressHome   = tea.KeyPressMsg{Code: tea.KeyHome}
 	pressEnd    = tea.KeyPressMsg{Code: tea.KeyEnd}
 )
+
+// storeSession drives the interface over a real session store, so the tests
+// exercise the branching the store enforces instead of a reimplementation of
+// it.
+type storeSession struct {
+	t       *testing.T
+	store   *session.Store
+	events  chan engine.Event
+	prompts []string
+}
+
+// newStoreSession opens a session whose store holds the given messages, linked
+// in one branch, so the interface can return to any of its turns.
+func newStoreSession(t *testing.T, messages ...llm.Message) *storeSession {
+	t.Helper()
+
+	store, err := session.Create(t.Context(), t.TempDir(), session.Header{
+		Agent: "coder",
+		Model: "fake/test-model",
+	}, id.NewIDGenerator())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	for _, message := range messages {
+		_, err := store.Append(t.Context(), session.Entry{Message: message})
+		require.NoError(t, err)
+	}
+	return &storeSession{t: t, store: store, events: make(chan engine.Event, 16)}
+}
+
+// Info returns the session metadata.
+func (s *storeSession) Info() session.Info { return s.store.Info() }
+
+// Branch returns the entries of the active branch.
+func (s *storeSession) Branch() []session.Entry { return s.store.Branch() }
+
+// Tree returns every entry of the session.
+func (s *storeSession) Tree() []session.Entry { return s.store.Entries() }
+
+// SetLeaf moves the active leaf of the store.
+//
+//nolint:wrapcheck // the session reports the failure of the store as it is.
+func (s *storeSession) SetLeaf(id string) error { return s.store.SetLeaf(id) }
+
+// SetTag labels an entry of the store.
+//
+//nolint:wrapcheck // the session reports the failure of the store as it is.
+func (s *storeSession) SetTag(id, tag string) error { return s.store.SetTag(id, tag) }
+
+// Run records the prompt, appends it to the store the way a run does, so the
+// tests see the branch a run opens, and returns the scripted event channel.
+func (s *storeSession) Run(ctx context.Context, prompt string) <-chan engine.Event {
+	s.prompts = append(s.prompts, prompt)
+
+	_, err := s.store.Append(ctx, session.Entry{Message: textMessage(llm.RoleUser, prompt)})
+	require.NoError(s.t, err)
+	return s.events
+}
+
+// Close releases the store.
+//
+//nolint:wrapcheck // the session reports the failure of the store as it is.
+func (s *storeSession) Close() error { return s.store.Close() }
+
+// textMessage builds a message carrying a single text block.
+func textMessage(role llm.Role, text string) llm.Message {
+	return llm.Message{Role: role, Blocks: []llm.Block{{Type: llm.BlockText, Text: text}}}
+}
+
+// storeChat opens an interface over a store-backed session holding the given
+// messages, showing the conversation it runs.
+func storeChat(t *testing.T, messages ...llm.Message) (*model, *storeSession) {
+	t.Helper()
+
+	stored := newStoreSession(t, messages...)
+	m := newTestModelWith(t, modelConfig{
+		agents:     []agent.Agent{{ID: "coder"}},
+		selected:   0,
+		newSession: func(string) (Session, error) { return stored, nil },
+	})
+	update(t, m, windowMsg(80, 24))
+	run(t, m, m.Init())
+	require.Equal(t, phaseChat, m.phase)
+
+	return m, stored
+}
+
+// treeModel opens an interface over a store-backed session holding the given
+// messages and shows its tree, which is where the tests of the tree screen
+// start.
+func treeModel(t *testing.T, messages ...llm.Message) (*model, *storeSession) {
+	t.Helper()
+
+	m, stored := storeChat(t, messages...)
+	update(t, m, pressCtrlT)
+	require.Equal(t, phaseTree, m.phase)
+	return m, stored
+}
+
+// typeTag pushes text into the tag input of the tree, one keystroke at a time.
+func typeTag(t *testing.T, m *model, tag string) {
+	t.Helper()
+
+	for _, glyph := range tag {
+		update(t, m, tea.KeyPressMsg{Code: glyph, Text: string(glyph)})
+	}
+}
+
+// eraseTag removes the trailing characters of the tag input of the tree, the
+// way the keyboard delivers a backspace.
+func eraseTag(t *testing.T, m *model, count int) {
+	t.Helper()
+
+	for range count {
+		update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+}
+
+// typeFilter narrows the list the phase shows with a query, one keystroke at a
+// time, the way the keyboard delivers it.
+func typeFilter(t *testing.T, m *model, query string) {
+	t.Helper()
+
+	for _, glyph := range query {
+		update(t, m, tea.KeyPressMsg{Code: glyph, Text: string(glyph)})
+	}
+}
 
 // windowMsg builds a terminal resize message.
 func windowMsg(width, height int) tea.WindowSizeMsg {
@@ -594,7 +754,8 @@ func TestModel(t *testing.T) {
 
 		update(t, m, pressDown)
 		update(t, m, pressDown)
-		require.Equal(t, 2, m.commands.cursor, "the options follow the commands")
+		update(t, m, pressDown)
+		require.Equal(t, 3, m.commands.cursor, "the options follow the commands")
 		update(t, m, pressEnter)
 		require.True(t, m.preferences.ExpandToolOutput)
 
@@ -609,7 +770,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressEnter)
 		require.False(t, m.preferences.RenderMarkdown)
 
-		require.Equal(t, 4, m.commands.cursor)
+		require.Equal(t, 5, m.commands.cursor)
 
 		update(t, m, pressDown)
 		require.Equal(
@@ -622,7 +783,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressUp)
 		require.Equal(
 			t,
-			4,
+			5,
 			m.commands.cursor,
 			"stepping up from the first command wraps to the last",
 		)
@@ -653,10 +814,9 @@ func TestModel(t *testing.T) {
 		require.NotContains(t, compact, "first", "the preview drops the earlier lines")
 
 		update(t, m, pressCtrlP)
-		update(t, m, pressDown)
-		update(t, m, pressDown)
+		typeFilter(t, m, "Expand tool output")
 		update(t, m, pressEnter)
-		update(t, m, pressEscape)
+		update(t, m, pressCtrlP)
 
 		require.Equal(t, phaseChat, m.phase)
 
@@ -1104,6 +1264,232 @@ func TestModel(t *testing.T) {
 
 		require.Equal(t, "coder", created)
 		require.Equal(t, phaseChat, m.phase)
+	})
+}
+
+// TestTree verifies the screen that walks the session tree.
+func TestTree(t *testing.T) {
+	t.Run("opens on the turn the session is at", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+
+		require.Equal(t, phaseTree, m.phase)
+		require.Empty(t, m.tree.filter.query())
+		require.Len(t, m.tree.nodes, 2)
+		require.Equal(t, 1, m.tree.filter.cursor, "the highlight lands where the session stands")
+		require.Equal(t, stored.store.Leaf(), m.tree.nodes[1].entry.ID)
+		require.Contains(t, plain(m.render()), "You: hello")
+		require.Contains(t, plain(m.render()), "Agent (coder): hi")
+	})
+
+	t.Run("opens from the command center", func(t *testing.T) {
+		m, _ := storeChat(t, textMessage(llm.RoleUser, "hello"))
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Tree")
+		update(t, m, pressEnter)
+
+		require.Equal(t, phaseTree, m.phase)
+	})
+
+	t.Run("stays away while the agent works", func(t *testing.T) {
+		m, _ := storeChat(t, textMessage(llm.RoleUser, "hello"))
+		m.running = true
+
+		require.Nil(t, update(t, m, pressCtrlT))
+		require.Equal(t, phaseChat, m.phase)
+
+		// The command center offers the command without running it.
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Tree")
+		require.Nil(t, update(t, m, pressEnter))
+		require.Equal(t, phaseSettings, m.phase)
+	})
+
+	t.Run("stays away without a session", func(t *testing.T) {
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+		require.Equal(t, phaseStart, m.phase)
+
+		require.Nil(t, update(t, m, pressCtrlT))
+
+		require.Equal(t, phaseStart, m.phase)
+	})
+
+	t.Run("clears the query before leaving", func(t *testing.T) {
+		m, _ := treeModel(t, textMessage(llm.RoleUser, "hello"))
+
+		typeFilter(t, m, "hello")
+		update(t, m, pressEscape)
+		require.Equal(t, phaseTree, m.phase, "escape clears the query first")
+		require.Empty(t, m.tree.filter.query())
+
+		update(t, m, pressEscape)
+		require.Equal(t, phaseChat, m.phase)
+	})
+
+	t.Run("returns to the answer it highlights", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		answer := stored.store.Entries()[1]
+
+		update(t, m, pressUp)
+		update(t, m, pressUp)
+		require.Equal(t, 1, m.tree.filter.cursor, "the highlight walks the tree one turn at a time")
+		update(t, m, pressEnter)
+
+		require.Equal(t, phaseChat, m.phase)
+		require.Equal(t, answer.ID, stored.store.Leaf())
+		require.Empty(t, m.input.Value(), "an answer brings no message of its own")
+		require.True(t, m.fork, "writing there opens a branch beside the turns that follow")
+
+		view := plain(m.render())
+		require.Contains(t, view, "first")
+		require.Contains(t, view, "one")
+		require.NotContains(t, view, "second", "the conversation keeps the branch it returned to")
+		require.Contains(t, view, "the next message starts a new branch")
+	})
+
+	t.Run("continues the branch when the answer closes it", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+
+		update(t, m, pressEnter)
+
+		require.Equal(t, phaseChat, m.phase)
+		require.Equal(t, stored.store.Entries()[1].ID, stored.store.Leaf())
+		require.False(t, m.fork, "the last turn of a branch is where writing continues")
+		require.NotContains(t, plain(m.render()), "starts a new branch")
+	})
+
+	t.Run("offers the prompt it returns to", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+
+		update(t, m, pressUp)
+		update(t, m, pressEnter)
+
+		require.Equal(t, phaseChat, m.phase)
+		require.Empty(t, stored.store.Leaf(), "the session returns to the turn before the prompt")
+		require.Equal(t, "first", m.input.Value(), "the prompt comes back for the user to edit")
+		require.True(t, m.fork)
+	})
+
+	t.Run("drops the notice once the message is sent", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		update(t, m, pressUp)
+		update(t, m, pressUp)
+		update(t, m, pressEnter)
+		require.True(t, m.fork)
+
+		m.input.SetValue("again")
+		update(t, m, pressEnter)
+
+		require.False(t, m.fork, "the message wrote the branch the notice announced")
+		require.NotContains(t, plain(m.render()), "starts a new branch")
+	})
+
+	t.Run("labels a turn and finds it again", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "fix the parser"),
+			textMessage(llm.RoleAssistant, "done"),
+		)
+
+		update(t, m, pressUp)
+		update(t, m, pressCtrlT)
+		require.True(t, m.tree.editing)
+		require.Contains(t, plain(m.render()), "enter save")
+
+		typeTag(t, m, "bug")
+		update(t, m, pressEnter)
+
+		require.False(t, m.tree.editing)
+		require.Equal(t, "bug", stored.store.Entries()[0].Tag)
+		require.Contains(t, plain(m.render()), "#bug")
+
+		typeFilter(t, m, "bug")
+		require.Equal(t, 0, m.tree.filter.selected(), "the query finds the turn by its tag")
+	})
+
+	t.Run("drops the sharp of a tag written as shown", func(t *testing.T) {
+		m, stored := treeModel(t, textMessage(llm.RoleUser, "fix the parser"))
+
+		update(t, m, pressCtrlT)
+		typeTag(t, m, "#bug")
+		update(t, m, pressEnter)
+
+		require.Equal(t, "bug", stored.store.Entries()[0].Tag)
+	})
+
+	t.Run("removes the tag of a turn", func(t *testing.T) {
+		m, stored := treeModel(t, textMessage(llm.RoleUser, "fix the parser"))
+		turn := stored.store.Entries()[0]
+		require.NoError(t, stored.store.SetTag(turn.ID, "bug"))
+		m.buildTree()
+
+		update(t, m, pressCtrlT)
+		require.Equal(t, "bug", m.tree.tag.Value(), "the input offers the tag the turn carries")
+		eraseTag(t, m, len("bug"))
+		update(t, m, pressEnter)
+
+		require.False(t, m.tree.editing)
+		require.Empty(t, stored.store.Entries()[0].Tag)
+		require.NotContains(t, plain(m.render()), "#bug")
+	})
+
+	t.Run("leaves the tag as it was on escape", func(t *testing.T) {
+		m, stored := treeModel(t, textMessage(llm.RoleUser, "fix the parser"))
+
+		update(t, m, pressCtrlT)
+		typeTag(t, m, "bug")
+		update(t, m, pressEscape)
+
+		require.False(t, m.tree.editing)
+		require.Empty(t, stored.store.Entries()[0].Tag)
+		require.Empty(t, m.tree.tag.Value())
+
+		typeFilter(t, m, "fix")
+		require.Equal(t, 0, m.tree.filter.selected(), "the keys reach the query again")
+	})
+
+	t.Run("reports the failures of the session", func(t *testing.T) {
+		scripted := newFakeSession()
+		scripted.entries = []session.Entry{{
+			ID:      "m1",
+			Message: textMessage(llm.RoleUser, "hello"),
+		}}
+		scripted.leafErr = errors.New("boom")
+		m := newTestModelWith(t, modelConfig{
+			agents:     []agent.Agent{{ID: "coder"}},
+			selected:   0,
+			newSession: func(string) (Session, error) { return scripted, nil },
+		})
+		update(t, m, windowMsg(80, 24))
+		run(t, m, m.Init())
+		update(t, m, pressCtrlT)
+
+		require.Nil(t, update(t, m, pressEnter))
+
+		require.Equal(t, phaseTree, m.phase, "the tree reports the failure instead of leaving")
+		require.Contains(t, plain(m.render()), "error: boom")
 	})
 }
 

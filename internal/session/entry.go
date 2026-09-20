@@ -14,9 +14,12 @@ const (
 	KindHeader Kind = "header"
 	// KindMessage carries a conversation turn.
 	KindMessage Kind = "message"
-	// KindLeaf moves the active leaf of the tree without carrying content. It
-	// is reserved for future branching commands.
+	// KindLeaf moves the active leaf of the tree without carrying content, so
+	// the next message continues from the entry it targets.
 	KindLeaf Kind = "leaf"
+	// KindTag labels the entry it targets, so a turn of the conversation can
+	// be found again by what it is about.
+	KindTag Kind = "tag"
 )
 
 // Entry is a single node of the session tree. Only the fields valid for the
@@ -52,4 +55,9 @@ type Entry struct {
 
 	// ResponseUsage reports the token consumption of the assistant response.
 	ResponseUsage llm.Usage
+
+	// Tag labels the entry, empty when it carries none. It is a property of
+	// the message it labels, recorded by a marker of its own so the message
+	// line never changes.
+	Tag string
 }

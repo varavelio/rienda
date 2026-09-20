@@ -66,6 +66,25 @@ func appendMessage(t *testing.T, store *Store, role llm.Role, text string) Entry
 	return entry
 }
 
+// readLines returns the lines a store wrote into its file, which lets a test
+// assert that a change wrote nothing.
+func readLines(t *testing.T, store *Store) []string {
+	t.Helper()
+
+	data, err := os.ReadFile(store.path)
+	require.NoError(t, err)
+	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+}
+
+// messagesOf returns the messages of a chain of entries.
+func messagesOf(entries []Entry) []llm.Message {
+	messages := make([]llm.Message, 0, len(entries))
+	for _, entry := range entries {
+		messages = append(messages, entry.Message)
+	}
+	return messages
+}
+
 // stripMonotonic removes monotonic clock readings so entries loaded from disk
 // compare equal to freshly appended ones.
 func stripMonotonic(entries []Entry) []Entry {
@@ -448,6 +467,206 @@ func TestBranch(t *testing.T) {
 	})
 }
 
+// TestSetLeaf verifies moving the active leaf of the tree, which is what lets
+// a session return to an earlier turn and continue beside it.
+func TestSetLeaf(t *testing.T) {
+	t.Run("continues from the entry it moves to", func(t *testing.T) {
+		store := newTestStore(t)
+		root := appendMessage(t, store, llm.RoleUser, "root")
+		answered := appendMessage(t, store, llm.RoleAssistant, "answered")
+
+		require.NoError(t, store.SetLeaf(root.ID))
+
+		require.Equal(t, root.ID, store.Leaf())
+		require.Equal(t, []llm.Message{root.Message}, store.History())
+
+		// Writing from the turn the session returned to opens a branch beside
+		// the one it left, and the branch it left stays stored.
+		other := appendMessage(t, store, llm.RoleAssistant, "other")
+
+		require.Equal(t, root.ID, other.ParentID)
+		require.Equal(t, []llm.Message{root.Message, other.Message}, store.History())
+		require.Len(t, store.Entries(), 3)
+
+		left, err := store.Path(answered.ID)
+		require.NoError(t, err)
+		require.Equal(t, []llm.Message{root.Message, answered.Message}, messagesOf(left))
+	})
+
+	t.Run("moves the leaf before the first message", func(t *testing.T) {
+		store := newTestStore(t)
+		root := appendMessage(t, store, llm.RoleUser, "root")
+		appendMessage(t, store, llm.RoleAssistant, "answered")
+
+		require.NoError(t, store.SetLeaf(""))
+
+		require.Empty(t, store.Leaf())
+		require.Nil(t, store.Branch())
+		require.Nil(t, store.History())
+
+		written := appendMessage(t, store, llm.RoleUser, "again")
+
+		require.Empty(t, written.ParentID)
+		require.Len(t, store.Entries(), 3)
+		require.Equal(t, []llm.Message{written.Message}, store.History())
+		require.NotEqual(t, root.ID, written.ID)
+	})
+
+	t.Run("keeps the move when the session is reopened", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent: "coder",
+			Model: "test/model",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+
+		root := appendMessage(t, store, llm.RoleUser, "root")
+		appendMessage(t, store, llm.RoleAssistant, "answered")
+		require.NoError(t, store.SetLeaf(root.ID))
+
+		id := store.ID()
+		require.NoError(t, store.Close())
+
+		reloaded, err := Open(dir, id, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reloaded.Close()) })
+
+		require.Equal(t, root.ID, reloaded.Leaf())
+		require.True(
+			t,
+			reloaded.Info().UpdatedAt.Equal(store.Info().UpdatedAt),
+			"moving the leaf is not conversation activity",
+		)
+
+		continued := appendMessage(t, reloaded, llm.RoleAssistant, "other")
+		require.Equal(t, root.ID, continued.ParentID)
+	})
+
+	t.Run("writes nothing when the leaf already holds the entry", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent: "coder",
+			Model: "test/model",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+		entry := appendMessage(t, store, llm.RoleUser, "root")
+		before := readLines(t, store)
+
+		require.NoError(t, store.SetLeaf(entry.ID))
+
+		require.Equal(t, before, readLines(t, store))
+	})
+
+	t.Run("rejects entries it does not hold", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "root")
+
+		require.ErrorContains(t, store.SetLeaf("nope"), `unknown entry "nope"`)
+	})
+
+	t.Run("rejects a closed store", func(t *testing.T) {
+		store := newTestStore(t)
+		require.NoError(t, store.Close())
+
+		require.ErrorContains(t, store.SetLeaf(""), "store is closed")
+	})
+}
+
+// TestSetTag verifies labeling the entries of the tree, which is what lets
+// the user find a turn again.
+func TestSetTag(t *testing.T) {
+	t.Run("labels an entry and survives reopening", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent: "coder",
+			Model: "test/model",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+
+		entry := appendMessage(t, store, llm.RoleUser, "root")
+		require.NoError(t, store.SetTag(entry.ID, "bug"))
+		require.Equal(t, "bug", store.Entries()[0].Tag)
+
+		id := store.ID()
+		updated := store.Info().UpdatedAt
+		require.NoError(t, store.Close())
+
+		reloaded, err := Open(dir, id, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reloaded.Close()) })
+
+		require.Equal(t, "bug", reloaded.Entries()[0].Tag)
+		require.True(t, reloaded.Info().UpdatedAt.Equal(updated))
+	})
+
+	t.Run("replaces the tag of an entry", func(t *testing.T) {
+		store := newTestStore(t)
+		entry := appendMessage(t, store, llm.RoleUser, "root")
+
+		require.NoError(t, store.SetTag(entry.ID, "bug"))
+		require.NoError(t, store.SetTag(entry.ID, "review"))
+		require.Equal(t, "review", store.Entries()[0].Tag)
+	})
+
+	t.Run("removes the tag of an entry", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent: "coder",
+			Model: "test/model",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+
+		entry := appendMessage(t, store, llm.RoleUser, "root")
+		require.NoError(t, store.SetTag(entry.ID, "bug"))
+		require.NoError(t, store.SetTag(entry.ID, "  "))
+
+		id := store.ID()
+		require.NoError(t, store.Close())
+
+		reloaded, err := Open(dir, id, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reloaded.Close()) })
+
+		require.Empty(t, reloaded.Entries()[0].Tag)
+	})
+
+	t.Run("trims the tag it stores", func(t *testing.T) {
+		store := newTestStore(t)
+		entry := appendMessage(t, store, llm.RoleUser, "root")
+
+		require.NoError(t, store.SetTag(entry.ID, "  bug  "))
+
+		require.Equal(t, "bug", store.Entries()[0].Tag)
+	})
+
+	t.Run("writes nothing when the tag does not change", func(t *testing.T) {
+		store := newTestStore(t)
+		entry := appendMessage(t, store, llm.RoleUser, "root")
+		require.NoError(t, store.SetTag(entry.ID, "bug"))
+		before := readLines(t, store)
+
+		require.NoError(t, store.SetTag(entry.ID, "bug"))
+
+		require.Equal(t, before, readLines(t, store))
+	})
+
+	t.Run("rejects entries it does not hold", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "root")
+
+		require.ErrorContains(t, store.SetTag("nope", "bug"), `unknown entry "nope"`)
+	})
+
+	t.Run("rejects a closed store", func(t *testing.T) {
+		store := newTestStore(t)
+		require.NoError(t, store.Close())
+
+		require.ErrorContains(t, store.SetTag("", "bug"), "store is closed")
+	})
+}
+
 // TestOpen verifies session reopening.
 func TestOpen(t *testing.T) {
 	t.Run("round trips a stored session", func(t *testing.T) {
@@ -522,8 +741,7 @@ func TestOpen(t *testing.T) {
 	t.Run("honors a stored leaf marker", func(t *testing.T) {
 		dir := t.TempDir()
 		content := validHeaderLine + "\n" + userMessageLine + "\n" +
-			assistantMessageLine + "\n" +
-			`{"kind":"leaf","id":"l1","parentId":"m1","createdAt":"2026-09-16T10:15:33Z"}` + "\n"
+			assistantMessageLine + "\n" + leafMarkerLine("m1") + "\n"
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "s1"+Extension), []byte(content), 0o600))
 
 		store, err := Open(dir, "s1", &stubGenerator{})

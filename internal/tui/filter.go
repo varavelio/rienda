@@ -140,6 +140,18 @@ func (l *filter) reset() {
 	l.refresh()
 }
 
+// focus gives the query input the keys and returns the command that starts its
+// cursor.
+func (l *filter) focus() tea.Cmd {
+	return l.input.Focus()
+}
+
+// blur takes the keys away from the query input, used while another input of
+// the phase holds them.
+func (l *filter) blur() {
+	l.input.Blur()
+}
+
 // setWidth sets the columns the query input shows, so a long query scrolls
 // inside the line instead of running past the terminal.
 func (l *filter) setWidth(width int) {

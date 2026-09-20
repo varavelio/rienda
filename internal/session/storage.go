@@ -44,12 +44,21 @@ type storedEntry struct {
 	ResponseUsage      *storedUsage   `json:"responseUsage,omitempty"`
 }
 
-// storedLeaf is a leaf marker line of a session file.
+// storedLeaf is a leaf marker line of a session file. An empty target moves
+// the leaf before the first message, so the next one opens the tree again.
 type storedLeaf struct {
 	Kind      Kind      `json:"kind"`
-	ID        string    `json:"id"`
-	ParentID  string    `json:"parentId"`
+	TargetID  string    `json:"targetId,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// storedTag is a tag marker line of a session file. An empty tag removes the
+// label of its target, because a marker always describes the whole tag.
+type storedTag struct {
+	Kind      Kind      `json:"kind"`
+	TargetID  string    `json:"targetId"`
+	CreatedAt time.Time `json:"createdAt"`
+	Tag       string    `json:"tag,omitempty"`
 }
 
 // storedBlock mirrors an llm.Block in the session file format.
@@ -228,7 +237,7 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 	}
 
 	entries := make([]Entry, 0, len(lines)-1)
-	known := make(map[string]bool, len(lines)-1)
+	known := make(map[string]int, len(lines)-1)
 	leaf, pendingLeaf := "", ""
 	lastWasLeaf := false
 
@@ -249,7 +258,7 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 			if err != nil {
 				return storedHeader{}, nil, "", err
 			}
-			known[entry.ID] = true
+			known[entry.ID] = len(entries)
 			entries = append(entries, entry)
 			leaf = entry.ID
 			lastWasLeaf = false
@@ -259,14 +268,25 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 			if err := json.Unmarshal(line, &marker); err != nil {
 				return storedHeader{}, nil, "", fmt.Errorf("line %d: %w", lineNumber, err)
 			}
-			if marker.ParentID == "" {
+			pendingLeaf = marker.TargetID
+			lastWasLeaf = true
+
+		case KindTag:
+			var marker storedTag
+			if err := json.Unmarshal(line, &marker); err != nil {
+				return storedHeader{}, nil, "", fmt.Errorf("line %d: %w", lineNumber, err)
+			}
+			index, found := known[marker.TargetID]
+			if !found {
 				return storedHeader{}, nil, "", fmt.Errorf(
-					"line %d: the leaf marker does not reference an entry",
+					"line %d: the tag references unknown entry %q",
 					lineNumber,
+					marker.TargetID,
 				)
 			}
-			pendingLeaf = marker.ParentID
-			lastWasLeaf = true
+			// A tag labels a turn without moving the conversation, so it
+			// leaves the leaf of the session where it found it.
+			entries[index].Tag = marker.Tag
 
 		default:
 			// Entries written by newer versions are ignored so that an old
@@ -275,11 +295,16 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 	}
 
 	if lastWasLeaf {
-		if !known[pendingLeaf] {
-			return storedHeader{}, nil, "", fmt.Errorf(
-				"the leaf marker references unknown entry %q",
-				pendingLeaf,
-			)
+		// A leaf marker without a target moves the leaf before the first
+		// message, which leaves the session ready to be written again from
+		// its very beginning.
+		if pendingLeaf != "" {
+			if _, found := known[pendingLeaf]; !found {
+				return storedHeader{}, nil, "", fmt.Errorf(
+					"the leaf marker references unknown entry %q",
+					pendingLeaf,
+				)
+			}
 		}
 		leaf = pendingLeaf
 	}
@@ -317,19 +342,22 @@ func decodeHeader(line []byte) (storedHeader, error) {
 	return header, nil
 }
 
-// decodeMessage decodes and validates a message line.
-func decodeMessage(lineNumber int, line []byte, known map[string]bool) (Entry, error) {
+// decodeMessage decodes and validates a message line, which must carry an
+// identifier of its own and follow an entry the file already holds.
+func decodeMessage(lineNumber int, line []byte, known map[string]int) (Entry, error) {
 	var stored storedEntry
 	if err := json.Unmarshal(line, &stored); err != nil {
 		return Entry{}, fmt.Errorf("line %d: %w", lineNumber, err)
 	}
 
+	_, duplicate := known[stored.ID]
+	_, hasParent := known[stored.ParentID]
 	switch {
 	case stored.ID == "":
 		return Entry{}, fmt.Errorf("line %d: the entry id is required", lineNumber)
-	case known[stored.ID]:
+	case duplicate:
 		return Entry{}, fmt.Errorf("line %d: duplicate entry id %q", lineNumber, stored.ID)
-	case stored.ParentID != "" && !known[stored.ParentID]:
+	case stored.ParentID != "" && !hasParent:
 		return Entry{}, fmt.Errorf(
 			"line %d: parent %q is not an earlier entry",
 			lineNumber,

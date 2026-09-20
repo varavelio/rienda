@@ -21,17 +21,23 @@ const (
 // sixteen ANSI colors so the interface adapts to every terminal theme; the
 // rules adapt to the terminal background.
 type styles struct {
-	header      lipgloss.Style
-	title       lipgloss.Style
-	selected    lipgloss.Style
-	dim         lipgloss.Style
-	separator   lipgloss.Style
-	divider     lipgloss.Style
-	notice      lipgloss.Style
-	footer      lipgloss.Style
-	activity    lipgloss.Style
-	on          lipgloss.Style
-	off         lipgloss.Style
+	header    lipgloss.Style
+	title     lipgloss.Style
+	selected  lipgloss.Style
+	dim       lipgloss.Style
+	separator lipgloss.Style
+	divider   lipgloss.Style
+	notice    lipgloss.Style
+	footer    lipgloss.Style
+	activity  lipgloss.Style
+	// on and off style the state of an option of the harness.
+	on  lipgloss.Style
+	off lipgloss.Style
+
+	// tag styles the label of a turn of the tree and branch styles the
+	// markers that place a turn in it.
+	tag         lipgloss.Style
+	branch      lipgloss.Style
 	errorText   lipgloss.Style
 	inputBox    lipgloss.Style
 	inputPrompt lipgloss.Style
@@ -127,6 +133,8 @@ func newStyles(isDark bool) styles {
 		activity:    lipgloss.NewStyle(),
 		on:          lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
 		off:         lipgloss.NewStyle().Faint(true),
+		tag:         lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
+		branch:      lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
 		errorText:   lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
 		inputPrompt: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
 		inputBox: lipgloss.NewStyle().

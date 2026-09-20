@@ -14,6 +14,7 @@ import (
 	"github.com/varavelio/rienda/internal/agent"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/filecomplete"
+	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 )
 
@@ -157,6 +158,10 @@ type command struct {
 	// Set enables or disables the option of the command. It is nil for the
 	// commands that open a screen.
 	Set func(*preferences, bool)
+
+	// Enabled reports whether the command can run right now. It is nil for
+	// the commands that are always available.
+	Enabled func(*model) bool
 }
 
 // commandList lists the commands of the command center in display order: the
@@ -172,6 +177,12 @@ var commandList = []command{
 		Label: "Sessions",
 		Note:  "start a new session or continue a previous one",
 		Open:  (*model).openStart,
+	},
+	{
+		Label:   "Tree",
+		Note:    "navigate the session tree and return to an earlier turn",
+		Open:    (*model).openTree,
+		Enabled: (*model).treeReady,
 	},
 	{
 		Label: "Expand tool output",
@@ -199,8 +210,22 @@ type Session interface {
 	// Info returns the session metadata.
 	Info() session.Info
 
-	// Entries returns the entries of the active branch in conversation order.
-	Entries() []session.Entry
+	// Branch returns the entries of the active branch in conversation order,
+	// which is the conversation the interface shows.
+	Branch() []session.Entry
+
+	// Tree returns every entry of the session in append order, the branches
+	// the user left behind included, which is what the tree screen navigates.
+	Tree() []session.Entry
+
+	// SetLeaf moves the active leaf of the session to the entry identified by
+	// id, or before the first message when id is empty, so the next run
+	// continues from it.
+	SetLeaf(id string) error
+
+	// SetTag replaces the tag of the entry identified by id, an empty tag
+	// removing the one it carries.
+	SetTag(id, tag string) error
 
 	// Run starts a run and returns the channel carrying its events.
 	Run(ctx context.Context, prompt string) <-chan engine.Event
@@ -246,6 +271,9 @@ const (
 	phaseChat
 	// phaseSettings shows the command center with the harness options.
 	phaseSettings
+	// phaseTree shows the tree of the session, where the user walks the turns
+	// of the conversation and returns to an earlier one.
+	phaseTree
 )
 
 // startItem is one entry of the start list: the offer to begin a new session,
@@ -391,11 +419,18 @@ type model struct {
 	confirmInterrupt bool
 	interruptSeq     int
 
+	// fork reports that the next message opens a branch: the session was
+	// moved back to a turn that already has turns after it, so what the user
+	// writes starts a second attempt beside them. Sending the message clears
+	// it, because the branch is then written.
+	fork bool
+
 	preferences preferences
 	returnPhase phase
 
 	transcript   transcript
 	conversation conversation
+	tree         tree
 	mention      mention
 	input        textarea.Model
 	spinner      spinner
@@ -454,6 +489,7 @@ func newModel(cfg modelConfig) *model {
 		scanSessions:  cfg.scanSessions,
 		styles:        styles,
 	}
+	built.tree = newTreeScreen(built.treeText, styles, defaultDarkBackground)
 	built.buildLists(cfg.sessions)
 	return built
 }
@@ -496,6 +532,12 @@ func (m *model) agentText(index int) string {
 func (m *model) commandText(index int) string {
 	entry := commandList[index]
 	return entry.Label + " " + entry.Note
+}
+
+// treeText returns the text of one turn of the tree that the query is matched
+// against: the message it carries and the tag that labels it.
+func (m *model) treeText(index int) string {
+	return m.tree.nodes[index].search()
 }
 
 // inputPrompt returns the prompt of one line of the input, shown only at the
@@ -600,8 +642,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.advance()
 		return m, m.spinner.command()
 	default:
-		if narrowed := m.narrowedList(); narrowed != nil {
-			return m, narrowed.update(msg)
+		if cmd, handled := m.routeInput(msg); handled {
+			return m, cmd
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
@@ -609,20 +651,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// narrowedList returns the list the current phase narrows by typing, or nil
-// when the phase has no list. It routes the messages a key press does not
-// carry, such as a paste, to the query input of the visible list.
-func (m *model) narrowedList() *filter {
+// routeInput forwards a message a key press does not carry, such as a paste,
+// to the input the visible phase listens to. It reports whether a phase took
+// the message; the chat prompt takes the rest.
+func (m *model) routeInput(msg tea.Msg) (tea.Cmd, bool) {
 	switch m.phase {
 	case phaseStart:
-		return &m.start
+		return m.start.update(msg), true
 	case phasePicker:
-		return &m.picker
+		return m.picker.update(msg), true
 	case phaseSettings:
-		return &m.commands
-	default:
-		return nil
+		return m.commands.update(msg), true
+	case phaseTree:
+		return m.tree.update(msg), true
 	}
+	return nil, false
 }
 
 // applyBackground rebuilds the styles for the reported terminal background.
@@ -637,6 +680,7 @@ func (m *model) applyBackground(isDark bool) {
 	m.start.setStyles(m.styles, isDark)
 	m.picker.setStyles(m.styles, isDark)
 	m.commands.setStyles(m.styles, isDark)
+	m.tree.setStyles(m.styles, isDark)
 	m.invalidateTranscript()
 	m.refreshTranscript()
 }
@@ -653,6 +697,12 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "ctrl+p":
 		return m.toggleSettings()
+	case "ctrl+t":
+		// The tree takes the key itself: there it labels the turn under the
+		// cursor instead of opening the screen.
+		if m.phase != phaseTree {
+			return m.openTree()
+		}
 	}
 
 	switch m.phase {
@@ -664,6 +714,8 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case phaseSettings:
 		return m.handleSettingsKey(key)
+	case phaseTree:
+		return m.handleTreeKey(key)
 	default:
 		return m.handleChatKey(key)
 	}
@@ -845,6 +897,169 @@ func (m *model) closeSettings() tea.Cmd {
 	return m.showChat()
 }
 
+// treeReady reports whether the session tree can be shown and walked: it needs
+// an open session whose run is not in flight, because moving the session while
+// the agent works would leave the run writing to a branch the user abandoned.
+func (m *model) treeReady() bool {
+	return m.session != nil && !m.running
+}
+
+// openTree shows the tree of the open session: the turns of its conversation,
+// the branch the session runs and the tags that label them. The tree always
+// returns to the conversation it walks.
+func (m *model) openTree() tea.Cmd {
+	if !m.treeReady() {
+		return nil
+	}
+
+	m.buildTree()
+	m.phase = phaseTree
+	m.mention = mention{}
+	m.input.Blur()
+	return nil
+}
+
+// closeTree shows the conversation again, the screen the tree walks, and
+// focuses the prompt.
+func (m *model) closeTree() tea.Cmd {
+	return m.showChat()
+}
+
+// buildTree fills the tree screen from the open session: the turns of its
+// conversation, the query that narrows them and the input that labels one. The
+// query opens clean and the highlight lands on the turn the session is at, so
+// the tree opens where the conversation stands.
+func (m *model) buildTree() {
+	m.tree.nodes = treeNodes(m.session.Tree(), m.session.Branch())
+	m.tree.filter.setCount(len(m.tree.nodes))
+	m.tree.filter.reset()
+	m.tree.editing = false
+	m.tree.err = ""
+	m.tree.tag.Reset()
+	m.tree.focus()
+}
+
+// handleTreeKey walks the session tree: the query narrows it, the arrows move
+// the highlight, enter returns the session to the highlighted turn and ctrl+t
+// labels it. Escape clears the query first and then leaves the tree.
+func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
+	if m.tree.editing {
+		return m.handleTagKey(key)
+	}
+
+	switch key.String() {
+	case keyUp:
+		m.tree.filter.move(-1)
+	case keyDown:
+		m.tree.filter.move(1)
+	case keyEnter:
+		return m.rewind()
+	case keyEscape:
+		if m.tree.filter.clear() {
+			return nil
+		}
+		return m.closeTree()
+	case "ctrl+t":
+		return m.editTag()
+	default:
+		return m.tree.filter.update(key)
+	}
+	return nil
+}
+
+// handleTagKey edits the tag of the highlighted turn: enter stores it and
+// escape leaves it as it was.
+func (m *model) handleTagKey(key tea.KeyPressMsg) tea.Cmd {
+	switch key.String() {
+	case keyEnter:
+		return m.saveTag()
+	case keyEscape:
+		return m.closeTag()
+	}
+
+	var cmd tea.Cmd
+	m.tree.tag, cmd = m.tree.tag.Update(key)
+	return cmd
+}
+
+// editTag opens the tag of the highlighted turn for editing, offering the tag
+// it already carries.
+func (m *model) editTag() tea.Cmd {
+	index := m.tree.filter.selected()
+	if index < 0 {
+		return nil
+	}
+
+	m.tree.editing = true
+	m.tree.err = ""
+	m.tree.filter.blur()
+	m.tree.tag.SetValue(m.tree.nodes[index].entry.Tag)
+	m.tree.tag.CursorEnd()
+	return m.tree.tag.Focus()
+}
+
+// saveTag stores the tag typed for the highlighted turn. A leading sharp is
+// dropped, so a tag written the way the tree shows it reads the same, and an
+// empty tag removes the one the turn carried.
+func (m *model) saveTag() tea.Cmd {
+	index := m.tree.filter.selected()
+	if index < 0 {
+		return m.closeTag()
+	}
+
+	tag := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m.tree.tag.Value()), "#"))
+	if err := m.session.SetTag(m.tree.nodes[index].entry.ID, tag); err != nil {
+		m.tree.err = err.Error()
+		return nil
+	}
+
+	m.tree.nodes[index].entry.Tag = tag
+	return m.closeTag()
+}
+
+// closeTag leaves the tag input and hands the keys back to the query.
+func (m *model) closeTag() tea.Cmd {
+	m.tree.editing = false
+	m.tree.tag.Reset()
+	m.tree.tag.Blur()
+	return m.tree.filter.focus()
+}
+
+// rewind returns the session to the turn the tree highlights: the conversation
+// keeps the branch that leads to it, and the turns written after it stay in the
+// tree as a branch of their own. Returning to a prompt rewinds to the turn
+// before it and offers the prompt in the input, so the user edits it and sends
+// it again, which is the same as returning to the answer it followed. The next
+// message opens a branch when the turn it hangs from already has turns after
+// it.
+func (m *model) rewind() tea.Cmd {
+	index := m.tree.filter.selected()
+	if index < 0 {
+		return nil
+	}
+
+	node := m.tree.nodes[index]
+	target, prompt := node.entry.ID, ""
+	if node.entry.Message.Role == llm.RoleUser {
+		target = node.entry.ParentID
+		prompt = node.text
+	}
+	if err := m.session.SetLeaf(target); err != nil {
+		m.tree.err = err.Error()
+		return nil
+	}
+
+	m.fork = m.tree.forks(index)
+	m.input.SetValue(prompt)
+	m.reloadTranscript()
+
+	// The reader lands on the newest turn of the branch the session returned
+	// to, which is where the conversation goes on.
+	show := m.showChat()
+	m.conversation.scrollToBottom()
+	return show
+}
+
 // showChat shows the open conversation again, rendering what changed while the
 // interface was away, and focuses the prompt.
 func (m *model) showChat() tea.Cmd {
@@ -887,6 +1102,9 @@ func (m *model) activateCommand(index int) tea.Cmd {
 
 	entry := commandList[index]
 	if entry.Open != nil {
+		if entry.Enabled != nil && !entry.Enabled(m) {
+			return nil
+		}
 		return entry.Open(m)
 	}
 
@@ -1020,15 +1238,13 @@ func (m *model) enterChat(prepared Session) tea.Cmd {
 	m.phase = phaseChat
 	m.cancel = nil
 	m.events = nil
+	m.fork = false
 	m.setRunning(false)
 	m.setActivity(activityIdle, "")
-	m.transcript = transcript{}
-	m.transcript.load(prepared.Entries())
 	m.mention = mention{}
 	m.input.Reset()
 	m.syncLayout()
-	m.invalidateTranscript()
-	m.refreshTranscript()
+	m.reloadTranscript()
 	return m.input.Focus()
 }
 
@@ -1041,6 +1257,7 @@ func (m *model) submit() tea.Cmd {
 
 	m.input.Reset()
 	m.mention = mention{}
+	m.fork = false
 	m.transcript.addUser(prompt)
 	m.setRunning(true)
 	m.setActivity(activityWorking, "")
@@ -1229,6 +1446,7 @@ func (m *model) resize(width, height int) {
 	m.start.setWidth(width)
 	m.picker.setWidth(width)
 	m.commands.setWidth(width)
+	m.tree.setWidth(width)
 	m.syncInputHeight()
 	m.invalidateTranscript()
 	m.refreshTranscript()
@@ -1303,6 +1521,16 @@ func (m *model) mentionHeight() int {
 // preferences or the state of a run.
 func (m *model) invalidateTranscript() {
 	m.conversation.invalidate()
+}
+
+// reloadTranscript rebuilds the conversation from the active branch of the
+// session, used whenever the branch the interface shows changes: a session that
+// was opened and a session the user returned to an earlier turn.
+func (m *model) reloadTranscript() {
+	m.transcript = transcript{}
+	m.transcript.load(m.session.Branch())
+	m.invalidateTranscript()
+	m.refreshTranscript()
 }
 
 // refreshTranscript renders the entries of the conversation that changed into

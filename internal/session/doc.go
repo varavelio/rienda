@@ -21,12 +21,25 @@
 //	{"kind":"header","version":1,"id":"01k5w9wr4t3xk8c9b7pv3q2fme","createdAt":"...","agent":"coder","model":"openrouter/kimi-k2"}
 //	{"kind":"message","id":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"...","role":"user","blocks":[{"type":"text","text":"Fix the bug"}]}
 //	{"kind":"message","id":"01k5w9wr4ta9e5n6yk8r7s6t0b","parentId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"...","role":"assistant","responseModel":"kimi-k2","responseStopReason":"tool_use","blocks":[...]}
+//	{"kind":"leaf","targetId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"..."}
+//	{"kind":"tag","targetId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"...","tag":"bug"}
 //
 // Files are append-only: branching in place never rewrites them, so every
-// branch stays recoverable. A leaf marker entry moves the active leaf without
-// carrying conversation content, which is reserved for future branching
-// commands. Entry kinds written by newer versions are preserved on disk and
-// ignored when reading, so old binaries never destroy newer files.
+// branch stays recoverable. Two marker kinds carry the state of the session
+// instead of the conversation, and they are the only lines a session writes
+// without a user or a model turn behind them: a leaf marker moves the active
+// leaf, which is what SetLeaf persists, and a tag marker labels the entry it
+// targets, which is what SetTag persists. A marker always describes the state
+// in full, so the last one of each kind wins when the file is read again.
+//
+// Returning to a turn of the past and writing again is what creates a branch:
+// the new messages follow the turn the session returned to, beside the ones
+// that were already there, because Append hangs them from the active leaf.
+// Returning to a leaf only moves the session, so writing there continues the
+// branch instead of opening one. The tool invocations and the reasoning that
+// connect two turns travel with the branch, so a branch keeps the context of
+// the turn it starts from. Entry kinds written by newer versions are preserved
+// on disk and ignored when reading, so old binaries never destroy newer files.
 //
 // Session and entry identifiers come from an injected IDGenerator, the shared
 // id package implementation in production, so every identifier in the project

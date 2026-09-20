@@ -16,6 +16,17 @@ const validHeaderLine = `{"kind":"header","version":1,"id":"s1","createdAt":"202
 // userMessageLine is a user message line used by the decode tests.
 const userMessageLine = `{"kind":"message","id":"m1","createdAt":"2026-09-16T10:15:31Z","role":"user","blocks":[{"type":"text","text":"hello"}]}`
 
+// leafMarkerLine builds a leaf marker line moving the active leaf to id, or
+// before the first message when id is empty.
+func leafMarkerLine(id string) string {
+	return `{"kind":"leaf","targetId":"` + id + `","createdAt":"2026-09-16T10:15:33Z"}`
+}
+
+// tagMarkerLine builds a tag marker line labeling the entry id.
+func tagMarkerLine(id, tag string) string {
+	return `{"kind":"tag","targetId":"` + id + `","createdAt":"2026-09-16T10:15:33Z","tag":"` + tag + `"}`
+}
+
 // assistantMessageLine is an assistant message line used by the decode tests.
 const assistantMessageLine = `{"kind":"message","id":"m2","parentId":"m1","createdAt":"2026-09-16T10:15:32Z","role":"assistant","responseModel":"kimi-k2","responseStopReason":"end_turn","itemId":"msg_2","blocks":[{"type":"text","text":"hi"}],"responseUsage":{"inputTokens":10,"outputTokens":5}}`
 
@@ -144,9 +155,8 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("honors a trailing leaf marker", func(t *testing.T) {
-		marker := `{"kind":"leaf","id":"l1","parentId":"m1","createdAt":"2026-09-16T10:15:33Z"}`
 		data := validHeaderLine + "\n" + userMessageLine + "\n" +
-			assistantMessageLine + "\n" + marker + "\n"
+			assistantMessageLine + "\n" + leafMarkerLine("m1") + "\n"
 
 		_, entries, leaf, err := decode([]byte(data))
 		require.NoError(t, err)
@@ -156,14 +166,60 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("ignores a leaf marker followed by a message", func(t *testing.T) {
-		marker := `{"kind":"leaf","id":"l1","parentId":"m1","createdAt":"2026-09-16T10:15:33Z"}`
-		data := validHeaderLine + "\n" + userMessageLine + "\n" + marker + "\n" +
+		data := validHeaderLine + "\n" + userMessageLine + "\n" + leafMarkerLine("m1") + "\n" +
 			assistantMessageLine + "\n"
 
 		_, _, leaf, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Equal(t, "m2", leaf)
+	})
+
+	t.Run("moves the leaf before the first message", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" +
+			assistantMessageLine + "\n" + leafMarkerLine("") + "\n"
+
+		_, entries, leaf, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Len(t, entries, 2)
+		require.Empty(t, leaf)
+	})
+
+	t.Run("labels the entries the tags target", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" +
+			assistantMessageLine + "\n" +
+			tagMarkerLine("m1", "bug") + "\n" +
+			tagMarkerLine("m2", "review") + "\n"
+
+		_, entries, leaf, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Equal(t, "bug", entries[0].Tag)
+		require.Equal(t, "review", entries[1].Tag)
+		require.Equal(t, "m2", leaf)
+	})
+
+	t.Run("keeps the last tag of an entry", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" +
+			tagMarkerLine("m1", "bug") + "\n" +
+			tagMarkerLine("m1", "") + "\n"
+
+		_, entries, _, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Empty(t, entries[0].Tag)
+	})
+
+	t.Run("keeps the leaf a tag does not move", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" +
+			assistantMessageLine + "\n" + leafMarkerLine("m1") + "\n" +
+			tagMarkerLine("m1", "bug") + "\n"
+
+		_, _, leaf, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Equal(t, "m1", leaf)
 	})
 
 	t.Run("rejects invalid files", func(t *testing.T) {
@@ -238,15 +294,31 @@ func TestDecode(t *testing.T) {
 				wantErr: `unknown block type "video"`,
 			},
 			{
-				name: "leaf marker without target",
-				data: validHeaderLine + "\n" +
-					`{"kind":"leaf","id":"l1","createdAt":"2026-09-16T10:15:33Z"}` + "\n",
-				wantErr: "does not reference an entry",
+				name:    "corrupt leaf marker",
+				data:    validHeaderLine + "\n" + `{"kind":"leaf",` + "\n",
+				wantErr: "line 2",
 			},
 			{
-				name: "leaf marker with unknown target",
-				data: validHeaderLine + "\n" +
-					`{"kind":"leaf","id":"l1","parentId":"nope","createdAt":"2026-09-16T10:15:33Z"}` + "\n",
+				name:    "leaf marker with unknown target",
+				data:    validHeaderLine + "\n" + leafMarkerLine("nope") + "\n",
+				wantErr: `references unknown entry "nope"`,
+			},
+			{
+				name:    "corrupt tag marker",
+				data:    validHeaderLine + "\n" + `{"kind":"tag",` + "\n",
+				wantErr: "line 2",
+			},
+			{
+				name:    "tag marker without target",
+				data:    validHeaderLine + "\n" + tagMarkerLine("", "bug") + "\n",
+				wantErr: "references unknown entry",
+			},
+			{
+				name: "tag marker with unknown target",
+				data: validHeaderLine + "\n" + userMessageLine + "\n" + tagMarkerLine(
+					"nope",
+					"bug",
+				) + "\n",
 				wantErr: `references unknown entry "nope"`,
 			},
 		}

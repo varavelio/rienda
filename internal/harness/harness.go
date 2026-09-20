@@ -57,6 +57,39 @@ type Session struct {
 	engine *engine.Engine
 }
 
+// Branch returns the entries of the active branch in conversation order, which
+// is the conversation the session runs.
+func (s *Session) Branch() []session.Entry {
+	return s.store.Branch()
+}
+
+// Tree returns every entry of the session in append order, the branches it
+// leaves behind included, which is what lets a front end show the whole
+// conversation and return to an earlier turn of it.
+func (s *Session) Tree() []session.Entry {
+	return s.store.Entries()
+}
+
+// SetLeaf moves the active leaf of the session to the entry identified by id,
+// or before the first message when id is empty, so the next run continues from
+// it. Writing after a turn that already has messages opens a branch beside
+// them, while writing after a leaf continues the branch.
+func (s *Session) SetLeaf(id string) error {
+	if err := s.store.SetLeaf(id); err != nil {
+		return fmt.Errorf("harness: %w", err)
+	}
+	return nil
+}
+
+// SetTag replaces the tag of the entry identified by id, an empty tag removing
+// the one it carries.
+func (s *Session) SetTag(id, tag string) error {
+	if err := s.store.SetTag(id, tag); err != nil {
+		return fmt.Errorf("harness: %w", err)
+	}
+	return nil
+}
+
 // Prepare resolves the options and opens a session: the one identified by
 // Options.SessionID when it is set, or a new one owned by Options.AgentID.
 func Prepare(ctx context.Context, opts Options) (*Session, error) {
@@ -216,14 +249,10 @@ func (s *Session) Info() session.Info {
 	return s.store.Info()
 }
 
-// Entries returns the entries of the active branch in conversation order.
-func (s *Session) Entries() []session.Entry {
-	return s.store.Branch()
-}
-
-// Run starts a run of the session and returns the channel carrying its
-// events. A non-empty prompt starts a new turn; an empty prompt continues the
-// conversation from its active leaf.
+// Run starts a run of the session and returns the channel carrying its events.
+// A non-empty prompt starts a new turn from the active leaf, which opens a
+// branch when the leaf already has turns after it; an empty prompt continues
+// the conversation from that leaf.
 func (s *Session) Run(ctx context.Context, prompt string) <-chan engine.Event {
 	return s.engine.Run(ctx, prompt)
 }

@@ -363,7 +363,7 @@ func TestPrepare(t *testing.T) {
 		require.Equal(t, started.ID(), resumed.ID())
 		require.Equal(t, "coder", resumed.Info().Agent)
 
-		entries := resumed.Entries()
+		entries := resumed.Branch()
 		require.Len(t, entries, 2)
 		require.Equal(t, llm.RoleUser, entries[0].Message.Role)
 		require.Equal(t, "first", entries[0].Message.Blocks[0].Text)
@@ -401,6 +401,31 @@ func TestPrepare(t *testing.T) {
 		_, err := Prepare(t.Context(), options)
 
 		require.ErrorContains(t, err, `load agent "coder"`)
+	})
+}
+
+// TestSession verifies the branch, the tree and the labels a front end
+// navigates.
+func TestSession(t *testing.T) {
+	t.Run("labels the turns of the tree", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("hello"))
+		prepared := env.prepare(t)
+		collectEvents(prepared.Run(t.Context(), "say hello"))
+
+		turn := prepared.Tree()[0]
+		require.NoError(t, prepared.SetTag(turn.ID, "bug"))
+		require.Equal(t, "bug", prepared.Tree()[0].Tag)
+
+		require.NoError(t, prepared.SetTag(turn.ID, ""))
+		require.Empty(t, prepared.Tree()[0].Tag)
+	})
+
+	t.Run("reports the turns it does not hold", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		prepared := env.prepare(t)
+
+		require.ErrorContains(t, prepared.SetLeaf("ghost"), `unknown entry "ghost"`)
+		require.ErrorContains(t, prepared.SetTag("ghost", "bug"), `unknown entry "ghost"`)
 	})
 }
 
@@ -520,6 +545,38 @@ func TestRun(t *testing.T) {
 
 		require.Len(t, request.Tools, 1)
 		require.Equal(t, "shell", request.Tools[0].Function.Name)
+	})
+
+	t.Run("continues from the turn the session returned to", func(t *testing.T) {
+		env := newTestEnvironment(t,
+			textScript("one"),
+			textScript("two"),
+			textScript("three"),
+		)
+		prepared := env.prepare(t)
+
+		collectEvents(prepared.Run(t.Context(), "first"))
+		collectEvents(prepared.Run(t.Context(), "second"))
+		require.Len(t, prepared.Branch(), 4)
+
+		// Returning to the first answer and writing again continues from it
+		// instead of the second turn, which stays stored as a branch of its
+		// own.
+		first := prepared.Branch()[1]
+		require.NoError(t, prepared.SetLeaf(first.ID))
+
+		events := collectEvents(prepared.Run(t.Context(), "third"))
+
+		require.Equal(t, "three", joinedText(events))
+		require.Len(t, prepared.Branch(), 4)
+		require.Equal(t, "third", prepared.Branch()[2].Message.Blocks[0].Text)
+		require.Len(t, prepared.Tree(), 6)
+
+		messages := env.provider.requests[2].Messages
+		require.Len(t, messages, 4)
+		require.Equal(t, "first", messages[1].Content)
+		require.Equal(t, "one", messages[2].Content)
+		require.Equal(t, "third", messages[3].Content)
 	})
 
 	t.Run("runs tools and continues the conversation", func(t *testing.T) {

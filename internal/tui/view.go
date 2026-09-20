@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 )
 
@@ -66,6 +67,8 @@ func (m *model) renderPhase() string {
 		return m.viewPicker()
 	case m.phase == phaseSettings:
 		return m.viewSettings()
+	case m.phase == phaseTree:
+		return m.viewTree()
 	case m.phase == phasePreparing:
 		return m.viewPreparing()
 	default:
@@ -106,7 +109,7 @@ func (m *model) viewStart() string {
 		rows = append(rows, m.startLine(position))
 	}
 	if m.start.empty() {
-		rows = append(rows, m.emptyLine())
+		rows = append(rows, m.emptyLine("no matches"))
 	}
 
 	// The list only returns to the conversation it was opened over when there
@@ -149,9 +152,9 @@ func (m *model) filterRow(list *filter) string {
 	return m.clip(list.view())
 }
 
-// emptyLine renders the notice a list shows when its query matches nothing.
-func (m *model) emptyLine() string {
-	return m.clip("  " + m.styles.dim.Render("no matches"))
+// emptyLine renders the notice a list shows when it has nothing to offer.
+func (m *model) emptyLine(text string) string {
+	return m.clip("  " + m.styles.dim.Render(text))
 }
 
 // row renders one list row, highlighted when it holds the cursor.
@@ -218,7 +221,7 @@ func (m *model) viewPicker() string {
 		rows = append(rows, m.pickerLine(position))
 	}
 	if m.picker.empty() {
-		rows = append(rows, m.emptyLine())
+		rows = append(rows, m.emptyLine("no matches"))
 	}
 
 	// The picker only returns to the start list when it was opened from it,
@@ -253,7 +256,7 @@ func (m *model) viewSettings() string {
 		rows = append(rows, m.commandLine(position))
 	}
 	if m.commands.empty() {
-		rows = append(rows, m.emptyLine())
+		rows = append(rows, m.emptyLine("no matches"))
 	}
 
 	rows = append(rows, m.footerRows("type to filter · ↑/↓ move · enter run · esc close")...)
@@ -267,9 +270,15 @@ func (m *model) settingsIdentity() string {
 
 // commandLine renders one entry of the command center. The commands that open
 // a screen carry no state, so they only show what they do; the options of the
-// harness also show whether they are on.
+// harness also show whether they are on. A command the interface cannot run
+// right now stays faint and takes no highlight, so the list never promises a
+// screen it cannot open.
 func (m *model) commandLine(position int) string {
 	entry := commandList[m.commands.shown[position]]
+	if entry.Enabled != nil && !entry.Enabled(m) {
+		return m.clip("  " + m.styles.dim.Render(entry.Label+"  "+entry.Note))
+	}
+
 	label := m.row(position == m.commands.cursor, entry.Label)
 	if entry.IsOn == nil {
 		return m.clip(label + "  " + m.styles.dim.Render(entry.Note))
@@ -280,6 +289,132 @@ func (m *model) commandLine(position int) string {
 		state = m.styles.on.Render("[on]")
 	}
 	return m.clip(label + "  " + state + "  " + m.styles.dim.Render(entry.Note))
+}
+
+// viewTree renders the tree of the session: the turns of the conversation with
+// the branch they belong to, the tags that label them and the turn the session
+// is at.
+func (m *model) viewTree() string {
+	rows := m.headerRows(m.treeIdentity())
+	rows = append(rows, "Session tree", "")
+	rows = append(rows, m.treeInputRow(), "")
+
+	first, last := m.tree.filter.window(m.listRows())
+	for position := first; position < last; position++ {
+		rows = append(rows, m.treeLine(position))
+	}
+	switch {
+	case len(m.tree.nodes) == 0:
+		rows = append(rows, m.emptyLine("the session holds no turn yet"))
+	case m.tree.filter.empty():
+		rows = append(rows, m.emptyLine("no matches"))
+	}
+
+	rows = append(rows, m.footerRows(m.treeHints())...)
+	return strings.Join(rows, "\n")
+}
+
+// treeIdentity renders the identity of the tree screen.
+func (m *model) treeIdentity() string {
+	return m.brandIdentity() + m.styles.header.Render(" · tree")
+}
+
+// treeInputRow renders the input of the tree: the tag of the highlighted turn
+// while it is edited, the query that narrows the tree otherwise.
+func (m *model) treeInputRow() string {
+	if m.tree.editing {
+		return m.clip(m.tree.tag.View())
+	}
+	return m.filterRow(&m.tree.filter)
+}
+
+// treeHints returns the keys the tree listens to, or the failure of the last
+// change to the session, which takes their place so the screen reports it
+// without leaving the tree.
+func (m *model) treeHints() string {
+	switch {
+	case m.tree.err != "":
+		return "error: " + m.tree.err + " · esc back"
+	case m.tree.editing:
+		return "type a tag · enter save · esc cancel"
+	default:
+		return "type to filter · ↑/↓ move · enter return to the turn · ctrl+t tag · esc back"
+	}
+}
+
+// treeLine renders one turn of the tree with the connector that places it, the
+// author and the message, the tag that labels it and the markers of the branch
+// it belongs to. The highlighted row drops the colors of its parts, so the
+// highlight styles the whole line instead of stopping where a colored label
+// inside it ends.
+func (m *model) treeLine(position int) string {
+	node := m.tree.nodes[m.tree.filter.shown[position]]
+	line := m.treeTurn(node)
+	if position == m.tree.filter.cursor {
+		return m.row(true, ansi.Strip(line))
+	}
+	return m.clip("  " + line)
+}
+
+// treeTurn renders the content of one turn of the tree, without the leading
+// spaces of its row or the highlight over it.
+func (m *model) treeTurn(node treeNode) string {
+	line := strings.Repeat(treeIndent, node.depth) + treeConnector(node)
+	line += m.treeNameStyle(node.entry).Render(treeName(node.entry, m.session.Info().Agent))
+	line += " " + node.text
+	if node.entry.Tag != "" {
+		line += "  " + m.styles.tag.Render("#"+node.entry.Tag)
+	}
+	if marks := treeMarks(node); marks != "" {
+		line += "  " + m.styles.branch.Render(marks)
+	}
+	return line
+}
+
+// treeConnector returns the glyph that opens a turn of the tree: the turns
+// that open a branch hold none, the last turn of a group closes it and the
+// turns before it keep it open.
+func treeConnector(node treeNode) string {
+	switch {
+	case node.parent < 0:
+		return ""
+	case node.last:
+		return "└─ "
+	default:
+		return "├─ "
+	}
+}
+
+// treeName returns the author of a turn, which the tree shows before the
+// message so the reader always knows who wrote it.
+func treeName(entry session.Entry, agent string) string {
+	if entry.Message.Role == llm.RoleUser {
+		return "You:"
+	}
+	return "Agent (" + agent + "):"
+}
+
+// treeNameStyle returns the style of the author of a turn, the color the
+// conversation gives the same author.
+func (m *model) treeNameStyle(entry session.Entry) lipgloss.Style {
+	if entry.Message.Role == llm.RoleUser {
+		return m.styles.user.title
+	}
+	return m.styles.assistant.title
+}
+
+// treeMarks returns the markers that place a turn in the tree: the check of
+// the branch the session leaves open and the dot of the turn the session is
+// at.
+func treeMarks(node treeNode) string {
+	marks := make([]string, 0, 2)
+	if node.active {
+		marks = append(marks, "✓")
+	}
+	if node.current {
+		marks = append(marks, "●")
+	}
+	return strings.Join(marks, " ")
 }
 
 // viewPreparing renders the session preparation screen. It names what is
@@ -332,6 +467,11 @@ func (m *model) activityBlock() string {
 // is blank while no run is in flight, which keeps the block the same height.
 func (m *model) activityLine() string {
 	if !m.running {
+		if m.fork {
+			return m.clip(m.styles.notice.Render(
+				"↩ rewound · the next message starts a new branch",
+			))
+		}
 		return ""
 	}
 
@@ -399,7 +539,10 @@ func (m *model) chatFooter() string {
 	if m.usageIn > 0 || m.usageOut > 0 {
 		parts = append(parts, fmt.Sprintf("tokens %d in · %d out", m.usageIn, m.usageOut))
 	}
-	parts = append(parts, "@ files · enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit")
+	parts = append(
+		parts,
+		"@ files · ctrl+t tree · enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit",
+	)
 
 	return m.clip(m.styles.footer.Render(strings.Join(parts, " · ")))
 }
