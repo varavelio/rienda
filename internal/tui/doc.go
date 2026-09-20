@@ -64,11 +64,14 @@
 // Returning to a prompt rewinds to the turn before it and offers the prompt in
 // the input, ready to be edited and sent again, which is the same as returning
 // to the answer it followed. The message that follows opens a branch when the
-// turn it hangs from already has turns after it, which the row above the prompt
-// announces, and continues the branch when that turn closes it. A turn can also
-// carry a tag (ctrl+t), a word the user attaches to it to find it again, which
-// the tree shows beside the turn in a color of its own and the query matches
-// along with the message.
+// turn it hangs from already has turns after it, which the block above the
+// prompt announces between two blank rows, and continues the branch when that
+// turn closes it. A turn can also carry a tag (ctrl+t), a word the user attaches
+// to it to find it again, which the tree shows before the author in a color of
+// its own and the query matches along with the message. The turns that follow a
+// turn fold away with the horizontal arrows, so a long tree is walked a subtree
+// at a time; folding is how the reader looks at the session, not what it
+// stores, so it lasts as long as the tree is open.
 //
 // An @ in the prompt opens the completion of the files of the project, so the
 // user never has to remember a path to point the model at a file. The

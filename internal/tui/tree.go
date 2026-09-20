@@ -3,6 +3,7 @@ package tui
 import (
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -19,11 +20,39 @@ const treeTagPrompt = "# "
 // another turn.
 const treeIndent = "   "
 
+// treeMessageMax caps the columns the message of a turn may take, so a long
+// message never floods the tree however wide the terminal is.
+const treeMessageMax = 96
+
+// treeMessageReserve is the columns a row keeps outside the message of its
+// turn: the author, the connector that places the turn and the marks that close
+// the row, which the message must never push out of it. It counts the runes of
+// the widest of each, because the connector and the marks are single glyphs the
+// terminal draws in one column each.
+var treeMessageReserve = utf8.RuneCountInString("Agent (agent): ") +
+	utf8.RuneCountInString("└─ ") +
+	utf8.RuneCountInString("  ✓ ●") +
+	utf8.RuneCountInString("› ")
+
 // tree is the session tree the interface navigates: the turns of the
 // conversation, the query that narrows them and the input that edits the tag
 // of one.
 type tree struct {
-	// nodes lists the turns of the session, in append order.
+	// entries holds the entries of the session the tree shows, which it keeps
+	// to rebuild its nodes whenever the user folds or unfolds a turn.
+	entries []session.Entry
+
+	// branch holds the entries of the branch the session runs, which the tree
+	// marks.
+	branch []session.Entry
+
+	// folded names the turns whose children the user hid, by entry identifier.
+	// It is what the reader decided, not what the session stores, so it lives
+	// with the screen and is gone once the tree closes.
+	folded map[string]bool
+
+	// nodes lists the turns of the session the tree shows, in append order,
+	// the subtrees the user folded left out.
 	nodes []treeNode
 
 	// filter narrows the turns by the query the user types, which matches the
@@ -63,6 +92,11 @@ type treeNode struct {
 
 	// children is the number of turns that follow the node.
 	children int
+
+	// folded reports that the turn hides the turns that follow it, which the
+	// user folded to walk a long tree. A folded turn keeps the count of its
+	// children, so the screen can say how many turns it holds.
+	folded bool
 
 	// last reports that no turn follows the node inside the group of turns it
 	// belongs to, which the rendering draws with the connector that closes a
@@ -106,8 +140,9 @@ func newTreeScreen(text func(int) string, base styles, isDark bool) tree {
 // treeNodes builds the nodes of the session tree from the entries of a
 // session: one node per turn, in append order, linked to the turn it follows.
 // The branch tells which turns the session leaves open, so the tree can mark
-// where the conversation stands.
-func treeNodes(entries, branch []session.Entry) []treeNode {
+// where the conversation stands, and folded names the turns whose children the
+// user hid, which keeps their subtrees out of the nodes.
+func treeNodes(entries, branch []session.Entry, folded map[string]bool) []treeNode {
 	active := make(map[string]bool, len(branch))
 	for _, entry := range branch {
 		active[entry.ID] = true
@@ -115,36 +150,64 @@ func treeNodes(entries, branch []session.Entry) []treeNode {
 	current := currentTurn(branch)
 
 	nodes := make([]treeNode, 0, len(entries))
-	ancestor := map[string]int{"": -1}
+	// above links every entry to the turn it hangs from, and hidden names the
+	// entries the reader folded away: the turns of a folded subtree stay out of
+	// the nodes, which is what hides them.
+	above := map[string]string{"": ""}
+	hidden := make(map[string]bool, len(folded))
+	index := make(map[string]int, len(entries))
 	lastChild := make(map[int]int, len(entries))
 	for _, entry := range entries {
-		parent, found := ancestor[entry.ParentID]
-		if !found {
-			parent = -1
-		}
-		if !isTurnEntry(entry) {
-			ancestor[entry.ID] = parent
+		parent := above[entry.ParentID]
+		if hidden[parent] {
+			hidden[entry.ID] = true
+			if !isTurnEntry(entry) {
+				above[entry.ID] = parent
+				continue
+			}
+			// The turn is hidden, but it still hangs from the turn that was
+			// folded, which keeps the count of the turns it hides and so stays
+			// foldable.
+			above[entry.ID] = entry.ID
+			if top, found := index[parent]; found {
+				nodes[top].children++
+			}
 			continue
 		}
+		if !isTurnEntry(entry) {
+			above[entry.ID] = parent
+			continue
+		}
+		// A turn is the turn the entries that follow it hang from, so the
+		// activities between two turns never break their chain.
+		above[entry.ID] = entry.ID
 
 		node := treeNode{
 			entry:   entry,
 			text:    turnText(entry),
-			parent:  parent,
+			parent:  -1,
 			last:    true,
 			active:  active[entry.ID],
 			current: entry.ID == current,
 		}
-		if parent >= 0 {
-			node.depth = nodes[parent].depth + 1
-			if previous, attached := lastChild[parent]; attached {
+		if parent != "" {
+			top := index[parent]
+			node.parent = top
+			node.depth = nodes[top].depth + 1
+			if previous, attached := lastChild[top]; attached {
 				nodes[previous].last = false
 			}
-			nodes[parent].children++
-			lastChild[parent] = len(nodes)
+			nodes[top].children++
+			lastChild[top] = len(nodes)
 		}
 
-		ancestor[entry.ID] = len(nodes)
+		if folded[entry.ID] {
+			// The turn keeps the room of its children and the turns below it
+			// stay out of the nodes, so the tree shows the subtree as folded.
+			node.folded = true
+			hidden[entry.ID] = true
+		}
+		index[entry.ID] = len(nodes)
 		nodes = append(nodes, node)
 	}
 	return nodes
@@ -180,6 +243,83 @@ func turnText(entry session.Entry) string {
 		return "(no message)"
 	}
 	return text
+}
+
+// fold builds the tree from the entries it holds, keeping the turns the user
+// folded out of the nodes and the highlight on the turn it held, so folding
+// never moves the reader away from where they are.
+func (t *tree) fold() {
+	held := t.entryID(t.filter.selected())
+	t.nodes = treeNodes(t.entries, t.branch, t.folded)
+	t.filter.setCount(len(t.nodes))
+	t.filter.cursor = t.focusOn(held)
+}
+
+// focusOn returns the position of the turn identified by id, or of the nearest
+// turn before it the tree still shows, which is the turn that was folded when
+// the reader stood inside the subtree it hides. It returns the first position
+// when the tree no longer shows any turn of the path.
+func (t *tree) focusOn(id string) int {
+	position := make(map[string]int, len(t.entries))
+	for index, entry := range t.entries {
+		position[entry.ID] = index
+	}
+
+	for id != "" {
+		if at, found := t.position(id); found {
+			return at
+		}
+		index, found := position[id]
+		if !found {
+			break
+		}
+		id = t.entries[index].ParentID
+	}
+	return 0
+}
+
+// position returns the position the highlight of the tree holds the turn
+// identified by id, which may have moved when a subtree was folded.
+func (t *tree) position(id string) (int, bool) {
+	if id == "" {
+		return 0, false
+	}
+	for position, index := range t.filter.shown {
+		if t.nodes[index].entry.ID == id {
+			return position, true
+		}
+	}
+	return 0, false
+}
+
+// entryID returns the identifier of the turn at a node index, or the empty
+// string when there is no such turn.
+func (t *tree) entryID(index int) string {
+	if index < 0 || index >= len(t.nodes) {
+		return ""
+	}
+	return t.nodes[index].entry.ID
+}
+
+// foldChildren folds or unfolds the children of the turn at a node index,
+// reporting whether the turn holds any. Folding a turn hides the turns that
+// follow it, which lets the reader walk a long tree a subtree at a time.
+func (t *tree) foldChildren(index int) bool {
+	if index < 0 || index >= len(t.nodes) || t.nodes[index].children == 0 {
+		return false
+	}
+
+	if t.folded == nil {
+		t.folded = make(map[string]bool)
+	}
+	id := t.nodes[index].entry.ID
+	if t.folded[id] {
+		delete(t.folded, id)
+	} else {
+		t.folded[id] = true
+	}
+	t.fold()
+	return true
 }
 
 // focus puts the highlight on the turn the session is at, so the tree opens

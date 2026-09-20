@@ -494,7 +494,8 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "✓", "the branch the session runs is marked")
 		require.Contains(t, view, "●", "the turn the session is at is marked")
 		require.Contains(t, view, "› ", "the highlight opens the row of the turn")
-		require.Contains(t, view, "enter return to the turn")
+		require.Contains(t, view, "enter rewind")
+		require.Contains(t, view, "←/→ fold")
 		require.Contains(t, view, "esc back")
 	})
 
@@ -522,6 +523,62 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "└─ You: again", "the branch the session opened closes the group")
 	})
 
+	t.Run("caps the message of a turn", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, strings.Repeat("word ", 200)),
+			textMessage(llm.RoleAssistant, "done"),
+		)
+
+		for line := range strings.SplitSeq(m.render(), "\n") {
+			require.LessOrEqual(
+				t,
+				ansi.StringWidth(line),
+				80,
+				"a long message never floods the tree",
+			)
+		}
+		require.Contains(t, plain(m.render()), "done", "the marks of the turn stay visible")
+	})
+
+	t.Run("keeps the marks of a turn on a narrow row", func(t *testing.T) {
+		m, _ := treeModel(t, textMessage(llm.RoleUser, strings.Repeat("word ", 40)))
+		update(t, m, windowMsg(30, 24))
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "You:", "a narrow row keeps the author of the turn")
+		require.Contains(t, view, "✓ ●", "the marks the row closes with survive the cut")
+		for line := range strings.SplitSeq(m.render(), "\n") {
+			require.LessOrEqual(
+				t,
+				ansi.StringWidth(line),
+				30,
+				"the row never outgrows the terminal",
+			)
+		}
+	})
+
+	t.Run("caps the message however wide the terminal is", func(t *testing.T) {
+		m, _ := treeModel(t, textMessage(llm.RoleUser, strings.Repeat("word ", 200)))
+		update(t, m, windowMsg(200, 24))
+
+		view := plain(m.render())
+		row := ""
+		for line := range strings.SplitSeq(view, "\n") {
+			if strings.Contains(line, "You:") {
+				row = line
+			}
+		}
+
+		require.NotEmpty(t, row)
+		require.LessOrEqual(
+			t,
+			ansi.StringWidth(row),
+			treeMessageReserve+treeMessageMax,
+			"the message stops growing at its cap",
+		)
+	})
+
 	t.Run("shows the tag that labels a turn", func(t *testing.T) {
 		m, stored := treeModel(t,
 			textMessage(llm.RoleUser, "fix the parser"),
@@ -531,8 +588,15 @@ func TestView(t *testing.T) {
 		require.NoError(t, stored.store.SetTag(turn.ID, "bug"))
 		m.buildTree()
 
-		require.Contains(t, plain(m.render()), "#bug")
-		require.Contains(t, m.render(), "\x1b[95m#bug", "the tag carries the color of the tags")
+		view := plain(m.render())
+		require.Contains(t, view, "#bug")
+		require.Regexp(
+			t,
+			`(?m)^  #bug `,
+			view,
+			"the tag leads the row, before the author and the message",
+		)
+		require.Contains(t, m.render(), "\x1b[93m#bug", "the tag carries the color of the tags")
 	})
 
 	t.Run("renders the command center", func(t *testing.T) {
@@ -786,6 +850,38 @@ func TestChatLayout(t *testing.T) {
 			}
 			require.Contains(t, view, "working")
 		}
+	})
+
+	t.Run("breathes around the notice of a branch", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		update(t, m, pressUp)
+		update(t, m, pressUp)
+		update(t, m, pressEnter)
+
+		lines := strings.Split(plain(m.render()), "\n")
+		notice := -1
+		for index, line := range lines {
+			if strings.Contains(line, "starts a new branch") {
+				notice = index
+			}
+		}
+		require.Positive(t, notice, "the notice is shown")
+		require.Empty(t, strings.TrimSpace(lines[notice-1]), "a blank row above the notice")
+		require.Empty(t, strings.TrimSpace(lines[notice+1]), "a blank row below the notice")
+
+		// The block keeps a single row once the message is sent, so the
+		// conversation grows into the rows the notice leaves.
+		m.input.SetValue("again")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		require.NotContains(t, plain(m.render()), "starts a new branch")
+		require.Equal(t, 1, m.activityHeight(), "the notice gives its rows back")
 	})
 
 	t.Run("breathes around the status line", func(t *testing.T) {

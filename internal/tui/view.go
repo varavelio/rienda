@@ -314,9 +314,10 @@ func (m *model) viewTree() string {
 	return strings.Join(rows, "\n")
 }
 
-// treeIdentity renders the identity of the tree screen.
+// treeIdentity renders the identity of the tree screen, closing it with the
+// legend of the marks that place a turn in the tree.
 func (m *model) treeIdentity() string {
-	return m.brandIdentity() + m.styles.header.Render(" · tree")
+	return m.brandIdentity() + m.styles.header.Render(" · tree · ✓ branch · ● current")
 }
 
 // treeInputRow renders the input of the tree: the tag of the highlighted turn
@@ -338,7 +339,7 @@ func (m *model) treeHints() string {
 	case m.tree.editing:
 		return "type a tag · enter save · esc cancel"
 	default:
-		return "type to filter · ↑/↓ move · enter return to the turn · ctrl+t tag · esc back"
+		return "type to filter · ↑/↓ move · enter rewind · ←/→ fold · ctrl+t tag · esc back"
 	}
 }
 
@@ -357,29 +358,55 @@ func (m *model) treeLine(position int) string {
 }
 
 // treeTurn renders the content of one turn of the tree, without the leading
-// spaces of its row or the highlight over it.
+// spaces of its row or the highlight over it. The tag leads the row, before the
+// author and the message, so it stays visible however long the message is; the
+// message is cut to the room the row leaves it, and the marks that place the
+// turn in the tree close it.
 func (m *model) treeTurn(node treeNode) string {
 	line := strings.Repeat(treeIndent, node.depth) + treeConnector(node)
-	line += m.treeNameStyle(node.entry).Render(treeName(node.entry, m.session.Info().Agent))
-	line += " " + node.text
 	if node.entry.Tag != "" {
-		line += "  " + m.styles.tag.Render("#"+node.entry.Tag)
+		line += m.styles.tag.Render("#"+node.entry.Tag) + " "
 	}
+	line += m.treeNameStyle(node.entry).Render(treeName(node.entry, m.session.Info().Agent))
+	line += " " + clipText(m.treeMessageWidth(), node.text)
 	if marks := treeMarks(node); marks != "" {
 		line += "  " + m.styles.branch.Render(marks)
 	}
 	return line
 }
 
+// treeMessageWidth returns the columns the message of a turn may take, so a
+// long message never floods the tree: it never grows past treeMessageMax, and a
+// narrow row shows what the room the marks leave it allows. A row too narrow to
+// leave the message any room shows it whole, which the terminal clips.
+func (m *model) treeMessageWidth() int {
+	return max(0, min(treeMessageMax, m.width-treeMessageReserve))
+}
+
+// clipText cuts a line to the given width, keeping it whole when the width is
+// zero, which leaves the terminal to clip it.
+func clipText(width int, text string) string {
+	if width <= 0 {
+		return text
+	}
+	return lipgloss.NewStyle().MaxWidth(width).Render(text)
+}
+
 // treeConnector returns the glyph that opens a turn of the tree: the turns
 // that open a branch hold none, the last turn of a group closes it and the
-// turns before it keep it open.
+// turns before it keep it open. A turn whose children are folded closes its
+// group with the glyph that says so, so the reader knows a subtree is hidden
+// under it.
 func treeConnector(node treeNode) string {
 	switch {
 	case node.parent < 0:
 		return ""
+	case node.last && node.folded:
+		return "⊟─ "
 	case node.last:
 		return "└─ "
+	case node.folded:
+		return "⊞─ "
 	default:
 		return "├─ "
 	}
@@ -453,18 +480,22 @@ func (m *model) viewChat() string {
 // short terminal keeps only the status line while a run is in flight, and
 // nothing while idle.
 func (m *model) activityBlock() string {
-	if m.activityHeight() == 0 {
+	switch m.activityHeight() {
+	case 0:
 		return ""
-	}
-	if m.activityHeight() == 1 {
+	case 1:
 		return m.activityLine()
+	case noticeRows:
+		return "\n" + m.activityLine() + "\n"
+	default:
+		return "\n\n" + m.activityLine() + "\n"
 	}
-	return "\n\n" + m.activityLine() + "\n"
 }
 
 // activityLine renders the single status row that reports the run in flight:
-// the spinner and what it is doing, with the key that interrupts it. The row
-// is blank while no run is in flight, which keeps the block the same height.
+// the spinner and what it is doing, with the key that interrupts it. Once the
+// run is over it reports that the next message opens a branch, when the session
+// was moved back to a turn that has turns after it, and stays blank otherwise.
 func (m *model) activityLine() string {
 	if !m.running {
 		if m.fork {
@@ -539,10 +570,9 @@ func (m *model) chatFooter() string {
 	if m.usageIn > 0 || m.usageOut > 0 {
 		parts = append(parts, fmt.Sprintf("tokens %d in · %d out", m.usageIn, m.usageOut))
 	}
-	parts = append(
-		parts,
-		"@ files · ctrl+t tree · enter send · ctrl+p settings · ctrl+j newline · ctrl+c quit",
-	)
+	// The keys lead with the ones a session uses all the time, so a narrow
+	// terminal cuts the rare ones instead of the ones the reader needs.
+	parts = append(parts, "@ files · enter send · ctrl+t tree · ctrl+p settings · ctrl+c quit")
 
 	return m.clip(m.styles.footer.Render(strings.Join(parts, " · ")))
 }
@@ -698,14 +728,6 @@ func (m *model) ruleLine(style lipgloss.Style) string {
 // clip truncates a rendered line to the terminal width.
 func (m *model) clip(text string) string {
 	return clipText(m.width, text)
-}
-
-// clipText truncates a rendered line to the given width.
-func clipText(width int, text string) string {
-	if width <= 0 {
-		return text
-	}
-	return lipgloss.NewStyle().MaxWidth(width).Render(text)
 }
 
 // wrap wraps plain text to width columns, keeping words together when

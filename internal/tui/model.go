@@ -33,6 +33,13 @@ const inputBoxRows = 4
 // prompt.
 const activityRows = 4
 
+// noticeRows is the number of rows the block between the transcript and the
+// input box occupies while it reports something that is not a run in flight: a
+// blank row above the notice and one below, so the notice never touches the
+// content or the prompt. It is the height of the full status block without the
+// second blank row above the line, which the run keeps for the spinner.
+const noticeRows = 3
+
 // chatFooterRows is the number of rows the chat footer occupies under the
 // input box.
 const chatFooterRows = 1
@@ -98,6 +105,8 @@ const (
 	keyEnd    = "end"
 	keyPgUp   = "pgup"
 	keyPgDown = "pgdown"
+	keyLeft   = "left"
+	keyRight  = "right"
 )
 
 // activity is what a run is doing at the moment, reported by the single status
@@ -930,7 +939,10 @@ func (m *model) closeTree() tea.Cmd {
 // query opens clean and the highlight lands on the turn the session is at, so
 // the tree opens where the conversation stands.
 func (m *model) buildTree() {
-	m.tree.nodes = treeNodes(m.session.Tree(), m.session.Branch())
+	m.tree.entries = m.session.Tree()
+	m.tree.branch = m.session.Branch()
+	m.tree.folded = make(map[string]bool)
+	m.tree.nodes = treeNodes(m.tree.entries, m.tree.branch, m.tree.folded)
 	m.tree.filter.setCount(len(m.tree.nodes))
 	m.tree.filter.reset()
 	m.tree.editing = false
@@ -941,7 +953,9 @@ func (m *model) buildTree() {
 
 // handleTreeKey walks the session tree: the query narrows it, the arrows move
 // the highlight, enter returns the session to the highlighted turn and ctrl+t
-// labels it. Escape clears the query first and then leaves the tree.
+// labels it. The horizontal arrows fold and unfold the turns that follow the
+// highlighted one, so a long tree is walked a subtree at a time. Escape clears
+// the query first and then leaves the tree.
 func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
 	if m.tree.editing {
 		return m.handleTagKey(key)
@@ -952,6 +966,10 @@ func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
 		m.tree.filter.move(-1)
 	case keyDown:
 		m.tree.filter.move(1)
+	case keyRight:
+		m.foldTree(true)
+	case keyLeft:
+		m.foldTree(false)
 	case keyEnter:
 		return m.rewind()
 	case keyEscape:
@@ -965,6 +983,30 @@ func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
 		return m.tree.filter.update(key)
 	}
 	return nil
+}
+
+// foldTree hides or shows the turns that follow the highlighted one, which lets
+// the reader walk a long tree a subtree at a time. Unfolding a turn that is
+// already open moves the highlight to the turn it holds, so the arrows keep
+// walking the tree.
+func (m *model) foldTree(fold bool) {
+	index := m.tree.filter.selected()
+	if index < 0 {
+		return
+	}
+
+	id := m.tree.nodes[index].entry.ID
+	open := !m.tree.folded[id]
+	switch {
+	case fold && open:
+		m.tree.foldChildren(index)
+	case !fold && !open:
+		m.tree.foldChildren(index)
+	case !fold:
+		// The turn already shows its children, so the way down is the turn
+		// that opens them.
+		m.tree.filter.move(1)
+	}
 }
 
 // handleTagKey edits the tag of the highlighted turn: enter stores it and
@@ -1483,13 +1525,17 @@ func (m *model) transcriptHeight() int {
 
 // activityHeight returns the rows the status block occupies between the
 // conversation and the prompt. While a run is in flight it is the full block,
-// with a blank row above and below the status line; once the run is over it
-// keeps a single blank row, so the content never touches the input. A very
-// short terminal falls back to a single row.
+// with two blank rows above the status line and one below; while it announces
+// that the next message opens a branch it keeps a blank row above the notice
+// and one below; once neither holds it keeps a single blank row, so the content
+// never touches the input. A very short terminal falls back to a single row.
 func (m *model) activityHeight() int {
 	want := 1
-	if m.running {
+	switch {
+	case m.running:
 		want = activityRows
+	case m.fork:
+		want = noticeRows
 	}
 	room := m.height - brandRows - inputBoxRows - chatFooterRows - m.input.Height() - minInputRows
 	if room >= want {

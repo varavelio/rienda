@@ -110,6 +110,8 @@ var (
 	pressCtrlJ  = tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}
 	pressCtrlP  = tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
 	pressCtrlT  = tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}
+	pressLeft   = tea.KeyPressMsg{Code: tea.KeyLeft}
+	pressRight  = tea.KeyPressMsg{Code: tea.KeyRight}
 	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
 	pressPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
 	pressHome   = tea.KeyPressMsg{Code: tea.KeyHome}
@@ -1468,6 +1470,47 @@ func TestTree(t *testing.T) {
 
 		typeFilter(t, m, "fix")
 		require.Equal(t, 0, m.tree.filter.selected(), "the keys reach the query again")
+	})
+
+	t.Run("folds and unfolds the turns that follow a turn", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		update(t, m, pressUp)
+		update(t, m, pressUp)
+		require.Equal(t, "one", m.tree.nodes[m.tree.filter.selected()].text)
+
+		update(t, m, pressRight)
+
+		require.Len(t, m.tree.nodes, 2, "folding hides the turns that follow the turn")
+		require.Contains(t, plain(m.render()), "⊟─", "the folded turn says so")
+
+		update(t, m, pressLeft)
+
+		require.Len(t, m.tree.nodes, 4)
+		require.Equal(t, "one", m.tree.nodes[m.tree.filter.selected()].text)
+
+		update(t, m, pressLeft)
+
+		require.Equal(
+			t,
+			"second",
+			m.tree.nodes[m.tree.filter.selected()].text,
+			"stepping left of an open turn walks to the turn it holds",
+		)
+	})
+
+	t.Run("ignores folding a turn that holds nothing", func(t *testing.T) {
+		m, _ := treeModel(t, textMessage(llm.RoleUser, "first"))
+
+		update(t, m, pressRight)
+		update(t, m, pressLeft)
+
+		require.Len(t, m.tree.nodes, 1)
+		require.Equal(t, "first", m.tree.nodes[m.tree.filter.selected()].text)
 	})
 
 	t.Run("reports the failures of the session", func(t *testing.T) {

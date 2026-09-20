@@ -67,7 +67,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("shows one node per turn", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch)
+		nodes := treeNodes(entries, branch, nil)
 
 		require.Len(t, nodes, 5, "the tool results of a turn are an activity, not a turn")
 		require.Equal(
@@ -80,7 +80,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("places every turn in the tree", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch)
+		nodes := treeNodes(entries, branch, nil)
 
 		require.Equal(
 			t,
@@ -109,7 +109,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("marks the branch the session leaves open", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch)
+		nodes := treeNodes(entries, branch, nil)
 
 		require.Equal(
 			t,
@@ -130,7 +130,7 @@ func TestTreeNodes(t *testing.T) {
 			turnEntry("m2", "", llm.RoleUser, "again"),
 		}
 
-		nodes := treeNodes(entries, entries[1:])
+		nodes := treeNodes(entries, entries[1:], nil)
 
 		require.Equal(
 			t,
@@ -149,7 +149,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("shows the message of a turn on a single line", func(t *testing.T) {
 		entries := []session.Entry{turnEntry("m1", "", llm.RoleUser, "  fix\n\n the  bug ")}
 
-		nodes := treeNodes(entries, entries)
+		nodes := treeNodes(entries, entries, nil)
 
 		require.Equal(t, "fix the bug", nodes[0].text)
 	})
@@ -163,7 +163,7 @@ func TestTreeNodes(t *testing.T) {
 			},
 		}}
 
-		nodes := treeNodes(entries, entries)
+		nodes := treeNodes(entries, entries, nil)
 
 		require.Equal(t, "(no message)", nodes[0].text)
 	})
@@ -172,20 +172,129 @@ func TestTreeNodes(t *testing.T) {
 		entries := []session.Entry{turnEntry("m1", "", llm.RoleUser, "fix the bug")}
 		entries[0].Tag = "parser"
 
-		nodes := treeNodes(entries, entries)
+		nodes := treeNodes(entries, entries, nil)
 
 		require.Equal(t, "fix the bug parser", nodes[0].search())
 	})
 
 	t.Run("shows nothing for a session without turns", func(t *testing.T) {
-		require.Empty(t, treeNodes(nil, nil))
+		require.Empty(t, treeNodes(nil, nil, nil))
+	})
+}
+
+// TestTreeFolding verifies hiding the turns that follow a turn, which lets the
+// reader walk a long tree a subtree at a time.
+func TestTreeFolding(t *testing.T) {
+	t.Run("keeps the turns inside a folded subtree out of the nodes", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+
+		nodes := treeNodes(entries, branch, map[string]bool{"m2": true})
+
+		require.Equal(
+			t,
+			[]string{"m1", "m2"},
+			nodesField(nodes, func(node treeNode) string { return node.entry.ID }),
+		)
+		require.True(t, nodes[1].folded)
+		require.Equal(t, 2, nodes[1].children, "a folded turn keeps the count of its children")
+	})
+
+	t.Run("folds the subtree of the highlighted turn", func(t *testing.T) {
+		tree := tree{entries: nil}
+		entries, branch := branchedDialogue()
+		tree.entries, tree.branch = entries, branch
+		tree.filter = newFilter(
+			0,
+			func(int) string { return "" },
+			"Search turns",
+			newStyles(true),
+			true,
+		)
+		tree.fold()
+		require.Len(t, tree.nodes, 5)
+
+		require.True(t, tree.foldChildren(1), "the first answer holds turns")
+		require.Len(t, tree.nodes, 2)
+		require.True(t, tree.nodes[1].folded)
+
+		require.True(t, tree.foldChildren(1), "the folded turn unfolds again")
+		require.Len(t, tree.nodes, 5)
+		require.False(t, tree.nodes[1].folded)
+	})
+
+	t.Run("keeps the highlight on the turn it held", func(t *testing.T) {
+		// A second turn opens a branch of its own, so folding the first one
+		// leaves the reader where it stands.
+		entries := []session.Entry{
+			turnEntry("m1", "", llm.RoleUser, "first"),
+			turnEntry("m2", "m1", llm.RoleAssistant, "one"),
+			turnEntry("m3", "m2", llm.RoleUser, "second"),
+			turnEntry("m4", "m3", llm.RoleAssistant, "two"),
+			turnEntry("m5", "", llm.RoleUser, "other"),
+		}
+		tree := tree{entries: entries, branch: entries, folded: map[string]bool{}}
+		tree.filter = newFilter(
+			0,
+			func(int) string { return "" },
+			"Search turns",
+			newStyles(true),
+			true,
+		)
+		tree.fold()
+
+		tree.filter.cursor = 4
+		require.Equal(t, "m5", tree.entryID(tree.filter.selected()))
+
+		require.True(t, tree.foldChildren(1))
+
+		require.Equal(t, "m5", tree.entryID(tree.filter.selected()))
+		require.Len(t, tree.nodes, 3)
+	})
+
+	t.Run("lands on the turn that folds the subtree it hid", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+		tree := tree{entries: entries, branch: branch, folded: map[string]bool{}}
+		tree.filter = newFilter(
+			0,
+			func(int) string { return "" },
+			"Search turns",
+			newStyles(true),
+			true,
+		)
+		tree.fold()
+
+		// The reader stands inside the subtree the fold hides, so the
+		// highlight climbs to the turn that folded it.
+		tree.filter.cursor = 4
+		require.Equal(t, "m6", tree.entryID(tree.filter.selected()))
+
+		tree.foldChildren(1)
+
+		require.Equal(t, "m2", tree.entryID(tree.filter.selected()))
+	})
+
+	t.Run("reports the turns that hold nothing", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+		tree := tree{entries: entries, branch: branch, folded: map[string]bool{}}
+		tree.filter = newFilter(
+			0,
+			func(int) string { return "" },
+			"Search turns",
+			newStyles(true),
+			true,
+		)
+		tree.fold()
+
+		require.False(t, tree.foldChildren(2), "the answer the session is at closes its branch")
+		require.False(t, tree.foldChildren(-1))
+		require.False(t, tree.foldChildren(len(tree.nodes)))
 	})
 }
 
 // TestTreeForks verifies whether writing after a turn opens a branch.
 func TestTreeForks(t *testing.T) {
 	entries, branch := branchedDialogue()
-	nodes := treeNodes(entries, branch)
+	nodes := treeNodes(entries, branch, nil)
 	tree := tree{nodes: nodes}
 
 	t.Run("opens a branch after an answer that has turns after it", func(t *testing.T) {

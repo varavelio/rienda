@@ -20,6 +20,11 @@ const (
 // styles groups the styles of the interface. Foreground colors come from the
 // sixteen ANSI colors so the interface adapts to every terminal theme; the
 // rules adapt to the terminal background.
+//
+// Every element keeps a color of its own: the blue of a highlighted row, the
+// magenta of the user, the green of the agent and the yellow of the tags and
+// the notices. A color shared by two elements would make one read as the
+// other, which is what the palette avoids.
 type styles struct {
 	header    lipgloss.Style
 	title     lipgloss.Style
@@ -133,7 +138,7 @@ func newStyles(isDark bool) styles {
 		activity:    lipgloss.NewStyle(),
 		on:          lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
 		off:         lipgloss.NewStyle().Faint(true),
-		tag:         lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
+		tag:         lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
 		branch:      lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
 		errorText:   lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
 		inputPrompt: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
@@ -144,8 +149,8 @@ func newStyles(isDark bool) styles {
 
 		user: section{
 			marker:      markerTurn,
-			markerStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
-			title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
+			markerStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13")),
+			title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13")),
 			body:        lipgloss.NewStyle(),
 		},
 		assistant: section{
