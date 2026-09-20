@@ -521,7 +521,7 @@ func TestModel(t *testing.T) {
 
 		cmd := update(t, m, pressEscape)
 
-		require.True(t, m.confirmInterrupt)
+		require.Equal(t, confirmInterrupt, m.confirm.action)
 		require.NotNil(t, cmd, "arming the confirmation starts its timeout")
 		require.Contains(t, plain(m.render()), "esc again to interrupt")
 		select {
@@ -537,7 +537,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressEnter)
 
 		update(t, m, pressEscape)
-		require.True(t, m.confirmInterrupt)
+		require.Equal(t, confirmInterrupt, m.confirm.action)
 
 		require.Nil(t, update(t, m, pressEscape), "confirming needs no timeout")
 
@@ -546,7 +546,7 @@ func TestModel(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			require.Fail(t, "the run was not canceled")
 		}
-		require.False(t, m.confirmInterrupt)
+		require.Equal(t, confirmNone, m.confirm.action)
 
 		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
@@ -562,11 +562,11 @@ func TestModel(t *testing.T) {
 		m.input.SetValue("long task")
 		update(t, m, pressEnter)
 		update(t, m, pressEscape)
-		require.True(t, m.confirmInterrupt)
+		require.Equal(t, confirmInterrupt, m.confirm.action)
 
-		update(t, m, interruptTimeoutMsg{seq: m.interruptSeq})
+		update(t, m, confirmTimeoutMsg{seq: m.confirm.seq})
 
-		require.False(t, m.confirmInterrupt)
+		require.Equal(t, confirmNone, m.confirm.action)
 		require.Contains(t, plain(m.render()), "esc to interrupt")
 		require.NotContains(t, plain(m.render()), "esc again")
 		select {
@@ -584,16 +584,21 @@ func TestModel(t *testing.T) {
 
 		// The timer of a request that a newer press already replaced carries
 		// an older sequence and must not drop the pending confirmation.
-		update(t, m, interruptTimeoutMsg{seq: m.interruptSeq - 1})
+		update(t, m, confirmTimeoutMsg{seq: m.confirm.seq - 1})
 
-		require.True(t, m.confirmInterrupt, "a stale timer must not drop the request")
+		require.Equal(
+			t,
+			confirmInterrupt,
+			m.confirm.action,
+			"a stale timer must not drop the request",
+		)
 	})
 
 	t.Run("ignores escape when no run is in flight", func(t *testing.T) {
 		m, _ := chatModel(t)
 
 		require.Nil(t, update(t, m, pressEscape))
-		require.False(t, m.confirmInterrupt)
+		require.Equal(t, confirmNone, m.confirm.action)
 	})
 
 	t.Run("finishes the run when the event channel closes", func(t *testing.T) {
@@ -948,22 +953,136 @@ func TestModel(t *testing.T) {
 		require.NotEqual(t, before, plain(m.render()), "the status spinner advances")
 	})
 
-	t.Run("quits with ctrl+c", func(t *testing.T) {
+	t.Run("asks for confirmation before quitting", func(t *testing.T) {
 		m, _ := chatModel(t)
 
 		cmd := update(t, m, pressCtrlC)
 
+		require.Equal(t, confirmQuit, m.confirm.action)
+		require.NotNil(t, cmd, "arming the confirmation starts its timeout")
+		require.Contains(t, plain(m.render()), "ctrl+c again to quit")
+		require.NotContains(t, plain(m.render()), "ctrl+c quit")
+	})
+
+	t.Run("quits on the confirming ctrl+c", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		update(t, m, pressCtrlC)
+		cmd := update(t, m, pressCtrlC)
+
+		require.Equal(t, confirmNone, m.confirm.action)
 		require.NotNil(t, cmd)
 		require.IsType(t, tea.QuitMsg{}, cmd())
 	})
 
-	t.Run("quits with ctrl+d only when idle", func(t *testing.T) {
+	t.Run("drops the quit request when it times out", func(t *testing.T) {
 		m, _ := chatModel(t)
 
-		require.IsType(t, tea.QuitMsg{}, update(t, m, pressCtrlD)())
+		update(t, m, pressCtrlC)
+		update(t, m, confirmTimeoutMsg{seq: m.confirm.seq})
 
-		m.running = true
+		require.Equal(t, confirmNone, m.confirm.action)
+		require.Contains(t, plain(m.render()), "ctrl+c quit")
+		require.NotContains(t, plain(m.render()), "ctrl+c again to quit")
+	})
+
+	t.Run("keeps the request a newer press replaced", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+
+		// The escape replaces the quit request with an interruption one, so the
+		// timer of the quit request carries an older sequence.
+		update(t, m, pressCtrlC)
+		update(t, m, pressEscape)
+		require.Equal(t, confirmInterrupt, m.confirm.action)
+
+		update(t, m, confirmTimeoutMsg{seq: m.confirm.seq - 1})
+
+		require.Equal(
+			t,
+			confirmInterrupt,
+			m.confirm.action,
+			"a stale timer must not drop the request that replaced it",
+		)
+	})
+
+	t.Run("keeps a pending quit while a run ends", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		update(t, m, pressCtrlC)
+
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		require.Equal(
+			t,
+			confirmQuit,
+			m.confirm.action,
+			"the confirmation belongs to the interface, not to the run",
+		)
+	})
+
+	t.Run("drops a pending interruption when the run ends", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		update(t, m, pressEscape)
+
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		require.Equal(t, confirmNone, m.confirm.action)
+
+		// A run that starts next must not find the confirmation of the run that
+		// ended and cancel itself on the first escape.
+		m.input.SetValue("again")
+		update(t, m, pressEnter)
+		update(t, m, pressEscape)
+
+		require.True(t, m.running, "the first escape never cancels a run by itself")
+		require.Equal(t, confirmInterrupt, m.confirm.action)
+	})
+
+	t.Run("asks for confirmation before quitting with ctrl+d", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		update(t, m, pressCtrlD)
+		require.Equal(t, confirmQuit, m.confirm.action)
+
+		require.IsType(t, tea.QuitMsg{}, update(t, m, pressCtrlD)())
+	})
+
+	t.Run("names the key that armed the quit request", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		update(t, m, pressCtrlD)
+		require.Contains(t, plain(m.render()), "ctrl+d again to quit")
+
+		update(t, m, confirmTimeoutMsg{seq: m.confirm.seq})
+		update(t, m, pressCtrlC)
+
+		require.Contains(t, plain(m.render()), "ctrl+c again to quit")
+	})
+
+	t.Run("confirms a pending quit with either quit key", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		update(t, m, pressCtrlD)
+		require.Equal(t, confirmQuit, m.confirm.action)
+
+		// Both keys ask to leave the interface, so any of them confirms the
+		// request the other one armed.
+		require.IsType(t, tea.QuitMsg{}, update(t, m, pressCtrlC)())
+	})
+
+	t.Run("arms no quit with ctrl+d while a run is in flight", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+
 		require.Nil(t, update(t, m, pressCtrlD))
+		require.Equal(t, confirmNone, m.confirm.action)
+		require.True(t, m.running)
 	})
 
 	t.Run("closes the session once", func(t *testing.T) {

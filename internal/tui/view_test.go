@@ -59,6 +59,7 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "Writes prose")
 		require.Contains(t, view, "  minimal")
 		require.Contains(t, view, "enter select")
+		require.Contains(t, view, "ctrl+c quit")
 		require.NotContains(t, view, "esc back", "the picker opened alone has nowhere to return")
 	})
 
@@ -86,6 +87,60 @@ func TestView(t *testing.T) {
 		)
 
 		require.Contains(t, plain(m.render()), "preparing the session of coder")
+	})
+
+	t.Run(
+		"announces the quit key of the preparation screen once it is pending",
+		func(t *testing.T) {
+			m := newTestModel(
+				t,
+				[]agent.Agent{{ID: "coder"}},
+				0,
+				func(string) (Session, error) { return newFakeSession(), nil },
+			)
+
+			// The screen keeps to the session it is preparing until the user asks
+			// to leave, which is when the key that leaves it has to show up.
+			require.NotContains(t, plain(m.render()), "ctrl+c")
+
+			update(t, m, pressCtrlC)
+
+			require.Contains(t, plain(m.render()), "ctrl+c again to quit")
+		},
+	)
+
+	t.Run("asks for a second press before quitting from the start list", func(t *testing.T) {
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+		update(t, m, windowMsg(80, 24))
+		require.Equal(t, phaseStart, m.phase)
+		require.Contains(t, plain(m.render()), "ctrl+c quit")
+
+		update(t, m, pressCtrlC)
+
+		view := plain(m.render())
+		require.Equal(t, confirmQuit, m.confirm.action)
+		require.Contains(t, view, "ctrl+c again to quit")
+		require.NotContains(t, view, "type to filter", "the request takes the place of the hints")
+	})
+
+	t.Run("asks for a second press before quitting from the session tree", func(t *testing.T) {
+		m, _ := treeModel(t, textMessage(llm.RoleUser, "fix the parser"))
+		require.NotContains(
+			t,
+			plain(m.render()),
+			"ctrl+c",
+			"the tree footer does not advertise the key that leaves the interface",
+		)
+
+		update(t, m, pressCtrlC)
+
+		view := plain(m.render())
+		require.Contains(t, view, "ctrl+c again to quit")
+		require.NotContains(t, view, "enter rewind", "the request takes the place of the hints")
 	})
 
 	t.Run("renders the session preparation without a selected agent", func(t *testing.T) {
@@ -445,6 +500,7 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "› New session")
 		require.Contains(t, view, "  hello")
 		require.Contains(t, view, "type to filter")
+		require.Contains(t, view, "ctrl+c quit")
 	})
 
 	t.Run("renders the stored sessions of the start list", func(t *testing.T) {

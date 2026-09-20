@@ -93,7 +93,31 @@ func (m *model) headerRows(identity string) []string {
 // footerRows returns the rows that close a phase: the separator between two
 // blank rows and the hints of the phase.
 func (m *model) footerRows(hints string) []string {
-	return []string{"", m.ruleLine(m.styles.separator), "", m.clip(m.styles.footer.Render(hints))}
+	return []string{"", m.ruleLine(m.styles.separator), "", m.footerHints(hints)}
+}
+
+// footerHints renders the closing hint row of a phase: the hints the phase
+// spells out, or the quit request that is pending, which takes their place so
+// the reader always sees what the next press does however long the hints are
+// and however narrow the terminal is.
+func (m *model) footerHints(hints string) string {
+	if row, pending := m.pendingQuitRow(); pending {
+		return row
+	}
+	return m.clip(m.styles.footer.Render(hints))
+}
+
+// pendingQuitRow renders the row that asks for the press that leaves the
+// interface, which is only shown while a quit request waits for it: the phases
+// that close with a footer show it in the place of the hints, and the ones that
+// close without one, like the preparation screen, show it on its own. It names
+// the key that armed the request, so the reader is asked for the press of the
+// key that is already under their finger.
+func (m *model) pendingQuitRow() (string, bool) {
+	if m.confirm.action != confirmQuit {
+		return "", false
+	}
+	return m.clip(m.styles.notice.Render(m.confirm.key + " again to quit")), true
 }
 
 // viewStart renders the list that opens the interface: the offer to begin a
@@ -484,6 +508,9 @@ func (m *model) viewPreparing() string {
 	rows := m.headerRows(m.brandIdentity())
 	mark := m.styles.dim.Render(m.spinner.View())
 	rows = append(rows, mark+" preparing the session of "+m.preparing, "")
+	if row, pending := m.pendingQuitRow(); pending {
+		rows = append(rows, row)
+	}
 	return strings.Join(rows, "\n")
 }
 
@@ -544,9 +571,9 @@ func (m *model) activityLine() string {
 		return ""
 	}
 
-	hint := m.styles.footer.Render("esc to interrupt")
-	if m.confirmInterrupt {
-		hint = m.styles.notice.Render("esc again to interrupt")
+	hint := m.styles.footer.Render(keyEscape + " to interrupt")
+	if m.confirm.action == confirmInterrupt {
+		hint = m.styles.notice.Render(m.confirm.key + " again to interrupt")
 	}
 	line := m.styles.dim.Render(m.spinner.View()) + " " +
 		m.styles.activity.Render(m.activityLabel()) +
@@ -612,7 +639,7 @@ func (m *model) chatFooter() string {
 	// terminal cuts the rare ones instead of the ones the reader needs.
 	parts = append(parts, "@ files · enter send · ctrl+t tree · ctrl+p settings · ctrl+c quit")
 
-	return m.clip(m.styles.footer.Render(strings.Join(parts, " · ")))
+	return m.footerHints(strings.Join(parts, " · "))
 }
 
 // renderEntry renders the transcript entry at the given index as a

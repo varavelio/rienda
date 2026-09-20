@@ -280,7 +280,12 @@ func TestMention(t *testing.T) {
 		update(t, m, pressEscape)
 
 		require.False(t, m.mention.active)
-		require.False(t, m.confirmInterrupt, "escape cancels the completion, not the run")
+		require.Equal(
+			t,
+			confirmNone,
+			m.confirm.action,
+			"escape cancels the completion, not the run",
+		)
 		require.Equal(t, "@mo", m.input.Value())
 	})
 

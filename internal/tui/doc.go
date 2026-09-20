@@ -44,6 +44,12 @@
 // status line occupies no room once the run is over, so the conversation grows
 // into its rows instead of leaving them blank.
 //
+// Neither the escape that interrupts a run nor the ctrl+c and ctrl+d that leave
+// the interface act on a single press: the first one arms the request, which the
+// status line, the closing row of the phase or the preparation screen announces
+// in place of its hints, and the second press of the same key, within a few
+// seconds, runs it, so a stray key never cancels a run nor closes a session.
+//
 // The command center (ctrl+p) starts a new session, reopens the list that
 // starts a new one or continues a previous one, shows the tree of the session,
 // and holds the options of the harness. The tool output and the reasoning start

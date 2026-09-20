@@ -86,9 +86,10 @@ const minTranscriptRows = 3
 // cannot stall the interface.
 const maxEventBurst = 64
 
-// interruptConfirmWindow is how long the interface waits for a second escape
-// before dropping a pending interruption request.
-const interruptConfirmWindow = 3 * time.Second
+// confirmWindow is how long the interface waits for the second press that
+// confirms an action, such as leaving the interface or interrupting the run in
+// flight, before dropping the pending request.
+const confirmWindow = 3 * time.Second
 
 // defaultDarkBackground is the terminal background assumed until the terminal
 // reports the real one.
@@ -112,6 +113,35 @@ const (
 // single key leaves the horizontal arrows free of a meaning the reader would
 // have to remember.
 const keyFold = "ctrl+f"
+
+// confirmAction is the action a confirmation waits to run, which is what the
+// key that arms it does when pressed twice within confirmWindow.
+type confirmAction int
+
+const (
+	// confirmNone reports that no confirmation is pending, the zero value.
+	confirmNone confirmAction = iota
+	// confirmInterrupt cancels the run in flight.
+	confirmInterrupt
+	// confirmQuit leaves the interface.
+	confirmQuit
+)
+
+// confirmation is the action waiting for the second press of the key that
+// armed it. The zero value reports that nothing is pending.
+type confirmation struct {
+	// action is the action the confirmation runs once it is confirmed.
+	action confirmAction
+
+	// key is the key that armed the request. Several keys can arm the same
+	// action, so the request remembers the one the user pressed and names it
+	// when it asks for the press that confirms it.
+	key string
+
+	// seq numbers the requests, so the timeout of a request that a newer press
+	// already replaced can tell itself apart from the pending one.
+	seq int
+}
 
 // activity is what a run is doing at the moment, reported by the single status
 // spinner that closes the conversation.
@@ -338,10 +368,10 @@ type engineEventsMsg []engine.Event
 // eventsClosedMsg reports that the event channel of a run was closed.
 type eventsClosedMsg struct{}
 
-// interruptTimeoutMsg reports that the confirmation window of an interruption
-// request expired. The sequence identifies the request that armed it, so a
-// stale timer cannot drop a newer request.
-type interruptTimeoutMsg struct {
+// confirmTimeoutMsg reports that the confirmation window of a request expired
+// without the second press that confirms it. The sequence identifies the
+// request that armed it, so a stale timer cannot drop a newer request.
+type confirmTimeoutMsg struct {
 	seq int
 }
 
@@ -426,11 +456,9 @@ type model struct {
 	activity     activity
 	activityTool string
 
-	// confirmInterrupt reports that an escape press armed an interruption
-	// request that waits for a second press. interruptSeq numbers those
-	// requests so a stale timeout cannot drop a newer one.
-	confirmInterrupt bool
-	interruptSeq     int
+	// confirm is the action waiting for the second press of the key that armed
+	// it, such as interrupting the run in flight or leaving the interface.
+	confirm confirmation
 
 	// rewound reports that the session was moved back to an earlier turn, which
 	// the block above the prompt announces until the next message is sent.
@@ -638,8 +666,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsScannedMsg:
 		m.applySessions(msg)
 		return m, nil
-	case interruptTimeoutMsg:
-		m.handleInterruptTimeout(msg)
+	case confirmTimeoutMsg:
+		m.handleConfirmTimeout(msg)
 		return m, nil
 	case eventsClosedMsg:
 		if m.running {
@@ -706,10 +734,10 @@ func (m *model) applyBackground(isDark bool) {
 func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
 	case "ctrl+c":
-		return m.quit()
+		return m.requestConfirm(confirmQuit, key.String())
 	case "ctrl+d":
 		if !m.running {
-			return m.quit()
+			return m.requestConfirm(confirmQuit, key.String())
 		}
 		return nil
 	case "ctrl+p":
@@ -1397,7 +1425,7 @@ func (m *model) finishRun(reason engine.EndReason) {
 	m.cancel = nil
 	m.events = nil
 	m.setActivity(activityIdle, "")
-	m.clearInterrupt()
+	m.dropConfirm(confirmInterrupt)
 }
 
 // recordElapsed closes the turn in flight with the time the agent worked on it,
@@ -1412,39 +1440,65 @@ func (m *model) recordElapsed() {
 }
 
 // requestInterrupt asks the user to confirm the interruption of the run in
-// flight. The first escape arms the confirmation and the second one cancels
-// the run; the request expires after interruptConfirmWindow without a second
-// press. It does nothing when no run is in flight.
+// flight. It does nothing when there is no run to interrupt, so an escape
+// pressed over an idle conversation arms nothing.
 func (m *model) requestInterrupt() tea.Cmd {
 	if !m.running {
 		return nil
 	}
-	if m.confirmInterrupt {
-		m.clearInterrupt()
-		m.cancelRun()
-		return nil
+	return m.requestConfirm(confirmInterrupt, keyEscape)
+}
+
+// requestConfirm asks the user to confirm an action: the first press of key
+// arms the request and the second one, pressed within confirmWindow, runs it.
+// Arming returns the timer that drops the request once the window expires, so a
+// single stray press never triggers anything on its own. The request waits for
+// the action rather than for the key, so any key that arms the same action
+// confirms it.
+func (m *model) requestConfirm(action confirmAction, key string) tea.Cmd {
+	if m.confirm.action == action {
+		m.clearConfirm()
+		return m.runConfirmed(action)
 	}
 
-	m.confirmInterrupt = true
-	m.interruptSeq++
-	seq := m.interruptSeq
-	return tea.Tick(interruptConfirmWindow, func(time.Time) tea.Msg {
-		return interruptTimeoutMsg{seq: seq}
+	m.confirm = confirmation{action: action, key: key, seq: m.confirm.seq + 1}
+	seq := m.confirm.seq
+	return tea.Tick(confirmWindow, func(time.Time) tea.Msg {
+		return confirmTimeoutMsg{seq: seq}
 	})
 }
 
-// handleInterruptTimeout drops a confirmation that expired without a second
-// press, ignoring the timers of requests that a newer press already replaced.
-func (m *model) handleInterruptTimeout(msg interruptTimeoutMsg) {
-	if msg.seq != m.interruptSeq {
-		return
+// runConfirmed runs the action the second press of its key confirmed.
+func (m *model) runConfirmed(action confirmAction) tea.Cmd {
+	switch action {
+	case confirmInterrupt:
+		m.cancelRun()
+	case confirmQuit:
+		return m.quit()
 	}
-	m.clearInterrupt()
+	return nil
 }
 
-// clearInterrupt drops any pending interruption confirmation.
-func (m *model) clearInterrupt() {
-	m.confirmInterrupt = false
+// handleConfirmTimeout drops a confirmation that expired without a second
+// press, ignoring the timers of requests that a newer press already replaced.
+func (m *model) handleConfirmTimeout(msg confirmTimeoutMsg) {
+	if msg.seq != m.confirm.seq {
+		return
+	}
+	m.clearConfirm()
+}
+
+// clearConfirm drops the pending confirmation, if any.
+func (m *model) clearConfirm() {
+	m.confirm.action = confirmNone
+}
+
+// dropConfirm drops the pending confirmation of an action that no longer
+// applies, keeping any other one armed.
+func (m *model) dropConfirm(action confirmAction) {
+	if m.confirm.action == action {
+		m.clearConfirm()
+	}
 }
 
 // cancelRun interrupts the run in flight, if there is one.
