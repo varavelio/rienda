@@ -91,7 +91,8 @@ func TestTreeNodes(t *testing.T) {
 		require.Equal(
 			t,
 			[]int{0, 1, 2, 2, 3},
-			nodesField(nodes, func(node treeNode) int { return node.depth }),
+			nodesField(nodes, func(node treeNode) int { return len(node.guides) }),
+			"the guides of a turn place it at its depth",
 		)
 		require.Equal(
 			t,
@@ -141,7 +142,7 @@ func TestTreeNodes(t *testing.T) {
 		require.Equal(
 			t,
 			[]int{0, 0},
-			nodesField(nodes, func(node treeNode) int { return node.depth }),
+			nodesField(nodes, func(node treeNode) int { return len(node.guides) }),
 		)
 		require.True(t, nodes[1].current)
 	})
@@ -175,6 +176,74 @@ func TestTreeNodes(t *testing.T) {
 		nodes := treeNodes(entries, entries, nil)
 
 		require.Equal(t, "fix the bug parser", nodes[0].search())
+	})
+
+	t.Run("places a branch beside the turn it follows", func(t *testing.T) {
+		// A branch opened from a turn of the past lands under it, however late
+		// it was written, so the tree reads in the order it grew.
+		entries := []session.Entry{
+			turnEntry("m1", "", llm.RoleUser, "first"),
+			turnEntry("m2", "m1", llm.RoleAssistant, "one"),
+			turnEntry("m3", "m2", llm.RoleUser, "second"),
+			turnEntry("m4", "m3", llm.RoleAssistant, "two"),
+			turnEntry("m5", "m2", llm.RoleAssistant, "other"),
+		}
+
+		nodes := treeNodes(entries, entries, nil)
+
+		require.Equal(
+			t,
+			[]string{"m1", "m2", "m3", "m4", "m5"},
+			nodesField(nodes, func(node treeNode) string { return node.entry.ID }),
+			"the branch written last stays under the turn it follows",
+		)
+		require.Equal(
+			t,
+			[]int{-1, 0, 1, 2, 1},
+			nodesField(nodes, func(node treeNode) int { return node.parent }),
+		)
+	})
+
+	t.Run("draws the lines that connect a subtree to its turn", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+
+		nodes := treeNodes(entries, branch, nil)
+
+		require.Equal(
+			t,
+			[]string{
+				"",
+				"   └─ ",
+				"      ├─ ",
+				"      └─ ",
+				"         └─ ",
+			},
+			nodesField(nodes, func(node treeNode) string {
+				return treeGuides(node.guides) + treeConnector(node)
+			}),
+			"every level of the tree draws the column that keeps it connected",
+		)
+	})
+
+	t.Run("draws the line of a level that still holds a turn", func(t *testing.T) {
+		entries := []session.Entry{
+			turnEntry("m1", "", llm.RoleUser, "first"),
+			turnEntry("m2", "m1", llm.RoleAssistant, "one"),
+			turnEntry("m3", "m2", llm.RoleUser, "second"),
+			turnEntry("m4", "m3", llm.RoleAssistant, "two"),
+			turnEntry("m5", "m2", llm.RoleAssistant, "other"),
+		}
+
+		nodes := treeNodes(entries, entries, nil)
+
+		require.Equal(
+			t,
+			[]string{"", "   └─ ", "      ├─ ", "      │  └─ ", "      └─ "},
+			nodesField(nodes, func(node treeNode) string {
+				return treeGuides(node.guides) + treeConnector(node)
+			}),
+			"the branch that follows a turn keeps the line of the turn it hangs from",
+		)
 	})
 
 	t.Run("shows nothing for a session without turns", func(t *testing.T) {

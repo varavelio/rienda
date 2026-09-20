@@ -105,9 +105,13 @@ const (
 	keyEnd    = "end"
 	keyPgUp   = "pgup"
 	keyPgDown = "pgdown"
-	keyLeft   = "left"
-	keyRight  = "right"
 )
+
+// keyFold toggles the turns that follow the highlighted turn of the tree. It is
+// a toggle instead of a pair of keys because folding is one decision, and a
+// single key leaves the horizontal arrows free of a meaning the reader would
+// have to remember.
+const keyFold = "ctrl+f"
 
 // activity is what a run is doing at the moment, reported by the single status
 // spinner that closes the conversation.
@@ -428,10 +432,14 @@ type model struct {
 	confirmInterrupt bool
 	interruptSeq     int
 
-	// fork reports that the next message opens a branch: the session was
-	// moved back to a turn that already has turns after it, so what the user
-	// writes starts a second attempt beside them. Sending the message clears
-	// it, because the branch is then written.
+	// rewound reports that the session was moved back to an earlier turn, which
+	// the block above the prompt announces until the next message is sent.
+	rewound bool
+
+	// fork reports that the next message opens a branch: the session was moved
+	// back to a turn that already has turns after it, so what the user writes
+	// starts a second attempt beside them. Sending the message clears it,
+	// because the branch is then written.
 	fork bool
 
 	preferences preferences
@@ -952,10 +960,10 @@ func (m *model) buildTree() {
 }
 
 // handleTreeKey walks the session tree: the query narrows it, the arrows move
-// the highlight, enter returns the session to the highlighted turn and ctrl+t
-// labels it. The horizontal arrows fold and unfold the turns that follow the
-// highlighted one, so a long tree is walked a subtree at a time. Escape clears
-// the query first and then leaves the tree.
+// the highlight, enter returns the session to the highlighted turn, ctrl+t
+// labels it and ctrl+f folds or unfolds the turns that follow it, so a long
+// tree is walked a subtree at a time. Escape clears the query first and then
+// leaves the tree.
 func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
 	if m.tree.editing {
 		return m.handleTagKey(key)
@@ -966,10 +974,8 @@ func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
 		m.tree.filter.move(-1)
 	case keyDown:
 		m.tree.filter.move(1)
-	case keyRight:
-		m.foldTree(true)
-	case keyLeft:
-		m.foldTree(false)
+	case keyFold:
+		m.foldTree()
 	case keyEnter:
 		return m.rewind()
 	case keyEscape:
@@ -986,26 +992,11 @@ func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
 }
 
 // foldTree hides or shows the turns that follow the highlighted one, which lets
-// the reader walk a long tree a subtree at a time. Unfolding a turn that is
-// already open moves the highlight to the turn it holds, so the arrows keep
-// walking the tree.
-func (m *model) foldTree(fold bool) {
-	index := m.tree.filter.selected()
-	if index < 0 {
-		return
-	}
-
-	id := m.tree.nodes[index].entry.ID
-	open := !m.tree.folded[id]
-	switch {
-	case fold && open:
+// the reader walk a long tree a subtree at a time. The highlight stays on the
+// turn it holds, or climbs to the turn that folded the subtree it was in.
+func (m *model) foldTree() {
+	if index := m.tree.filter.selected(); index >= 0 {
 		m.tree.foldChildren(index)
-	case !fold && !open:
-		m.tree.foldChildren(index)
-	case !fold:
-		// The turn already shows its children, so the way down is the turn
-		// that opens them.
-		m.tree.filter.move(1)
 	}
 }
 
@@ -1091,6 +1082,7 @@ func (m *model) rewind() tea.Cmd {
 		return nil
 	}
 
+	m.rewound = true
 	m.fork = m.tree.forks(index)
 	m.input.SetValue(prompt)
 	m.reloadTranscript()
@@ -1280,6 +1272,7 @@ func (m *model) enterChat(prepared Session) tea.Cmd {
 	m.phase = phaseChat
 	m.cancel = nil
 	m.events = nil
+	m.rewound = false
 	m.fork = false
 	m.setRunning(false)
 	m.setActivity(activityIdle, "")
@@ -1299,6 +1292,7 @@ func (m *model) submit() tea.Cmd {
 
 	m.input.Reset()
 	m.mention = mention{}
+	m.rewound = false
 	m.fork = false
 	m.transcript.addUser(prompt)
 	m.setRunning(true)
@@ -1534,7 +1528,7 @@ func (m *model) activityHeight() int {
 	switch {
 	case m.running:
 		want = activityRows
-	case m.fork:
+	case m.rewound:
 		want = noticeRows
 	}
 	room := m.height - brandRows - inputBoxRows - chatFooterRows - m.input.Height() - minInputRows

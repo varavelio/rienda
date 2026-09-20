@@ -58,20 +58,24 @@
 // answer of the agent, labeled with its author and its message. The tool
 // invocations and the reasoning are not nodes: they belong to the turn around
 // them and travel with the branch, so a branch keeps the context of the turn it
-// starts from. The turns of the active branch are checked, the turn the session
-// is at carries a dot, and enter returns the session to the highlighted turn,
-// leaving the turns that followed it in the tree as a branch of their own.
-// Returning to a prompt rewinds to the turn before it and offers the prompt in
-// the input, ready to be edited and sent again, which is the same as returning
-// to the answer it followed. The message that follows opens a branch when the
-// turn it hangs from already has turns after it, which the block above the
-// prompt announces between two blank rows, and continues the branch when that
-// turn closes it. A turn can also carry a tag (ctrl+t), a word the user attaches
-// to it to find it again, which the tree shows before the author in a color of
-// its own and the query matches along with the message. The turns that follow a
-// turn fold away with the horizontal arrows, so a long tree is walked a subtree
-// at a time; folding is how the reader looks at the session, not what it
-// stores, so it lasts as long as the tree is open.
+// starts from. The turns are drawn in the order the conversation grew, each
+// subtree under the turn it follows and connected to it by the vertical lines
+// of the levels above, so a branch opened from a turn of the past lands beside
+// that turn instead of at the end of the tree. The turns of the active branch
+// are checked, the turn the session is at carries a dot, and enter returns the
+// session to the highlighted turn, leaving the turns that followed it in the
+// tree as a branch of their own. Returning to a prompt rewinds to the turn
+// before it and offers the prompt in the input, ready to be edited and sent
+// again, which is the same as returning to the answer it followed. Every rewind
+// is announced by the block above the prompt, between two blank rows, which
+// says whether the next message opens a branch or continues the branch the
+// session returned to. A turn can also carry a tag (ctrl+t), a word the user
+// attaches to it to find it again, which the tree shows before the author in a
+// color of its own and the query matches along with the message. The turns that
+// follow a turn fold away with ctrl+f, a single key that hides and shows the
+// subtree under the highlighted turn, so a long tree is walked a subtree at a
+// time; folding is how the reader looks at the session, not what it stores, so
+// it lasts as long as the tree is open.
 //
 // An @ in the prompt opens the completion of the files of the project, so the
 // user never has to remember a path to point the model at a file. The

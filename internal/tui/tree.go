@@ -16,9 +16,17 @@ import (
 // the tree shows before every tag.
 const treeTagPrompt = "# "
 
-// treeIndent is what one level of the tree adds before the turns that follow
-// another turn.
-const treeIndent = "   "
+// treeLevel is the width of one level of the tree: the column a turn of that
+// level opens and the gap before the next one.
+const treeLevel = "   "
+
+// treeLine draws the column of a level that still holds a turn to close, which
+// connects the turns of a subtree to the turn they follow.
+const treeLine = "│  "
+
+// treeGap keeps the column of a level that holds nothing more, so the turns
+// below stay aligned with the ones above.
+const treeGap = "   "
 
 // treeMessageMax caps the columns the message of a turn may take, so a long
 // message never floods the tree however wide the terminal is.
@@ -28,7 +36,8 @@ const treeMessageMax = 96
 // turn: the author, the connector that places the turn and the marks that close
 // the row, which the message must never push out of it. It counts the runes of
 // the widest of each, because the connector and the marks are single glyphs the
-// terminal draws in one column each.
+// terminal draws in one column each. The columns of the levels above the turn
+// are measured apart, because they grow with its depth.
 var treeMessageReserve = utf8.RuneCountInString("Agent (agent): ") +
 	utf8.RuneCountInString("└─ ") +
 	utf8.RuneCountInString("  ✓ ●") +
@@ -86,9 +95,12 @@ type treeNode struct {
 	// opens a branch.
 	parent int
 
-	// depth is the number of turns between the node and the turn that opens
-	// its path, zero for that one.
-	depth int
+	// guides holds, for every level above the node, whether that level still
+	// holds a turn to close. A level that does draws the vertical line that
+	// connects the turns of a subtree to the turn they follow, so the tree
+	// reads as a tree instead of a list of indented rows. Its length is the
+	// depth of the node.
+	guides []bool
 
 	// children is the number of turns that follow the node.
 	children int
@@ -138,10 +150,16 @@ func newTreeScreen(text func(int) string, base styles, isDark bool) tree {
 }
 
 // treeNodes builds the nodes of the session tree from the entries of a
-// session: one node per turn, in append order, linked to the turn it follows.
-// The branch tells which turns the session leaves open, so the tree can mark
-// where the conversation stands, and folded names the turns whose children the
-// user hid, which keeps their subtrees out of the nodes.
+// session: one node per turn, linked to the turn it follows and placed under
+// it, so the tree reads in the order it grew. The branch tells which turns the
+// session leaves open, so the tree can mark where the conversation stands, and
+// folded names the turns whose children the user hid, which keeps their
+// subtrees out of the nodes.
+//
+// The nodes are walked from the roots of the forest, depth first, so the turns
+// of a subtree stay together under the turn they follow however late they were
+// written: a branch opened from a turn of the past lands beside it, not at the
+// end of the tree.
 func treeNodes(entries, branch []session.Entry, folded map[string]bool) []treeNode {
 	active := make(map[string]bool, len(branch))
 	for _, entry := range branch {
@@ -149,66 +167,65 @@ func treeNodes(entries, branch []session.Entry, folded map[string]bool) []treeNo
 	}
 	current := currentTurn(branch)
 
-	nodes := make([]treeNode, 0, len(entries))
-	// above links every entry to the turn it hangs from, and hidden names the
-	// entries the reader folded away: the turns of a folded subtree stay out of
-	// the nodes, which is what hides them.
+	// above links every entry to the turn it hangs from, and children groups
+	// the turns by the turn they follow, in the order they were written. An
+	// activity hangs from the turn it belongs to, so it never breaks the chain
+	// between two turns.
 	above := map[string]string{"": ""}
-	hidden := make(map[string]bool, len(folded))
-	index := make(map[string]int, len(entries))
-	lastChild := make(map[int]int, len(entries))
+	children := map[string][]string{}
+	turns := make(map[string]session.Entry, len(entries))
 	for _, entry := range entries {
 		parent := above[entry.ParentID]
-		if hidden[parent] {
-			hidden[entry.ID] = true
-			if !isTurnEntry(entry) {
-				above[entry.ID] = parent
-				continue
-			}
-			// The turn is hidden, but it still hangs from the turn that was
-			// folded, which keeps the count of the turns it hides and so stays
-			// foldable.
-			above[entry.ID] = entry.ID
-			if top, found := index[parent]; found {
-				nodes[top].children++
-			}
-			continue
-		}
 		if !isTurnEntry(entry) {
 			above[entry.ID] = parent
 			continue
 		}
-		// A turn is the turn the entries that follow it hang from, so the
-		// activities between two turns never break their chain.
 		above[entry.ID] = entry.ID
+		turns[entry.ID] = entry
+		children[parent] = append(children[parent], entry.ID)
+	}
+
+	nodes := make([]treeNode, 0, len(turns))
+	index := make(map[string]int, len(turns))
+	// walk appends the subtree of a turn, carrying the guides of the levels
+	// above it. A level that still holds a turn to close draws its line, so the
+	// turns of a subtree stay connected to the turn they follow.
+	var walk func(id string, parent int, guides []bool)
+	walk = func(id string, parent int, guides []bool) {
+		entry := turns[id]
+		siblings := children[above[entry.ParentID]]
 
 		node := treeNode{
-			entry:   entry,
-			text:    turnText(entry),
-			parent:  -1,
-			last:    true,
-			active:  active[entry.ID],
-			current: entry.ID == current,
+			entry:    entry,
+			text:     turnText(entry),
+			parent:   parent,
+			guides:   guides,
+			last:     id == siblings[len(siblings)-1],
+			folded:   folded[id],
+			active:   active[id],
+			current:  id == current,
+			children: len(children[id]),
 		}
-		if parent != "" {
-			top := index[parent]
-			node.parent = top
-			node.depth = nodes[top].depth + 1
-			if previous, attached := lastChild[top]; attached {
-				nodes[previous].last = false
-			}
-			nodes[top].children++
-			lastChild[top] = len(nodes)
+		index[id] = len(nodes)
+		nodes = append(nodes, node)
+
+		if node.folded {
+			return
 		}
 
-		if folded[entry.ID] {
-			// The turn keeps the room of its children and the turns below it
-			// stay out of the nodes, so the tree shows the subtree as folded.
-			node.folded = true
-			hidden[entry.ID] = true
+		// The level of the turn draws a line while a turn of its own group
+		// follows it. A turn that opens a branch holds no level of its own, so
+		// the turns below it start at the root.
+		line := false
+		if parent >= 0 {
+			line = !node.last
 		}
-		index[entry.ID] = len(nodes)
-		nodes = append(nodes, node)
+		for _, child := range children[id] {
+			walk(child, index[id], append(slices.Clone(guides), line))
+		}
+	}
+	for _, root := range children[""] {
+		walk(root, -1, nil)
 	}
 	return nodes
 }

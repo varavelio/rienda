@@ -495,7 +495,7 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "●", "the turn the session is at is marked")
 		require.Contains(t, view, "› ", "the highlight opens the row of the turn")
 		require.Contains(t, view, "enter rewind")
-		require.Contains(t, view, "←/→ fold")
+		require.Contains(t, view, "ctrl+f fold")
 		require.Contains(t, view, "esc back")
 	})
 
@@ -866,7 +866,7 @@ func TestChatLayout(t *testing.T) {
 		lines := strings.Split(plain(m.render()), "\n")
 		notice := -1
 		for index, line := range lines {
-			if strings.Contains(line, "starts a new branch") {
+			if strings.Contains(line, "rewound") {
 				notice = index
 			}
 		}
@@ -880,7 +880,7 @@ func TestChatLayout(t *testing.T) {
 		update(t, m, pressEnter)
 		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
 
-		require.NotContains(t, plain(m.render()), "starts a new branch")
+		require.NotContains(t, plain(m.render()), "rewound")
 		require.Equal(t, 1, m.activityHeight(), "the notice gives its rows back")
 	})
 

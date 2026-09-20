@@ -110,8 +110,7 @@ var (
 	pressCtrlJ  = tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}
 	pressCtrlP  = tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
 	pressCtrlT  = tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}
-	pressLeft   = tea.KeyPressMsg{Code: tea.KeyLeft}
-	pressRight  = tea.KeyPressMsg{Code: tea.KeyRight}
+	pressCtrlF  = tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl}
 	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
 	pressPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
 	pressHome   = tea.KeyPressMsg{Code: tea.KeyHome}
@@ -214,6 +213,25 @@ func treeModel(t *testing.T, messages ...llm.Message) (*model, *storeSession) {
 	update(t, m, pressCtrlT)
 	require.Equal(t, phaseTree, m.phase)
 	return m, stored
+}
+
+// pickTurn moves the highlight of the tree to the turn that carries the given
+// message, which lets the tests return to a turn without counting rows.
+func pickTurn(t *testing.T, m *model, message string) {
+	t.Helper()
+
+	for index, node := range m.tree.nodes {
+		if node.text != message {
+			continue
+		}
+		for position, shown := range m.tree.filter.shown {
+			if shown == index {
+				m.tree.filter.cursor = position
+				return
+			}
+		}
+	}
+	t.Fatalf("the tree holds no turn %q", message)
 }
 
 // typeTag pushes text into the tag input of the tree, one keystroke at a time.
@@ -1358,7 +1376,7 @@ func TestTree(t *testing.T) {
 		require.Contains(t, view, "first")
 		require.Contains(t, view, "one")
 		require.NotContains(t, view, "second", "the conversation keeps the branch it returned to")
-		require.Contains(t, view, "the next message starts a new branch")
+		require.Contains(t, view, "starts a new branch")
 	})
 
 	t.Run("continues the branch when the answer closes it", func(t *testing.T) {
@@ -1372,7 +1390,7 @@ func TestTree(t *testing.T) {
 		require.Equal(t, phaseChat, m.phase)
 		require.Equal(t, stored.store.Entries()[1].ID, stored.store.Leaf())
 		require.False(t, m.fork, "the last turn of a branch is where writing continues")
-		require.NotContains(t, plain(m.render()), "starts a new branch")
+		require.Contains(t, plain(m.render()), "the conversation continues from here")
 	})
 
 	t.Run("offers the prompt it returns to", func(t *testing.T) {
@@ -1483,34 +1501,128 @@ func TestTree(t *testing.T) {
 		update(t, m, pressUp)
 		require.Equal(t, "one", m.tree.nodes[m.tree.filter.selected()].text)
 
-		update(t, m, pressRight)
+		update(t, m, pressCtrlF)
 
 		require.Len(t, m.tree.nodes, 2, "folding hides the turns that follow the turn")
 		require.Contains(t, plain(m.render()), "⊟─", "the folded turn says so")
 
-		update(t, m, pressLeft)
+		update(t, m, pressCtrlF)
 
 		require.Len(t, m.tree.nodes, 4)
 		require.Equal(t, "one", m.tree.nodes[m.tree.filter.selected()].text)
+	})
 
-		update(t, m, pressLeft)
+	t.Run("keeps the highlight on the turn that folds a subtree", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		update(t, m, pressUp)
+		update(t, m, pressUp)
+		require.Equal(t, "one", m.tree.nodes[m.tree.filter.selected()].text)
+
+		update(t, m, pressCtrlF)
 
 		require.Equal(
 			t,
-			"second",
+			"one",
 			m.tree.nodes[m.tree.filter.selected()].text,
-			"stepping left of an open turn walks to the turn it holds",
+			"the highlight stays on the turn it folded instead of jumping to the first one",
 		)
 	})
 
 	t.Run("ignores folding a turn that holds nothing", func(t *testing.T) {
 		m, _ := treeModel(t, textMessage(llm.RoleUser, "first"))
 
-		update(t, m, pressRight)
-		update(t, m, pressLeft)
+		update(t, m, pressCtrlF)
 
 		require.Len(t, m.tree.nodes, 1)
 		require.Equal(t, "first", m.tree.nodes[m.tree.filter.selected()].text)
+	})
+
+	t.Run("opens a branch from the turn it selected", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		update(t, m, pressCtrlT)
+		pickTurn(t, m, "one")
+		update(t, m, pressEnter)
+		m.input.SetValue("other")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		// The session returned to the first answer, so the turn that followed
+		// it stays in the tree and the new message hangs from that answer.
+		update(t, m, pressCtrlT)
+		pickTurn(t, m, "two")
+		update(t, m, pressEnter)
+		require.Equal(t, stored.store.Entries()[3].ID, stored.store.Leaf())
+		m.input.SetValue("third")
+		update(t, m, pressEnter)
+
+		entries := stored.store.Entries()
+		require.Equal(
+			t,
+			stored.store.Entries()[3].ID,
+			entries[len(entries)-1].ParentID,
+			"the message follows the turn the tree selected, not the branch it stood on",
+		)
+	})
+
+	t.Run("draws a branch under the turn it selected", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		pickTurn(t, m, "one")
+		update(t, m, pressEnter)
+		m.input.SetValue("other")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+		update(t, m, pressCtrlT)
+
+		view := plain(m.render())
+		require.Contains(t, view, "├─ You: second")
+		require.Contains(t, view, "│  └─ Agent (coder): two")
+		require.Contains(t, view, "└─ You: other", "the branch closes the group of the answer")
+		require.Less(
+			t,
+			strings.Index(view, "two"),
+			strings.Index(view, "other"),
+			"the turns of the subtree stay together under the turn they follow",
+		)
+	})
+
+	t.Run("reports every rewind above the prompt", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		update(t, m, pressUp)
+		update(t, m, pressEnter)
+
+		view := plain(m.render())
+		require.Contains(t, view, "rewound")
+		require.Contains(t, view, "starts a new branch", "the prompt opens a branch beside itself")
+	})
+
+	t.Run("reports a rewind that continues the branch", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		update(t, m, pressEnter)
+
+		view := plain(m.render())
+		require.Contains(t, view, "rewound")
+		require.Contains(t, view, "the conversation continues from here")
 	})
 
 	t.Run("reports the failures of the session", func(t *testing.T) {

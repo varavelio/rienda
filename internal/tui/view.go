@@ -339,7 +339,7 @@ func (m *model) treeHints() string {
 	case m.tree.editing:
 		return "type a tag · enter save · esc cancel"
 	default:
-		return "type to filter · ↑/↓ move · enter rewind · ←/→ fold · ctrl+t tag · esc back"
+		return "type to filter · ↑/↓ move · enter rewind · ctrl+f fold · ctrl+t tag · esc back"
 	}
 }
 
@@ -363,12 +363,12 @@ func (m *model) treeLine(position int) string {
 // message is cut to the room the row leaves it, and the marks that place the
 // turn in the tree close it.
 func (m *model) treeTurn(node treeNode) string {
-	line := strings.Repeat(treeIndent, node.depth) + treeConnector(node)
+	line := treeGuides(node.guides) + treeConnector(node)
 	if node.entry.Tag != "" {
 		line += m.styles.tag.Render("#"+node.entry.Tag) + " "
 	}
 	line += m.treeNameStyle(node.entry).Render(treeName(node.entry, m.session.Info().Agent))
-	line += " " + clipText(m.treeMessageWidth(), node.text)
+	line += " " + clipText(m.treeMessageWidth(node), node.text)
 	if marks := treeMarks(node); marks != "" {
 		line += "  " + m.styles.branch.Render(marks)
 	}
@@ -379,8 +379,9 @@ func (m *model) treeTurn(node treeNode) string {
 // long message never floods the tree: it never grows past treeMessageMax, and a
 // narrow row shows what the room the marks leave it allows. A row too narrow to
 // leave the message any room shows it whole, which the terminal clips.
-func (m *model) treeMessageWidth() int {
-	return max(0, min(treeMessageMax, m.width-treeMessageReserve))
+func (m *model) treeMessageWidth(node treeNode) int {
+	room := m.width - treeMessageReserve - len(node.guides)*len(treeLevel)
+	return max(0, min(treeMessageMax, room))
 }
 
 // clipText cuts a line to the given width, keeping it whole when the width is
@@ -390,6 +391,22 @@ func clipText(width int, text string) string {
 		return text
 	}
 	return lipgloss.NewStyle().MaxWidth(width).Render(text)
+}
+
+// treeGuides draws the columns above a turn: a vertical line under every level
+// that still holds a turn to close, so the turns of a subtree stay connected to
+// the turn they follow, and a gap under every level that holds nothing more.
+func treeGuides(guides []bool) string {
+	var line strings.Builder
+	line.Grow(len(guides) * len(treeLevel))
+	for _, open := range guides {
+		if open {
+			line.WriteString(treeLine)
+			continue
+		}
+		line.WriteString(treeGap)
+	}
+	return line.String()
 }
 
 // treeConnector returns the glyph that opens a turn of the tree: the turns
@@ -494,13 +511,18 @@ func (m *model) activityBlock() string {
 
 // activityLine renders the single status row that reports the run in flight:
 // the spinner and what it is doing, with the key that interrupts it. Once the
-// run is over it reports that the next message opens a branch, when the session
-// was moved back to a turn that has turns after it, and stays blank otherwise.
+// run is over it reports where the conversation goes on, which is where the
+// session was moved back to, and stays blank otherwise.
 func (m *model) activityLine() string {
 	if !m.running {
-		if m.fork {
+		switch {
+		case m.rewound && m.fork:
 			return m.clip(m.styles.notice.Render(
 				"↩ rewound · the next message starts a new branch",
+			))
+		case m.rewound:
+			return m.clip(m.styles.notice.Render(
+				"↩ rewound · the conversation continues from here",
 			))
 		}
 		return ""
