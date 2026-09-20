@@ -216,9 +216,9 @@ func (s *Session) Info() session.Info {
 	return s.store.Info()
 }
 
-// History returns the messages of the active branch in conversation order.
-func (s *Session) History() []llm.Message {
-	return s.store.History()
+// Entries returns the entries of the active branch in conversation order.
+func (s *Session) Entries() []session.Entry {
+	return s.store.Branch()
 }
 
 // Run starts a run of the session and returns the channel carrying its

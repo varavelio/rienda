@@ -9,6 +9,7 @@ import (
 
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/llm"
+	"github.com/varavelio/rienda/internal/session"
 )
 
 // maxToolOutput caps the tool output retained per invocation.
@@ -150,22 +151,34 @@ func (t *transcript) finishTurn(elapsed time.Duration) {
 	t.touch(last)
 }
 
-// load seeds the transcript with the messages of a stored conversation,
-// oldest first.
-func (t *transcript) load(messages []llm.Message) {
-	for _, message := range messages {
-		t.appendMessage(message)
+// load seeds the transcript with the entries of a stored conversation, oldest
+// first, closing every completed turn with the time it took. The duration is
+// not stored: it is derived from the moment the turn opened, the user message
+// that started it, and the moment it closed, the assistant message that
+// answered it, so a slow provider that takes minutes to answer is reported
+// like any other turn.
+func (t *transcript) load(entries []session.Entry) {
+	var opened time.Time
+	for _, entry := range entries {
+		t.fold(entry)
+		switch {
+		case opensTurn(entry):
+			opened = entry.CreatedAt
+		case closesTurn(entry) && !opened.IsZero():
+			t.finishTurn(entry.CreatedAt.Sub(opened))
+			opened = time.Time{}
+		}
 	}
 }
 
-// appendMessage folds one stored message into the transcript.
-func (t *transcript) appendMessage(message llm.Message) {
+// fold appends the content of one stored entry to the transcript.
+func (t *transcript) fold(entry session.Entry) {
 	textKind := entryAssistant
-	if message.Role == llm.RoleUser {
+	if entry.Message.Role == llm.RoleUser {
 		textKind = entryUser
 	}
 
-	for _, block := range message.Blocks {
+	for _, block := range entry.Message.Blocks {
 		switch block.Type {
 		case llm.BlockText:
 			t.appendText(textKind, block.Text)
@@ -177,6 +190,27 @@ func (t *transcript) appendMessage(message llm.Message) {
 			t.finishTool(block.ToolResultCallID, block.ToolResultIsError, textOf(block.ToolResult))
 		}
 	}
+}
+
+// opensTurn reports whether a stored entry starts a turn: the user message that
+// carries a prompt. The user messages that carry tool results continue the turn
+// in flight instead of opening one.
+func opensTurn(entry session.Entry) bool {
+	return entry.Message.Role == llm.RoleUser &&
+		!hasBlock(entry.Message.Blocks, llm.BlockToolResult)
+}
+
+// closesTurn reports whether a stored entry ends a turn: the assistant message
+// that answered without asking for tools. An assistant message that requests
+// tools keeps the turn open until the model answers again.
+func closesTurn(entry session.Entry) bool {
+	return entry.Message.Role == llm.RoleAssistant &&
+		!hasBlock(entry.Message.Blocks, llm.BlockToolCall)
+}
+
+// hasBlock reports whether the blocks hold one of the given type.
+func hasBlock(blocks []llm.Block, kind llm.BlockType) bool {
+	return slices.ContainsFunc(blocks, func(block llm.Block) bool { return block.Type == kind })
 }
 
 // addTool appends a tool invocation to the transcript.

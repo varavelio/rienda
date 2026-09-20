@@ -363,12 +363,12 @@ func TestPrepare(t *testing.T) {
 		require.Equal(t, started.ID(), resumed.ID())
 		require.Equal(t, "coder", resumed.Info().Agent)
 
-		history := resumed.History()
-		require.Len(t, history, 2)
-		require.Equal(t, llm.RoleUser, history[0].Role)
-		require.Equal(t, "first", history[0].Blocks[0].Text)
-		require.Equal(t, llm.RoleAssistant, history[1].Role)
-		require.Equal(t, "one", history[1].Blocks[0].Text)
+		entries := resumed.Entries()
+		require.Len(t, entries, 2)
+		require.Equal(t, llm.RoleUser, entries[0].Message.Role)
+		require.Equal(t, "first", entries[0].Message.Blocks[0].Text)
+		require.Equal(t, llm.RoleAssistant, entries[1].Message.Role)
+		require.Equal(t, "one", entries[1].Message.Blocks[0].Text)
 
 		events = collectEvents(resumed.Run(t.Context(), "second"))
 		require.Equal(t, "two", joinedText(events))

@@ -23,7 +23,7 @@ import (
 // fakeSession is a scripted Session implementation.
 type fakeSession struct {
 	info         session.Info
-	history      []llm.Message
+	entries      []session.Entry
 	events       chan engine.Event
 	prompts      []string
 	canceled     chan struct{}
@@ -47,8 +47,8 @@ func newFakeSession() *fakeSession {
 // Info returns the session metadata.
 func (s *fakeSession) Info() session.Info { return s.info }
 
-// History returns the stored messages of the session.
-func (s *fakeSession) History() []llm.Message { return s.history }
+// Entries returns the stored entries of the session.
+func (s *fakeSession) Entries() []session.Entry { return s.entries }
 
 // Run records the prompt and returns the scripted event channel.
 func (s *fakeSession) Run(ctx context.Context, prompt string) <-chan engine.Event {
@@ -798,9 +798,19 @@ func TestModel(t *testing.T) {
 
 	t.Run("continues a previous session", func(t *testing.T) {
 		scripted := newFakeSession()
-		scripted.history = []llm.Message{
-			{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "hello"}}},
-			{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockText, Text: "hi"}}},
+		scripted.entries = []session.Entry{
+			{
+				Message: llm.Message{
+					Role:   llm.RoleUser,
+					Blocks: []llm.Block{{Type: llm.BlockText, Text: "hello"}},
+				},
+			},
+			{
+				Message: llm.Message{
+					Role:   llm.RoleAssistant,
+					Blocks: []llm.Block{{Type: llm.BlockText, Text: "hi"}},
+				},
+			},
 		}
 		m := newTestModelWith(t, modelConfig{
 			agents:   []agent.Agent{{ID: "coder"}},

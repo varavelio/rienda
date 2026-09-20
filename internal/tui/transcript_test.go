@@ -10,6 +10,7 @@ import (
 
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/llm"
+	"github.com/varavelio/rienda/internal/session"
 )
 
 // TestTranscript verifies event folding.
@@ -119,6 +120,53 @@ func TestTranscript(t *testing.T) {
 		require.Equal(t, entryError, conversation.entries[0].kind)
 		require.Equal(t, "boom", conversation.entries[0].text())
 		require.Equal(t, entryNotice, conversation.entries[1].kind)
+	})
+
+	t.Run("derives the time of a stored turn from its entries", func(t *testing.T) {
+		base := time.Date(2026, 9, 17, 18, 54, 0, 0, time.UTC)
+		conversation := transcript{}
+		conversation.load([]session.Entry{
+			messageEntryAt(base, llm.RoleUser,
+				llm.Block{Type: llm.BlockText, Text: "slow one"}),
+			// The model took five minutes: the provider was slow, not the
+			// reader, and the stored timestamps carry the whole wait.
+			messageEntryAt(base.Add(5*time.Minute), llm.RoleAssistant,
+				llm.Block{Type: llm.BlockText, Text: "finally"}),
+		})
+
+		require.Len(t, conversation.entries, 2)
+		require.Equal(t, 5*time.Minute, conversation.entries[1].elapsed)
+	})
+
+	t.Run("keeps a turn with tools open until the model answers", func(t *testing.T) {
+		base := time.Date(2026, 9, 17, 18, 54, 0, 0, time.UTC)
+		conversation := transcript{}
+		conversation.load([]session.Entry{
+			messageEntryAt(base, llm.RoleUser,
+				llm.Block{Type: llm.BlockText, Text: "run it"}),
+			messageEntryAt(base.Add(2*time.Second), llm.RoleAssistant,
+				llm.Block{Type: llm.BlockToolCall, ToolCallID: "c1", ToolCallName: "shell"}),
+			messageEntryAt(base.Add(3*time.Second), llm.RoleUser,
+				llm.Block{Type: llm.BlockToolResult, ToolResultCallID: "c1"}),
+			messageEntryAt(base.Add(30*time.Second), llm.RoleAssistant,
+				llm.Block{Type: llm.BlockText, Text: "done"}),
+		})
+
+		last := conversation.entries[len(conversation.entries)-1]
+		require.Equal(t, 30*time.Second, last.elapsed, "the whole turn counts")
+		require.Zero(t, conversation.entries[1].elapsed, "the tool request does not close it")
+	})
+
+	t.Run("leaves an interrupted turn without a time", func(t *testing.T) {
+		base := time.Date(2026, 9, 17, 18, 54, 0, 0, time.UTC)
+		conversation := transcript{}
+		conversation.load([]session.Entry{
+			messageEntryAt(base, llm.RoleUser,
+				llm.Block{Type: llm.BlockText, Text: "never answered"}),
+		})
+
+		require.Len(t, conversation.entries, 1)
+		require.Zero(t, conversation.entries[0].elapsed)
 	})
 
 	t.Run("records the time a turn took on its last entry", func(t *testing.T) {
@@ -249,30 +297,26 @@ func TestTranscript(t *testing.T) {
 
 	t.Run("loads a stored conversation", func(t *testing.T) {
 		conversation := transcript{}
-		conversation.load([]llm.Message{
-			{Role: llm.RoleUser, Blocks: []llm.Block{
-				{Type: llm.BlockText, Text: "list the files"},
-			}},
-			{Role: llm.RoleAssistant, Blocks: []llm.Block{
-				{Type: llm.BlockThinking, Thinking: "let me "},
-				{Type: llm.BlockThinking, Thinking: "check"},
-				{Type: llm.BlockText, Text: "sure"},
-				{
+		conversation.load([]session.Entry{
+			messageEntry(llm.RoleUser, llm.Block{Type: llm.BlockText, Text: "list the files"}),
+			messageEntry(llm.RoleAssistant,
+				llm.Block{Type: llm.BlockThinking, Thinking: "let me "},
+				llm.Block{Type: llm.BlockThinking, Thinking: "check"},
+				llm.Block{Type: llm.BlockText, Text: "sure"},
+				llm.Block{
 					Type:              llm.BlockToolCall,
 					ToolCallID:        "call_1",
 					ToolCallName:      "shell",
 					ToolCallArguments: json.RawMessage(`{"command":"ls"}`),
 				},
-			}},
-			{Role: llm.RoleUser, Blocks: []llm.Block{
-				{
-					Type:             llm.BlockToolResult,
-					ToolResultCallID: "call_1",
-					ToolResult: []llm.Block{
-						{Type: llm.BlockText, Text: "a.txt"},
-					},
+			),
+			messageEntry(llm.RoleUser, llm.Block{
+				Type:             llm.BlockToolResult,
+				ToolResultCallID: "call_1",
+				ToolResult: []llm.Block{
+					{Type: llm.BlockText, Text: "a.txt"},
 				},
-			}},
+			}),
 		})
 
 		require.Len(t, conversation.entries, 4)
@@ -293,20 +337,18 @@ func TestTranscript(t *testing.T) {
 
 	t.Run("loads failed invocations", func(t *testing.T) {
 		conversation := transcript{}
-		conversation.load([]llm.Message{
-			{Role: llm.RoleAssistant, Blocks: []llm.Block{
-				{Type: llm.BlockToolCall, ToolCallID: "call_1", ToolCallName: "shell"},
-			}},
-			{Role: llm.RoleUser, Blocks: []llm.Block{
-				{
-					Type:              llm.BlockToolResult,
-					ToolResultCallID:  "call_1",
-					ToolResultIsError: true,
-					ToolResult: []llm.Block{
-						{Type: llm.BlockText, Text: "boom"},
-					},
+		conversation.load([]session.Entry{
+			messageEntry(llm.RoleAssistant,
+				llm.Block{Type: llm.BlockToolCall, ToolCallID: "call_1", ToolCallName: "shell"},
+			),
+			messageEntry(llm.RoleUser, llm.Block{
+				Type:              llm.BlockToolResult,
+				ToolResultCallID:  "call_1",
+				ToolResultIsError: true,
+				ToolResult: []llm.Block{
+					{Type: llm.BlockText, Text: "boom"},
 				},
-			}},
+			}),
 		})
 
 		require.Len(t, conversation.entries, 1)
@@ -354,6 +396,20 @@ func TestTranscript(t *testing.T) {
 		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: "hmm"})
 		require.Equal(t, 1, conversation.changedFrom(), "the entry before it changes too")
 	})
+}
+
+// messageEntry builds a stored entry that carries one message, the shape the
+// transcript loads from a session file.
+func messageEntry(role llm.Role, blocks ...llm.Block) session.Entry {
+	return session.Entry{Message: llm.Message{Role: role, Blocks: blocks}}
+}
+
+// messageEntryAt builds a stored message entry appended at the given moment,
+// the shape a session file carries.
+func messageEntryAt(moment time.Time, role llm.Role, blocks ...llm.Block) session.Entry {
+	entry := messageEntry(role, blocks...)
+	entry.CreatedAt = moment
+	return entry
 }
 
 // TestCutRunes verifies rune-safe truncation.

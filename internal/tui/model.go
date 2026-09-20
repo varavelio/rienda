@@ -14,7 +14,6 @@ import (
 	"github.com/varavelio/rienda/internal/agent"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/filecomplete"
-	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 )
 
@@ -200,8 +199,8 @@ type Session interface {
 	// Info returns the session metadata.
 	Info() session.Info
 
-	// History returns the messages of the active branch in conversation order.
-	History() []llm.Message
+	// Entries returns the entries of the active branch in conversation order.
+	Entries() []session.Entry
 
 	// Run starts a run and returns the channel carrying its events.
 	Run(ctx context.Context, prompt string) <-chan engine.Event
@@ -1024,7 +1023,7 @@ func (m *model) enterChat(prepared Session) tea.Cmd {
 	m.setRunning(false)
 	m.setActivity(activityIdle, "")
 	m.transcript = transcript{}
-	m.transcript.load(prepared.History())
+	m.transcript.load(prepared.Entries())
 	m.mention = mention{}
 	m.input.Reset()
 	m.syncLayout()

@@ -29,7 +29,10 @@
 // the position is kept while a run streams, so reading back never fights the
 // incoming output. Every turn closes with how long the agent worked on it,
 // shown as a faint footnote under its last message and, while the run is in
-// flight, beside the status line.
+// flight, beside the status line. A turn of a resumed session keeps its time
+// too: the interface derives it from the moments the turn opened and closed,
+// which the session file already stores, so reopening a conversation never
+// loses the wait it took.
 //
 // A single status line closes the conversation and reports what the run is
 // doing at the moment, from the model writing an answer to a tool running,

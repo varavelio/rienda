@@ -927,16 +927,18 @@ const (
 // chunks, which is the unit of work of a fast stream. The transcript holds a
 // previous conversation, as a long session does.
 func BenchmarkStreamBurst(b *testing.B) {
-	history := make([]llm.Message, 0, benchHistoryBlocks)
+	history := make([]session.Entry, 0, benchHistoryBlocks)
 	for index := range benchHistoryBlocks {
 		role := llm.RoleAssistant
 		if index%2 == 0 {
 			role = llm.RoleUser
 		}
-		history = append(history, llm.Message{
-			Role: role,
-			Blocks: []llm.Block{
-				{Type: llm.BlockText, Text: strings.Repeat("a previous answer.\n", 200)},
+		history = append(history, session.Entry{
+			Message: llm.Message{
+				Role: role,
+				Blocks: []llm.Block{
+					{Type: llm.BlockText, Text: strings.Repeat("a previous answer.\n", 200)},
+				},
 			},
 		})
 	}

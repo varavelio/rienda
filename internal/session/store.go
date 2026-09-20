@@ -258,8 +258,39 @@ func (s *Store) Path(id string) ([]Entry, error) {
 	if !found {
 		return nil, fmt.Errorf("session: unknown entry %q", id)
 	}
+	return s.walk(index), nil
+}
 
-	path := make([]Entry, 0, 8)
+// Branch returns the entries of the active branch, from the root of the tree
+// down to the active leaf, in conversation order. It returns nothing when the
+// session holds no message. The returned entries share their content with the
+// store and must not be mutated.
+func (s *Store) Branch() []Entry {
+	if s.leaf == "" {
+		return nil
+	}
+	return s.walk(s.index[s.leaf])
+}
+
+// History returns the messages of the active branch in conversation order. It
+// returns nothing when the session holds no message.
+func (s *Store) History() []llm.Message {
+	branch := s.Branch()
+	if len(branch) == 0 {
+		return nil
+	}
+
+	messages := make([]llm.Message, 0, len(branch))
+	for _, entry := range branch {
+		messages = append(messages, entry.Message)
+	}
+	return messages
+}
+
+// walk returns the entries from the root of the tree down to the entry at
+// index, in conversation order.
+func (s *Store) walk(index int) []Entry {
+	path := make([]Entry, 0, index+1)
 	for {
 		entry := s.entries[index]
 		path = append(path, entry)
@@ -269,27 +300,7 @@ func (s *Store) Path(id string) ([]Entry, error) {
 		index = s.index[entry.ParentID]
 	}
 	slices.Reverse(path)
-	return path, nil
-}
-
-// History returns the messages of the active branch in conversation order.
-func (s *Store) History() []llm.Message {
-	if s.leaf == "" {
-		return nil
-	}
-
-	index := s.index[s.leaf]
-	messages := make([]llm.Message, 0, index+1)
-	for {
-		entry := s.entries[index]
-		messages = append(messages, entry.Message)
-		if entry.ParentID == "" {
-			break
-		}
-		index = s.index[entry.ParentID]
-	}
-	slices.Reverse(messages)
-	return messages
+	return path
 }
 
 // Append persists a message entry after the entry identified by ParentID, or

@@ -399,6 +399,55 @@ func TestPath(t *testing.T) {
 	})
 }
 
+// TestBranch verifies the entries of the active branch: the whole chain of
+// messages in conversation order, and its projection into messages.
+func TestBranch(t *testing.T) {
+	t.Run("returns nothing for a session without messages", func(t *testing.T) {
+		store := newTestStore(t)
+
+		require.Empty(t, store.Branch())
+		require.Nil(t, store.History())
+	})
+
+	t.Run("follows the active branch in conversation order", func(t *testing.T) {
+		store := newTestStore(t)
+		first := appendMessage(t, store, llm.RoleUser, "one")
+		second := appendMessage(t, store, llm.RoleAssistant, "two")
+
+		branch := store.Branch()
+
+		require.Len(t, branch, 2)
+		require.Equal(t, first.ID, branch[0].ID)
+		require.Equal(t, second.ID, branch[1].ID)
+		require.Equal(t, []llm.Message{first.Message, second.Message}, store.History())
+	})
+
+	t.Run("follows the branch the leaf selects", func(t *testing.T) {
+		store := newTestStore(t)
+		root := appendMessage(t, store, llm.RoleUser, "root")
+		branch := appendMessage(t, store, llm.RoleAssistant, "branch")
+
+		// A new turn continues from the root instead of the last answer, which
+		// moves the active branch away from the one just written.
+		other, err := store.Append(t.Context(), Entry{
+			ParentID: root.ID,
+			Message: llm.Message{
+				Role:   llm.RoleAssistant,
+				Blocks: []llm.Block{{Type: llm.BlockText, Text: "other branch"}},
+			},
+		})
+		require.NoError(t, err)
+
+		active := store.Branch()
+
+		require.Len(t, active, 2)
+		require.Equal(t, root.ID, active[0].ID)
+		require.Equal(t, other.ID, active[1].ID)
+		require.Equal(t, []llm.Message{root.Message, other.Message}, store.History())
+		require.NotContains(t, active, branch)
+	})
+}
+
 // TestOpen verifies session reopening.
 func TestOpen(t *testing.T) {
 	t.Run("round trips a stored session", func(t *testing.T) {
