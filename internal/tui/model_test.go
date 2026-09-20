@@ -1218,9 +1218,9 @@ func TestActivity(t *testing.T) {
 			require.NotContains(t, block, "▄▀▄", "the blocks carry no spinner")
 		}
 		require.Contains(t, ansi.Strip(m.renderThinkingEntry(&m.transcript.entries[1], 40)),
-			markerActivity+" Thinking")
+			markerActivity+" Agent: thinking")
 		require.Contains(t, ansi.Strip(m.renderToolEntry(&m.transcript.entries[2], 40)),
-			markerActivity+" shell")
+			markerActivity+" Tool: shell")
 	})
 }
 

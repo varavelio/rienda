@@ -150,9 +150,9 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "rienda · coder · fake/test-model · session-1")
 		require.Contains(t, view, "You")
 		require.Contains(t, view, "hello")
-		require.Contains(t, view, "Thinking")
+		require.Contains(t, view, "Agent: thinking")
 		require.Contains(t, view, "let me think")
-		require.Contains(t, view, `shell {"command":"ls"}`)
+		require.Contains(t, view, `Tool: shell {"command":"ls"}`)
 		require.Contains(t, view, "a.txt")
 		require.Contains(t, view, "done")
 		require.Contains(t, view, "enter send")
@@ -205,7 +205,7 @@ func TestView(t *testing.T) {
 
 		lines := strings.Split(plain(m.render()), "\n")
 
-		require.Contains(t, lines, markerTurn+" coder", "the answer carries its label")
+		require.Contains(t, lines, markerTurn+" Agent: coder", "the answer carries its label")
 		require.Contains(t, lines, markerTurn+" You", "the prompt carries its label")
 		require.Contains(t, lines, "plain answer", "the body aligns with the label")
 	})
@@ -271,7 +271,7 @@ func TestView(t *testing.T) {
 			Reason: engine.EndReasonTurn,
 		})
 
-		require.Contains(t, m.render(), "\x1b[1;92mcoder", "the label keeps its green style")
+		require.Contains(t, m.render(), "\x1b[1;92mAgent: coder", "the label keeps its green style")
 	})
 
 	t.Run("marks failed invocations", func(t *testing.T) {
@@ -350,7 +350,7 @@ func TestView(t *testing.T) {
 		})
 
 		view := plain(m.render())
-		require.Contains(t, view, "Thinking")
+		require.Contains(t, view, "Agent: thinking")
 		require.Contains(t, view, "… step two")
 		require.Contains(t, view, "step three")
 		require.Contains(t, view, "step four")
@@ -372,7 +372,7 @@ func TestView(t *testing.T) {
 		rows := strings.Split(rendered, "\n")
 		// The label, a blank row and the three rows of the preview.
 		require.Len(t, rows, 5)
-		require.Contains(t, rows[0], "Thinking")
+		require.Contains(t, rows[0], "Agent: thinking")
 		require.Empty(t, rows[1])
 		require.True(t, strings.HasPrefix(rows[2], "… "), "the preview marks the cut")
 	})

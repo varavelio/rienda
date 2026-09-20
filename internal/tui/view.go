@@ -471,9 +471,10 @@ func (m *model) divider() string {
 	return strings.Join([]string{"", m.ruleLine(m.styles.divider), ""}, "\n")
 }
 
-// assistantName returns the name shown for the answers of the agent.
+// assistantName returns the label shown for the answers of the agent, naming
+// the agent they belong to.
 func (m *model) assistantName() string {
-	return m.session.Info().Agent
+	return "Agent: " + m.session.Info().Agent
 }
 
 // renderThinkingEntry renders a reasoning block: the whole text when the
@@ -482,7 +483,7 @@ func (m *model) assistantName() string {
 // its own.
 func (m *model) renderThinkingEntry(current *entry, width int) string {
 	body := m.blockBody(current.text(), m.preferences.ExpandThinking, width)
-	return m.styles.thinking.block(width, "Thinking", body)
+	return m.styles.thinking.block(width, "Agent: thinking", body)
 }
 
 // blockBody returns the body of a collapsible block: the whole text when the
@@ -527,7 +528,7 @@ func (m *model) renderToolEntry(current *entry, width int) string {
 		name = m.styles.dim
 	}
 
-	label := name.Render(current.toolName)
+	label := name.Render("Tool: " + current.toolName)
 	if current.toolArguments != "" {
 		label += " " + m.styles.dim.Render(toolLabel(current.toolArguments))
 	}
