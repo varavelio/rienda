@@ -120,7 +120,9 @@ func (m *model) viewStart() string {
 }
 
 // startLine renders one entry of the start list: the offer of a new session or
-// a stored session with its agent and age.
+// a stored session with its agent and age. The entries the list offers are the
+// ones it read last, so a session created while the interface runs shows up
+// once the list opens again.
 func (m *model) startLine(position int) string {
 	item := m.starts[m.start.shown[position]]
 	if item.newSession {

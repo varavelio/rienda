@@ -20,7 +20,8 @@ import (
 // Run starts the interactive interface. It parses the options, offers a new
 // session and the previous ones of the workspace to continue from a single
 // list, plus the agent definitions a new session needs, and drives the chosen
-// session until the user quits.
+// session until the user quits. The stored sessions are read again whenever
+// the list opens, so a session created while the interface runs shows up.
 func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 	opts, err := parseOptions(args)
 	if err != nil {
@@ -44,13 +45,6 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 
-	// Sessions that cannot be read are skipped so that a single corrupt
-	// session file never blocks the interface.
-	sessions, _ := harness.Sessions(harness.Options{
-		Workdir:    opts.Workdir,
-		ConfigPath: opts.ConfigPath,
-	})
-
 	prepare := func(sessionID, agentID string) (Session, error) {
 		return harness.Prepare(context.Background(), harness.Options{
 			AgentID:    agentID,
@@ -65,7 +59,10 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		agents:    definitions,
 		selected:  selected,
 		requested: opts.AgentID != "",
-		sessions:  resumable(sessions, definitions),
+		sessions:  listSessions(opts, definitions),
+		scanSessions: func() []session.Info {
+			return listSessions(opts, definitions)
+		},
 		newSession: func(agentID string) (Session, error) {
 			return prepare("", agentID)
 		},
@@ -84,6 +81,19 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return fmt.Errorf("tui: run interface: %w", err)
 	}
 	return app.fatal
+}
+
+// listSessions returns the sessions the interface offers for the workspace of
+// the options: the ones whose agent definition is still available and that
+// hold a conversation, most recently updated first. Sessions that cannot be
+// read are skipped, so a single corrupt session file never blocks the
+// interface.
+func listSessions(opts options, definitions []agent.Agent) []session.Info {
+	infos, _ := harness.Sessions(harness.Options{
+		Workdir:    opts.Workdir,
+		ConfigPath: opts.ConfigPath,
+	})
+	return resumable(infos, definitions)
 }
 
 // newFileScanner returns the read that completes the mentions of the prompt,

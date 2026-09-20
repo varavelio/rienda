@@ -219,6 +219,19 @@ type sessionFactory func(id string) (Session, error)
 // in flight.
 type contextFactory func() (context.Context, context.CancelFunc)
 
+// sessionScanner lists the sessions the start list offers, most recently
+// updated first. It runs outside the update loop, so the interface never waits
+// for the files to be read, and it is called again whenever the start list
+// opens, so a session created while the interface runs shows up. The harness
+// package provides the production implementation, which keeps the model free
+// of the filesystem.
+type sessionScanner func() []session.Info
+
+// sessionsScannedMsg carries the sessions of the workspace read again.
+type sessionsScannedMsg struct {
+	items []session.Info
+}
+
 // phase is the screen the interface shows.
 type phase int
 
@@ -246,6 +259,27 @@ type startItem struct {
 	// info is the previous session the entry continues. It is zero for the
 	// entry that starts a new one.
 	info session.Info
+}
+
+// key returns the identifier of the entry, which lets a list read again keep
+// the highlight on the entry it held. The entry that starts a new session is
+// identified by its kind, since it has no stored session behind it.
+func (item startItem) key() string {
+	if item.newSession {
+		return ""
+	}
+	return item.info.ID
+}
+
+// startItems builds the entries of the start list: the offer to begin a new
+// session, which always leads the list, followed by the stored sessions.
+func startItems(sessions []session.Info) []startItem {
+	items := make([]startItem, 0, len(sessions)+1)
+	items = append(items, startItem{newSession: true})
+	for _, info := range sessions {
+		items = append(items, startItem{info: info})
+	}
+	return items
 }
 
 // sessionReadyMsg carries a prepared session into the interface.
@@ -285,8 +319,12 @@ type modelConfig struct {
 	requested bool
 
 	// sessions lists the previous sessions of the workspace, most recently
-	// updated first.
+	// updated first. It fills the start list when the interface opens.
 	sessions []session.Info
+
+	// scanSessions reads the sessions of the workspace again whenever the
+	// start list opens, or nil when the interface never re-reads them.
+	scanSessions sessionScanner
 
 	// newSession prepares a new session for an agent.
 	newSession sessionFactory
@@ -371,6 +409,7 @@ type model struct {
 	resumeSession sessionFactory
 	newRunContext contextFactory
 	scanFiles     fileScanner
+	scanSessions  sessionScanner
 	styles        styles
 	markdown      markdownRenderer
 }
@@ -409,6 +448,7 @@ func newModel(cfg modelConfig) *model {
 		resumeSession: cfg.resumeSession,
 		newRunContext: cfg.newRunContext,
 		scanFiles:     cfg.scanFiles,
+		scanSessions:  cfg.scanSessions,
 		styles:        styles,
 	}
 	built.buildLists(cfg.sessions)
@@ -420,12 +460,7 @@ func newModel(cfg modelConfig) *model {
 // the commands of the command center. Every list reads the text of its items
 // from the model, so it never holds a copy of them.
 func (m *model) buildLists(sessions []session.Info) {
-	m.starts = make([]startItem, 0, len(sessions)+1)
-	m.starts = append(m.starts, startItem{newSession: true})
-	for _, info := range sessions {
-		m.starts = append(m.starts, startItem{info: info})
-	}
-
+	m.starts = startItems(sessions)
 	m.start = newFilter(len(m.starts), m.startText, "Search sessions", m.styles, m.hasDarkBG)
 	m.picker = newFilter(len(m.agents), m.agentText, "Search agents", m.styles, m.hasDarkBG)
 	m.commands = newFilter(
@@ -537,6 +572,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleEvents(msg)
 	case filesScannedMsg:
 		m.applyScan(msg)
+		return m, nil
+	case sessionsScannedMsg:
+		m.applySessions(msg)
 		return m, nil
 	case interruptTimeoutMsg:
 		m.handleInterruptTimeout(msg)
@@ -694,12 +732,51 @@ func (m *model) startNewSession() tea.Cmd {
 }
 
 // openStart shows the list that starts a new session or continues a previous
-// one, opening it whole again: the query is dropped and the highlight returns
-// to the offer of a new session.
+// one, opening it whole again and reading the stored sessions again, so a
+// session created while the interface runs is offered.
 func (m *model) openStart() tea.Cmd {
 	m.start.reset()
 	m.phase = phaseStart
-	return nil
+	return m.scanSessionsCmd()
+}
+
+// scanSessionsCmd returns the command that reads the sessions of the workspace
+// again and reports them as a sessionsScannedMsg. The read runs outside the
+// update loop, so a slow filesystem never stalls the interface.
+func (m *model) scanSessionsCmd() tea.Cmd {
+	if m.scanSessions == nil {
+		return nil
+	}
+
+	scan := m.scanSessions
+	return func() tea.Msg { return sessionsScannedMsg{items: scan()} }
+}
+
+// applySessions replaces the sessions the start list offers with the ones read
+// again, keeping the highlight on the entry it held whenever that entry is
+// still offered, so the list gains the sessions created while the interface
+// runs without moving under the user.
+func (m *model) applySessions(msg sessionsScannedMsg) {
+	held := m.highlightedStart()
+	m.starts = startItems(msg.items)
+	m.start.setCount(len(m.starts))
+
+	for position, index := range m.start.shown {
+		if m.starts[index].key() == held {
+			m.start.cursor = position
+			return
+		}
+	}
+}
+
+// highlightedStart returns the identity of the entry the start list
+// highlights, or the empty string when it highlights none, which happens while
+// the query matches no entry.
+func (m *model) highlightedStart() string {
+	if index := m.start.selected(); index >= 0 {
+		return m.starts[index].key()
+	}
+	return ""
 }
 
 // handlePickerKey narrows the agent list, moves its highlight and starts the
@@ -730,7 +807,7 @@ func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 		if len(m.starts) <= 1 {
 			return nil
 		}
-		m.phase = phaseStart
+		return m.openStart()
 	default:
 		return m.picker.update(key)
 	}

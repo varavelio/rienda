@@ -97,6 +97,30 @@ func TestFilter(t *testing.T) {
 		require.Equal(t, 0, f.selected())
 	})
 
+	t.Run("re-ranks the list when its items are replaced", func(t *testing.T) {
+		items := []string{"one", "two"}
+		f := filterOf(items)
+
+		typeQuery(&f, "two")
+		require.Equal(t, 1, f.selected())
+
+		// The list grows with an entry that matches the query better than the
+		// one it held, and loses another one.
+		f.text = func(index int) string { return []string{"two", "two again"}[index] }
+		f.setCount(2)
+
+		require.Equal(t, []int{0, 1}, f.shown, "the new items are ranked again")
+	})
+
+	t.Run("keeps the list whole when the query is empty", func(t *testing.T) {
+		f := filterOf(items)
+
+		f.setCount(2)
+
+		require.Equal(t, []int{0, 1}, f.shown)
+		require.False(t, f.empty())
+	})
+
 	t.Run("windows the matches around the highlight", func(t *testing.T) {
 		f := filterOf(items)
 

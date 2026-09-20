@@ -89,6 +89,14 @@ func (l *filter) update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+// setCount replaces the number of items the list offers and re-ranks it
+// against the query it is narrowed by, so a list whose items were read again
+// shows them.
+func (l *filter) setCount(count int) {
+	l.count = count
+	l.refresh()
+}
+
 // move shifts the highlight delta positions through the matches, wrapping
 // around at both ends so the user cycles through them.
 func (l *filter) move(delta int) {

@@ -902,6 +902,96 @@ func TestModel(t *testing.T) {
 		require.Empty(t, m.transcript.entries, "a late burst is dropped")
 	})
 
+	t.Run("reads the sessions again when the list opens", func(t *testing.T) {
+		offered := []session.Info{
+			{ID: "session-1", Agent: "coder", Title: "hello"},
+		}
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: offered,
+			scanSessions: func() []session.Info {
+				return offered
+			},
+		})
+		require.Equal(t, 2, len(m.starts), "the list opens with the sessions known at startup")
+
+		// A session created while the interface runs shows up when the list
+		// opens again, most recently updated first.
+		offered = []session.Info{
+			{ID: "session-2", Agent: "coder", Title: "second"},
+			{ID: "session-1", Agent: "coder", Title: "hello"},
+		}
+		update(t, m, windowMsg(80, 24))
+		update(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+		update(t, m, pressDown)
+		run(t, m, update(t, m, pressEnter))
+
+		require.Equal(t, phaseStart, m.phase)
+		require.Equal(t, 3, len(m.starts))
+		require.Equal(t, "session-2", m.starts[1].info.ID)
+
+		view := plain(m.render())
+		require.Contains(t, view, "second")
+		require.Contains(t, view, "hello")
+	})
+
+	t.Run("keeps the highlight when the list is read again", func(t *testing.T) {
+		offered := []session.Info{
+			{ID: "session-1", Agent: "coder", Title: "hello"},
+			{ID: "session-2", Agent: "coder", Title: "bye"},
+		}
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: offered,
+			scanSessions: func() []session.Info {
+				return offered
+			},
+		})
+
+		// The list opens whole again, on the offer of a new session.
+		cmd := m.openStart()
+		require.Zero(t, m.start.cursor)
+
+		// The user moves the highlight while the read of the sessions is in
+		// flight, and a session created elsewhere leads the list by the time
+		// it lands, pushing the highlighted entry one position down.
+		m.start.cursor = 1
+		offered = []session.Info{
+			{ID: "session-3", Agent: "coder", Title: "new"},
+			offered[0],
+			offered[1],
+		}
+		run(t, m, cmd)
+
+		require.Equal(t, "session-1", m.starts[m.start.selected()].info.ID)
+		require.Equal(t, 2, m.start.cursor, "the highlight follows the entry it held")
+	})
+
+	t.Run("reads the sessions again when the picker leads back to the list", func(t *testing.T) {
+		offered := []session.Info{{ID: "session-1", Agent: "coder", Title: "hello"}}
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}, {ID: "writer"}},
+			selected: -1,
+			sessions: offered,
+			scanSessions: func() []session.Info {
+				return offered
+			},
+		})
+		update(t, m, windowMsg(80, 24))
+		require.Equal(t, phaseStart, m.phase)
+		require.Nil(t, update(t, m, pressEnter))
+		require.Equal(t, phasePicker, m.phase)
+
+		offered = append(offered, session.Info{ID: "session-9", Agent: "coder", Title: "later"})
+
+		run(t, m, update(t, m, pressEscape))
+
+		require.Equal(t, phaseStart, m.phase)
+		require.Contains(t, plain(m.render()), "later")
+	})
+
 	t.Run("reopens the session list from the command center", func(t *testing.T) {
 		m, _ := chatModel(t)
 		require.Equal(t, phaseChat, m.phase)
