@@ -39,11 +39,14 @@
 // status line occupies no room once the run is over, so the conversation grows
 // into its rows instead of leaving them blank.
 //
-// The command center (ctrl+p) holds the options of the harness. The tool
-// output and the reasoning start compact, previewing only their trailing lines
-// so a working session stays readable, and can be expanded to their full text;
-// the answers of the model can also be shown as plain text instead of
-// markdown.
+// The command center (ctrl+p) starts a new session, reopens the list that
+// starts a new one or continues a previous one, and holds the options of the
+// harness. The tool output and the reasoning start compact, previewing only
+// their trailing lines so a working session stays readable, and can be
+// expanded to their full text; the answers of the model can also be shown as
+// plain text instead of markdown. A new session taken from the command center
+// leaves the conversation behind and starts an empty one, while the reopened
+// list also returns to the conversation it was opened over.
 //
 // An @ in the prompt opens the completion of the files of the project, so the
 // user never has to remember a path to point the model at a file. The

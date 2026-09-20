@@ -115,7 +115,7 @@ const (
 	activityTool
 )
 
-// preferences groups the options of the harness the command center toggles.
+// preferences groups the options of the harness the command center flips.
 type preferences struct {
 	// ExpandToolOutput shows the whole output of a tool. When it is off only
 	// the trailing lines of the output are shown.
@@ -137,23 +137,43 @@ func defaultPreferences() preferences {
 	return preferences{RenderMarkdown: true}
 }
 
-// preference is one option the command center lists and toggles.
-type preference struct {
-	// Label names the option in the list.
+// command is one entry of the command center. A command either opens another
+// screen of the interface or flips an option of the harness in place.
+type command struct {
+	// Label names the command in the list.
 	Label string
 
-	// Note describes what the option does, shown next to the label.
+	// Note describes what the command does, shown next to the label.
 	Note string
 
-	// IsOn reports whether the option is enabled.
+	// Open opens the screen of the command and returns the command the
+	// interface runs next, or nil when the screen needs none. It is nil for
+	// the commands that flip an option in place.
+	Open func(*model) tea.Cmd
+
+	// IsOn reports whether the option of the command is enabled. It is nil
+	// for the commands that open a screen, which hold no state.
 	IsOn func(preferences) bool
 
-	// Set enables or disables the option.
+	// Set enables or disables the option of the command. It is nil for the
+	// commands that open a screen.
 	Set func(*preferences, bool)
 }
 
-// preferencesList lists the options of the command center in display order.
-var preferencesList = []preference{
+// commandList lists the commands of the command center in display order: the
+// ones that open a screen lead the list, followed by the options of the
+// harness.
+var commandList = []command{
+	{
+		Label: "New session",
+		Note:  "start a new session with an agent of your choice",
+		Open:  (*model).startNewSession,
+	},
+	{
+		Label: "Sessions",
+		Note:  "start a new session or continue a previous one",
+		Open:  (*model).openStart,
+	},
 	{
 		Label: "Expand tool output",
 		Note:  "show the whole output of a tool instead of its last lines",
@@ -298,12 +318,12 @@ type model struct {
 	// session followed by the previous sessions of the workspace.
 	starts []startItem
 
-	// start narrows the start list, picker the agent definitions and settings
-	// the options of the command center, each with the fuzzy query the user
+	// start narrows the start list, picker the agent definitions and commands
+	// the entries of the command center, each with the fuzzy query the user
 	// types.
 	start    filter
 	picker   filter
-	settings filter
+	commands filter
 
 	session  Session
 	events   <-chan engine.Event
@@ -397,7 +417,7 @@ func newModel(cfg modelConfig) *model {
 
 // buildLists fills the lists the interface narrows by typing: the start list,
 // with the offer of a new session and the stored ones, the agent picker and
-// the options of the command center. Every list reads the text of its items
+// the commands of the command center. Every list reads the text of its items
 // from the model, so it never holds a copy of them.
 func (m *model) buildLists(sessions []session.Info) {
 	m.starts = make([]startItem, 0, len(sessions)+1)
@@ -408,10 +428,10 @@ func (m *model) buildLists(sessions []session.Info) {
 
 	m.start = newFilter(len(m.starts), m.startText, "Search sessions", m.styles, m.hasDarkBG)
 	m.picker = newFilter(len(m.agents), m.agentText, "Search agents", m.styles, m.hasDarkBG)
-	m.settings = newFilter(
-		len(preferencesList),
-		m.preferenceText,
-		"Search options",
+	m.commands = newFilter(
+		len(commandList),
+		m.commandText,
+		"Search commands",
 		m.styles,
 		m.hasDarkBG,
 	)
@@ -433,11 +453,11 @@ func (m *model) agentText(index int) string {
 	return definition.ID + " " + definition.Description
 }
 
-// preferenceText returns the text of one option of the command center that the
+// commandText returns the text of one entry of the command center that the
 // query is matched against.
-func (m *model) preferenceText(index int) string {
-	option := preferencesList[index]
-	return option.Label + " " + option.Note
+func (m *model) commandText(index int) string {
+	entry := commandList[index]
+	return entry.Label + " " + entry.Note
 }
 
 // inputPrompt returns the prompt of one line of the input, shown only at the
@@ -558,7 +578,7 @@ func (m *model) narrowedList() *filter {
 	case phasePicker:
 		return &m.picker
 	case phaseSettings:
-		return &m.settings
+		return &m.commands
 	default:
 		return nil
 	}
@@ -575,7 +595,7 @@ func (m *model) applyBackground(isDark bool) {
 	m.input.SetStyles(newInputStyles(m.styles, isDark))
 	m.start.setStyles(m.styles, isDark)
 	m.picker.setStyles(m.styles, isDark)
-	m.settings.setStyles(m.styles, isDark)
+	m.commands.setStyles(m.styles, isDark)
 	m.invalidateTranscript()
 	m.refreshTranscript()
 }
@@ -622,7 +642,9 @@ func moveCursor(cursor, delta, length int) int {
 }
 
 // handleStartKey narrows the start list, moves its highlight and opens the
-// chosen entry, either a new session or a stored one. Escape clears the query.
+// chosen entry, either a new session or a stored one. Escape clears the query
+// first and then returns to the conversation the list was opened over, when
+// there is one.
 func (m *model) handleStartKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
 	case keyUp:
@@ -632,7 +654,10 @@ func (m *model) handleStartKey(key tea.KeyPressMsg) tea.Cmd {
 	case keyEnter:
 		return m.selectStart()
 	case keyEscape:
-		m.start.clear()
+		if m.start.clear() || m.session == nil {
+			return nil
+		}
+		return m.showChat()
 	default:
 		return m.start.update(key)
 	}
@@ -657,7 +682,8 @@ func (m *model) selectStart() tea.Cmd {
 	return m.prepareStoredSession(item.info)
 }
 
-// startNewSession moves to the agent picker, or prepares the only agent.
+// startNewSession asks for the agent of a new session, or prepares the one
+// already selected, so the session that follows starts empty.
 func (m *model) startNewSession() tea.Cmd {
 	if m.selected < 0 {
 		m.phase = phasePicker
@@ -667,9 +693,19 @@ func (m *model) startNewSession() tea.Cmd {
 	return m.prepareNewSession()
 }
 
+// openStart shows the list that starts a new session or continues a previous
+// one, opening it whole again: the query is dropped and the highlight returns
+// to the offer of a new session.
+func (m *model) openStart() tea.Cmd {
+	m.start.reset()
+	m.phase = phaseStart
+	return nil
+}
+
 // handlePickerKey narrows the agent list, moves its highlight and starts the
-// chosen agent. Escape clears the query first and then returns to the start
-// list when there is one to return to.
+// chosen agent. Escape clears the query first and then returns to the
+// conversation the picker was opened over, when there is one, or to the start
+// list.
 func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
 	case keyUp:
@@ -685,7 +721,13 @@ func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 		m.phase = phasePreparing
 		return m.prepareNewSession()
 	case keyEscape:
-		if m.picker.clear() || len(m.starts) <= 1 {
+		if m.picker.clear() {
+			return nil
+		}
+		if m.session != nil {
+			return m.showChat()
+		}
+		if len(m.starts) <= 1 {
 			return nil
 		}
 		m.phase = phaseStart
@@ -708,59 +750,71 @@ func (m *model) toggleSettings() tea.Cmd {
 
 	m.returnPhase = m.phase
 	m.phase = phaseSettings
-	m.settings.clear()
+	m.commands.clear()
 	m.mention = mention{}
 	m.input.Blur()
 	return nil
 }
 
-// closeSettings returns to the phase the command center was opened from. It
-// renders the conversation again with the current preferences when it returns
-// to the chat.
+// closeSettings returns to the phase the command center was opened from.
 func (m *model) closeSettings() tea.Cmd {
-	m.phase = m.returnPhase
-	if m.phase != phaseChat {
+	if m.returnPhase != phaseChat {
+		m.phase = m.returnPhase
 		return nil
 	}
+	return m.showChat()
+}
 
+// showChat shows the open conversation again, rendering what changed while the
+// interface was away, and focuses the prompt.
+func (m *model) showChat() tea.Cmd {
+	m.phase = phaseChat
 	m.refreshTranscript()
 	return m.input.Focus()
 }
 
-// handleSettingsKey narrows the options of the command center, moves its
-// highlight and toggles the option under it. Escape clears the query first and
-// then closes the command center.
+// handleSettingsKey narrows the commands of the command center, moves its
+// highlight and activates the command under it. Escape clears the query first
+// and then closes the command center.
 func (m *model) handleSettingsKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
 	case keyUp:
-		m.settings.move(-1)
+		m.commands.move(-1)
 	case keyDown:
-		m.settings.move(1)
+		m.commands.move(1)
 	case keyEnter:
-		m.togglePreference(m.settings.selected())
+		return m.activateCommand(m.commands.selected())
 	case keyEscape:
-		if m.settings.clear() {
+		if m.commands.clear() {
 			return nil
 		}
 		return m.closeSettings()
 	default:
-		return m.settings.update(key)
+		return m.commands.update(key)
 	}
 	return nil
 }
 
-// togglePreference flips one option and drops the rendered conversation, which
-// changes with the preferences. It does nothing when no option is highlighted,
-// which happens while the query matches none.
-func (m *model) togglePreference(index int) {
+// activateCommand runs the command the command center highlights: it opens the
+// screen of a command that moves the interface, or flips the option of one that
+// configures the harness. A flipped option drops the rendered conversation,
+// which changes with the preferences. It does nothing when no command is
+// highlighted, which happens while the query matches none.
+func (m *model) activateCommand(index int) tea.Cmd {
 	if index < 0 {
-		return
+		return nil
 	}
-	option := preferencesList[index]
+
+	entry := commandList[index]
+	if entry.Open != nil {
+		return entry.Open(m)
+	}
+
 	next := m.preferences
-	option.Set(&next, !option.IsOn(next))
+	entry.Set(&next, !entry.IsOn(next))
 	m.preferences = next
 	m.invalidateTranscript()
+	return nil
 }
 
 // handleChatKey submits prompts, interrupts runs and scrolls the transcript.
@@ -827,24 +881,45 @@ func (m *model) scrollTranscriptBlock(key tea.KeyPressMsg) {
 }
 
 // prepareNewSession returns the command that creates the session of the
-// selected agent.
+// selected agent, releasing the session it replaces.
 func (m *model) prepareNewSession() tea.Cmd {
+	m.abandonSession()
+
 	prepare := m.newSession
 	agentID := m.agents[m.selected].ID
 	m.preparing = agentID
 	return tea.Batch(m.spin(), sessionCommand(func() (Session, error) { return prepare(agentID) }))
 }
 
-// prepareStoredSession returns the command that opens the given session. The
-// session brings its own agent, so the label names the session instead of an
-// agent of the current selection, which may be empty.
+// prepareStoredSession returns the command that opens the given session,
+// releasing the session it replaces. The session brings its own agent, so the
+// label names the session instead of an agent of the current selection, which
+// may be empty.
 func (m *model) prepareStoredSession(info session.Info) tea.Cmd {
+	m.abandonSession()
+
 	prepare := m.resumeSession
 	m.preparing = info.Agent
 	return tea.Batch(
 		m.spin(),
 		sessionCommand(func() (Session, error) { return prepare(info.ID) }),
 	)
+}
+
+// abandonSession releases the session the interface leaves behind: it
+// interrupts the run in flight and closes the session, so it can neither keep
+// running nor hold its file once another session takes its place. It does
+// nothing when no session is open.
+func (m *model) abandonSession() {
+	if m.session == nil {
+		return
+	}
+
+	if m.running {
+		m.cancelRun()
+		m.finishRun(engine.EndReasonInterrupted)
+	}
+	m.Close()
 }
 
 // sessionCommand returns the command that prepares a session outside the
@@ -900,8 +975,14 @@ func (m *model) submit() tea.Cmd {
 }
 
 // handleEvents folds a burst of engine events into the interface and renders
-// the conversation once for the whole burst.
+// the conversation once for the whole burst. A burst that arrives after its run
+// was abandoned is dropped, so a late event cannot reach the session that
+// replaced it.
 func (m *model) handleEvents(events []engine.Event) tea.Cmd {
+	if m.events == nil {
+		return nil
+	}
+
 	for _, event := range events {
 		m.applyEvent(event)
 	}
@@ -1054,7 +1135,7 @@ func (m *model) resize(width, height int) {
 	m.input.SetWidth(max(1, width-inputGutterWidth))
 	m.start.setWidth(width)
 	m.picker.setWidth(width)
-	m.settings.setWidth(width)
+	m.commands.setWidth(width)
 	m.syncInputHeight()
 	m.invalidateTranscript()
 	m.refreshTranscript()

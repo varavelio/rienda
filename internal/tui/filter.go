@@ -121,9 +121,15 @@ func (l *filter) clear() bool {
 	if l.query() == "" {
 		return false
 	}
+	l.reset()
+	return true
+}
+
+// reset empties the query, shows every item again and returns the highlight to
+// the first one, so the list opens whole again.
+func (l *filter) reset() {
 	l.input.Reset()
 	l.refresh()
-	return true
 }
 
 // setWidth sets the columns the query input shows, so a long query scrolls

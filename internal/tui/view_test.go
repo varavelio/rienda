@@ -225,6 +225,8 @@ func TestView(t *testing.T) {
 		update(t, m, pressCtrlP)
 		update(t, m, pressDown)
 		update(t, m, pressDown)
+		update(t, m, pressDown)
+		update(t, m, pressDown)
 		update(t, m, pressEnter)
 		update(t, m, pressEscape)
 
@@ -461,11 +463,13 @@ func TestView(t *testing.T) {
 		view := plain(m.render())
 
 		require.Contains(t, view, "Command center")
-		require.Contains(t, view, "› Expand tool output")
+		require.Contains(t, view, "› New session")
+		require.Contains(t, view, "Sessions")
+		require.Contains(t, view, "Expand tool output")
 		require.Contains(t, view, "[off]")
 		require.Contains(t, view, "Expand thinking")
 		require.Contains(t, view, "Render markdown")
-		require.Contains(t, view, "enter toggle")
+		require.Contains(t, view, "enter run")
 		require.Contains(t, view, "esc close")
 	})
 

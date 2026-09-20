@@ -556,7 +556,7 @@ func TestModel(t *testing.T) {
 		require.Equal(t, "draft", m.input.Value(), "the query of the list stays out of the prompt")
 
 		update(t, m, pressSpace)
-		require.Equal(t, "a ", m.settings.query(), "space narrows the list, it does not toggle")
+		require.Equal(t, "a ", m.commands.query(), "space narrows the list, it does not toggle")
 
 		update(t, m, pressEscape)
 		require.Equal(t, phaseSettings, m.phase, "escape clears the query first")
@@ -590,6 +590,11 @@ func TestModel(t *testing.T) {
 		require.True(t, m.preferences.RenderMarkdown)
 
 		update(t, m, pressCtrlP)
+		require.Equal(t, 0, m.commands.cursor, "the commands that open a screen lead the list")
+
+		update(t, m, pressDown)
+		update(t, m, pressDown)
+		require.Equal(t, 2, m.commands.cursor, "the options follow the commands")
 		update(t, m, pressEnter)
 		require.True(t, m.preferences.ExpandToolOutput)
 
@@ -604,22 +609,22 @@ func TestModel(t *testing.T) {
 		update(t, m, pressEnter)
 		require.False(t, m.preferences.RenderMarkdown)
 
-		require.Equal(t, 2, m.settings.cursor)
+		require.Equal(t, 4, m.commands.cursor)
 
 		update(t, m, pressDown)
 		require.Equal(
 			t,
 			0,
-			m.settings.cursor,
-			"stepping down from the last option wraps to the first",
+			m.commands.cursor,
+			"stepping down from the last command wraps to the first",
 		)
 
 		update(t, m, pressUp)
 		require.Equal(
 			t,
-			2,
-			m.settings.cursor,
-			"stepping up from the first option wraps to the last",
+			4,
+			m.commands.cursor,
+			"stepping up from the first command wraps to the last",
 		)
 	})
 
@@ -648,8 +653,12 @@ func TestModel(t *testing.T) {
 		require.NotContains(t, compact, "first", "the preview drops the earlier lines")
 
 		update(t, m, pressCtrlP)
+		update(t, m, pressDown)
+		update(t, m, pressDown)
 		update(t, m, pressEnter)
 		update(t, m, pressEscape)
+
+		require.Equal(t, phaseChat, m.phase)
 
 		expanded := plain(m.render())
 		require.Contains(t, expanded, "first", "expanding reveals the whole output")
@@ -851,6 +860,87 @@ func TestModel(t *testing.T) {
 
 		update(t, m, pressDown)
 		require.Equal(t, 0, m.start.cursor, "stepping down from the last entry wraps to the first")
+	})
+
+	t.Run("starts a new session from the command center", func(t *testing.T) {
+		stored := newFakeSession()
+		fresh := newFakeSession()
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+			newSession: func(agentID string) (Session, error) {
+				require.Equal(t, "coder", agentID)
+				return fresh, nil
+			},
+			resumeSession: func(string) (Session, error) { return stored, nil },
+		})
+		update(t, m, windowMsg(80, 24))
+
+		// Continue the stored session and send it a prompt.
+		update(t, m, pressDown)
+		run(t, m, update(t, m, pressEnter))
+		require.Equal(t, phaseChat, m.phase)
+		m.input.SetValue("hello")
+		update(t, m, pressEnter)
+		require.True(t, m.running)
+
+		// The first command of the command center starts a session from
+		// scratch, releasing the one in flight.
+		update(t, m, pressCtrlP)
+		require.Equal(t, "New session", commandList[m.commands.selected()].Label)
+		run(t, m, update(t, m, pressEnter))
+
+		require.Equal(t, phaseChat, m.phase)
+		require.Same(t, fresh, m.session, "the new session takes over")
+		require.True(t, stored.closed, "the session left behind is released")
+		require.False(t, m.running, "the run in flight is interrupted")
+		require.Empty(t, m.transcript.entries, "the new session starts empty")
+
+		// A burst of the abandoned run can no longer reach the interface.
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "stale output"})
+		require.Empty(t, m.transcript.entries, "a late burst is dropped")
+	})
+
+	t.Run("reopens the session list from the command center", func(t *testing.T) {
+		m, _ := chatModel(t)
+		require.Equal(t, phaseChat, m.phase)
+
+		update(t, m, pressCtrlP)
+		update(t, m, pressDown)
+		require.Equal(t, "Sessions", commandList[m.commands.selected()].Label)
+
+		require.Nil(t, update(t, m, pressEnter))
+		require.Equal(t, phaseStart, m.phase)
+		require.Contains(t, plain(m.render()), "Start a new session or continue a previous one")
+
+		update(t, m, pressEscape)
+
+		require.Equal(t, phaseChat, m.phase, "escape returns to the conversation")
+		require.Contains(t, plain(m.render()), "coder", "the conversation shows again")
+	})
+
+	t.Run("returns from the agent picker to the conversation it opened over", func(t *testing.T) {
+		m := newTestModelWith(t, modelConfig{
+			agents:        []agent.Agent{{ID: "coder"}, {ID: "writer"}},
+			selected:      -1,
+			sessions:      []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+			resumeSession: func(string) (Session, error) { return newFakeSession(), nil },
+		})
+		update(t, m, windowMsg(80, 24))
+		update(t, m, pressDown)
+		run(t, m, update(t, m, pressEnter))
+		require.Equal(t, phaseChat, m.phase)
+
+		// The picker of a new session, opened over the conversation, leads
+		// back to it when it is dismissed.
+		update(t, m, pressCtrlP)
+		update(t, m, pressEnter)
+		require.Equal(t, phasePicker, m.phase)
+
+		update(t, m, pressEscape)
+
+		require.Equal(t, phaseChat, m.phase)
 	})
 
 	t.Run("starts a new session from the menu", func(t *testing.T) {

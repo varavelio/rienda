@@ -109,10 +109,13 @@ func (m *model) viewStart() string {
 		rows = append(rows, m.emptyLine())
 	}
 
-	rows = append(
-		rows,
-		m.footerRows("type to filter · ↑/↓ move · enter open · ctrl+p settings · ctrl+c quit")...,
-	)
+	// The list only returns to the conversation it was opened over when there
+	// is one to return to.
+	hint := "type to filter · ↑/↓ move · enter open"
+	if m.session != nil {
+		hint += " · esc back"
+	}
+	rows = append(rows, m.footerRows(hint+" · ctrl+p settings · ctrl+c quit")...)
 	return strings.Join(rows, "\n")
 }
 
@@ -229,22 +232,22 @@ func (m *model) pickerLine(position int) string {
 	return m.clip(line + "  " + m.styles.dim.Render(definition.Description))
 }
 
-// viewSettings renders the command center: the options of the harness and
-// their state.
+// viewSettings renders the command center: the screens it opens, the options
+// of the harness and the state of those options.
 func (m *model) viewSettings() string {
 	rows := m.headerRows(m.settingsIdentity())
 	rows = append(rows, "Command center", "")
-	rows = append(rows, m.filterRow(&m.settings), "")
+	rows = append(rows, m.filterRow(&m.commands), "")
 
-	first, last := m.settings.window(m.listRows())
+	first, last := m.commands.window(m.listRows())
 	for position := first; position < last; position++ {
-		rows = append(rows, m.preferenceLine(position))
+		rows = append(rows, m.commandLine(position))
 	}
-	if m.settings.empty() {
+	if m.commands.empty() {
 		rows = append(rows, m.emptyLine())
 	}
 
-	rows = append(rows, m.footerRows("type to filter · ↑/↓ move · enter toggle · esc close")...)
+	rows = append(rows, m.footerRows("type to filter · ↑/↓ move · enter run · esc close")...)
 	return strings.Join(rows, "\n")
 }
 
@@ -253,15 +256,21 @@ func (m *model) settingsIdentity() string {
 	return m.brandIdentity() + m.styles.header.Render(" · settings")
 }
 
-// preferenceLine renders one option of the command center with its state.
-func (m *model) preferenceLine(position int) string {
-	option := preferencesList[m.settings.shown[position]]
+// commandLine renders one entry of the command center. The commands that open
+// a screen carry no state, so they only show what they do; the options of the
+// harness also show whether they are on.
+func (m *model) commandLine(position int) string {
+	entry := commandList[m.commands.shown[position]]
+	label := m.row(position == m.commands.cursor, entry.Label)
+	if entry.IsOn == nil {
+		return m.clip(label + "  " + m.styles.dim.Render(entry.Note))
+	}
+
 	state := m.styles.off.Render("[off]")
-	if option.IsOn(m.preferences) {
+	if entry.IsOn(m.preferences) {
 		state = m.styles.on.Render("[on]")
 	}
-	label := m.row(position == m.settings.cursor, option.Label) + "  " + state
-	return m.clip(label + "  " + m.styles.dim.Render(option.Note))
+	return m.clip(label + "  " + state + "  " + m.styles.dim.Render(entry.Note))
 }
 
 // viewPreparing renders the session preparation screen. It names what is
