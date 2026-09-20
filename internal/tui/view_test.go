@@ -555,7 +555,7 @@ func TestView(t *testing.T) {
 			"the turn the session is at opens with the cursor and its mark",
 		)
 		require.Contains(t, view, "enter rewind")
-		require.Contains(t, view, "ctrl+f fold")
+		require.Contains(t, view, "ctrl+f/a/o fold")
 		require.Contains(t, view, "esc back")
 	})
 
@@ -631,6 +631,64 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "You: one")
 		require.Contains(t, view, "├─ You: two", "the turns the session left keep their branch")
 		require.Contains(t, view, "└─ You: again", "the branch the session opened closes the group")
+	})
+
+	t.Run("shows the turns a folded turn hides", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "fix the parser"),
+			textMessage(llm.RoleAssistant, "it is fixed"),
+		)
+		update(t, m, pressUp)
+
+		update(t, m, pressCtrlF)
+
+		view := plain(m.render())
+		require.Contains(t, view, "⊟─ You: fix the parser", "the folded turn says so")
+		require.NotContains(t, view, "it is fixed")
+	})
+
+	t.Run("shows the outline of a folded tree", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "fix the parser"),
+			textMessage(llm.RoleAssistant, "it is fixed"),
+		)
+
+		update(t, m, pressCtrlA)
+
+		view := plain(m.render())
+		require.Contains(
+			t,
+			view,
+			"⊟─ You: fix the parser",
+			"the turn that opens the conversation says that it holds turns",
+		)
+		require.NotContains(t, view, "it is fixed")
+	})
+
+	t.Run("folds the turns beside the branch the session runs", func(t *testing.T) {
+		m, _ := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		// The session returns to the first answer and writes again from it,
+		// which opens a branch beside the turn that followed it.
+		update(t, m, pressCtrlT)
+		update(t, m, pressUp)
+		update(t, m, pressUp)
+		update(t, m, pressEnter)
+		m.input.SetValue("other")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+		update(t, m, pressCtrlT)
+
+		update(t, m, pressCtrlO)
+
+		view := plain(m.render())
+		require.Contains(t, view, "⊞─ You: second", "the turn the branch hangs from folds")
+		require.Contains(t, view, "You: other", "the branch the session runs stays whole")
+		require.NotContains(t, view, "two", "the turns under the folded branch hide")
 	})
 
 	t.Run("caps the message of a turn", func(t *testing.T) {

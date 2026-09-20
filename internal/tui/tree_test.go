@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -251,6 +252,21 @@ func TestTreeNodes(t *testing.T) {
 	})
 }
 
+// treeFixture builds the tree screen over the entries and the branch of a
+// session, unfolded and ready to fold, with the query the screen gives it.
+func treeFixture(entries, branch []session.Entry) tree {
+	built := tree{entries: entries, branch: branch}
+	built.filter = newFilter(
+		0,
+		func(int) string { return "" },
+		"Search turns",
+		newStyles(true),
+		true,
+	)
+	built.fold(nil)
+	return built
+}
+
 // TestTreeFolding verifies hiding the turns that follow a turn, which lets the
 // reader walk a long tree a subtree at a time.
 func TestTreeFolding(t *testing.T) {
@@ -268,27 +284,32 @@ func TestTreeFolding(t *testing.T) {
 		require.Equal(t, 2, nodes[1].children, "a folded turn keeps the count of its children")
 	})
 
-	t.Run("folds the subtree of the highlighted turn", func(t *testing.T) {
-		tree := tree{entries: nil}
+	t.Run("folds and unfolds the subtree of the highlighted turn", func(t *testing.T) {
 		entries, branch := branchedDialogue()
-		tree.entries, tree.branch = entries, branch
-		tree.filter = newFilter(
-			0,
-			func(int) string { return "" },
-			"Search turns",
-			newStyles(true),
-			true,
-		)
-		tree.fold()
+		tree := treeFixture(entries, branch)
 		require.Len(t, tree.nodes, 5)
 
-		require.True(t, tree.foldChildren(1), "the first answer holds turns")
+		tree.filter.cursor = 1
+		tree.toggleFolded()
 		require.Len(t, tree.nodes, 2)
 		require.True(t, tree.nodes[1].folded)
 
-		require.True(t, tree.foldChildren(1), "the folded turn unfolds again")
+		tree.toggleFolded()
 		require.Len(t, tree.nodes, 5)
 		require.False(t, tree.nodes[1].folded)
+	})
+
+	t.Run("leaves the tree as it is when the turn holds nothing", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+		tree := treeFixture(entries, branch)
+
+		tree.filter.cursor = 2
+		require.Equal(t, "m4", tree.entryID(tree.filter.selected()))
+
+		tree.toggleFolded()
+
+		require.Len(t, tree.nodes, 5)
+		require.Empty(t, tree.folded, "a turn nothing follows holds no subtree to fold")
 	})
 
 	t.Run("keeps the highlight on the turn it held", func(t *testing.T) {
@@ -301,62 +322,157 @@ func TestTreeFolding(t *testing.T) {
 			turnEntry("m4", "m3", llm.RoleAssistant, "two"),
 			turnEntry("m5", "", llm.RoleUser, "other"),
 		}
-		tree := tree{entries: entries, branch: entries, folded: map[string]bool{}}
-		tree.filter = newFilter(
-			0,
-			func(int) string { return "" },
-			"Search turns",
-			newStyles(true),
-			true,
+		tree := treeFixture(entries, entries)
+
+		tree.filter.cursor = 1
+		require.Equal(t, "m2", tree.entryID(tree.filter.selected()))
+
+		tree.toggleFolded()
+
+		require.Equal(
+			t,
+			"m2",
+			tree.entryID(tree.filter.selected()),
+			"the highlight stays on the turn it folded instead of jumping to the first one",
 		)
-		tree.fold()
-
-		tree.filter.cursor = 4
-		require.Equal(t, "m5", tree.entryID(tree.filter.selected()))
-
-		require.True(t, tree.foldChildren(1))
-
-		require.Equal(t, "m5", tree.entryID(tree.filter.selected()))
 		require.Len(t, tree.nodes, 3)
+	})
+
+	t.Run("leaves the tree as it is when it shows no turn", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+		tree := treeFixture(entries, branch)
+		tree.filter.shown = nil
+
+		tree.toggleFolded()
+
+		require.Len(t, tree.nodes, 5)
+		require.Empty(t, tree.folded)
+	})
+
+	t.Run("keeps the folds the reader already made", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+		tree := treeFixture(entries, branch)
+
+		tree.filter.cursor = 1
+		tree.toggleFolded()
+		tree.toggleFolded() // the subtree shows again, so another turn can fold
+		tree.filter.cursor = 0
+		tree.toggleFolded()
+
+		require.Equal(
+			t,
+			[]string{"m1"},
+			nodesField(tree.nodes, func(node treeNode) string { return node.entry.ID }),
+		)
+		require.Equal(
+			t,
+			map[string]bool{"m1": true},
+			tree.folded,
+			"folding a turn keeps the folds around it instead of replacing them",
+		)
+	})
+}
+
+// TestTreeWideFolding verifies folding the whole tree at once and folding every
+// subtree except the branch the session runs.
+func TestTreeWideFolding(t *testing.T) {
+	t.Run("folds every turn that holds a subtree", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+		tree := treeFixture(entries, branch)
+
+		tree.toggleAll()
+
+		require.Equal(
+			t,
+			[]string{"m1"},
+			nodesField(tree.nodes, func(node treeNode) string { return node.entry.ID }),
+			"the outline keeps only the turn that opens the conversation",
+		)
+		require.True(t, tree.nodes[0].folded)
+		require.Equal(
+			t,
+			map[string]bool{"m1": true, "m2": true, "m5": true},
+			tree.folded,
+			"every turn that holds a subtree folds",
+		)
+	})
+
+	t.Run("unfolds the whole tree when every subtree is folded", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+		tree := treeFixture(entries, branch)
+
+		tree.toggleAll()
+		tree.toggleAll()
+
+		require.Len(t, tree.nodes, 5)
+		require.Empty(t, tree.folded)
+	})
+
+	t.Run("folds the tree again once a subtree is shown", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+		tree := treeFixture(entries, branch)
+
+		tree.toggleAll()
+		tree.toggleFolded() // the turn under the highlight shows its subtree again
+		tree.toggleAll()
+
+		require.Equal(
+			t,
+			[]string{"m1"},
+			nodesField(tree.nodes, func(node treeNode) string { return node.entry.ID }),
+			"a tree that still shows a subtree folds instead of unfolding",
+		)
+		require.True(t, tree.foldedWhole())
 	})
 
 	t.Run("lands on the turn that folds the subtree it hid", func(t *testing.T) {
 		entries, branch := branchedDialogue()
-		tree := tree{entries: entries, branch: branch, folded: map[string]bool{}}
-		tree.filter = newFilter(
-			0,
-			func(int) string { return "" },
-			"Search turns",
-			newStyles(true),
-			true,
-		)
-		tree.fold()
+		tree := treeFixture(entries, branch)
 
 		// The reader stands inside the subtree the fold hides, so the
 		// highlight climbs to the turn that folded it.
 		tree.filter.cursor = 4
 		require.Equal(t, "m6", tree.entryID(tree.filter.selected()))
 
-		tree.foldChildren(1)
+		tree.toggleAll()
 
-		require.Equal(t, "m2", tree.entryID(tree.filter.selected()))
+		require.Equal(
+			t,
+			"m1",
+			tree.entryID(tree.filter.selected()),
+			"the highlight climbs to the nearest turn the outline shows",
+		)
 	})
 
-	t.Run("reports the turns that hold nothing", func(t *testing.T) {
+	t.Run("folds every subtree except the branch the session runs", func(t *testing.T) {
 		entries, branch := branchedDialogue()
-		tree := tree{entries: entries, branch: branch, folded: map[string]bool{}}
-		tree.filter = newFilter(
-			0,
-			func(int) string { return "" },
-			"Search turns",
-			newStyles(true),
-			true,
-		)
-		tree.fold()
+		tree := treeFixture(entries, branch)
 
-		require.False(t, tree.foldChildren(2), "the answer the session is at closes its branch")
-		require.False(t, tree.foldChildren(-1))
-		require.False(t, tree.foldChildren(len(tree.nodes)))
+		tree.foldOthers()
+
+		require.Equal(
+			t,
+			[]string{"m1", "m2", "m4", "m5"},
+			nodesField(tree.nodes, func(node treeNode) string { return node.entry.ID }),
+			"the branch the session runs stays whole beside the branches it left",
+		)
+		require.False(t, tree.nodes[0].folded, "the turns of the branch keep their subtrees")
+		require.False(t, tree.nodes[1].folded)
+		require.True(t, tree.nodes[3].folded, "the branch beside it folds away")
+	})
+
+	t.Run("keeps a tree that already shows nothing but the branch", func(t *testing.T) {
+		entries, branch := branchedDialogue()
+		tree := treeFixture(entries, branch)
+
+		tree.foldOthers()
+		folded := maps.Clone(tree.folded)
+		shown := len(tree.nodes)
+
+		tree.foldOthers()
+
+		require.Equal(t, folded, tree.folded, "folding the others again changes nothing")
+		require.Len(t, tree.nodes, shown)
 	})
 }
 

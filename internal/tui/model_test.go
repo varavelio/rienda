@@ -111,6 +111,8 @@ var (
 	pressCtrlP  = tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
 	pressCtrlT  = tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}
 	pressCtrlF  = tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl}
+	pressCtrlA  = tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}
+	pressCtrlO  = tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl}
 	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
 	pressPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
 	pressHome   = tea.KeyPressMsg{Code: tea.KeyHome}
@@ -1609,7 +1611,7 @@ func TestTree(t *testing.T) {
 		require.Equal(t, 0, m.tree.filter.selected(), "the keys reach the query again")
 	})
 
-	t.Run("folds and unfolds the turns that follow a turn", func(t *testing.T) {
+	t.Run("folds and unfolds the turns that follow the highlighted turn", func(t *testing.T) {
 		m, _ := treeModel(t,
 			textMessage(llm.RoleUser, "first"),
 			textMessage(llm.RoleAssistant, "one"),
@@ -1649,6 +1651,83 @@ func TestTree(t *testing.T) {
 			"one",
 			m.tree.nodes[m.tree.filter.selected()].text,
 			"the highlight stays on the turn it folded instead of jumping to the first one",
+		)
+	})
+
+	t.Run("folds the whole tree and unfolds it again with one key", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+
+		update(t, m, pressCtrlA)
+
+		require.Len(
+			t,
+			m.tree.nodes,
+			1,
+			"the outline keeps only the turn that opens the conversation",
+		)
+		require.Contains(t, plain(m.render()), "⊟─")
+
+		update(t, m, pressCtrlA)
+
+		require.Len(t, m.tree.nodes, 4)
+		require.NotContains(t, plain(m.render()), "⊟─")
+	})
+
+	t.Run("folds every subtree except the branch the session runs", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		// The session returns to the first answer and writes again from it, so
+		// the tree holds a branch beside the one the session runs.
+		update(t, m, pressUp)
+		update(t, m, pressUp)
+		update(t, m, pressEnter)
+		m.input.SetValue("other")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+		update(t, m, pressCtrlT)
+		require.Equal(
+			t,
+			[]string{"first", "one", "second", "two", "other"},
+			nodesField(m.tree.nodes, func(node treeNode) string { return node.text }),
+			"the branch the session left stays in the tree beside the one it runs",
+		)
+
+		update(t, m, pressCtrlO)
+
+		require.Equal(
+			t,
+			[]string{"first", "one", "second", "other"},
+			nodesField(m.tree.nodes, func(node treeNode) string { return node.text }),
+			"the branch the session runs stays whole and the branch it left folds",
+		)
+		require.True(
+			t,
+			m.tree.folded[stored.store.Entries()[2].ID],
+			"the turn the abandoned branch hangs from folds, so its turns hide",
+		)
+		require.NotContains(
+			t,
+			nodesField(m.tree.nodes, func(node treeNode) string { return node.text }),
+			"two",
+			"the turns under the abandoned branch hide",
+		)
+
+		update(t, m, pressCtrlO)
+
+		require.Equal(
+			t,
+			[]string{"first", "one", "second", "other"},
+			nodesField(m.tree.nodes, func(node treeNode) string { return node.text }),
+			"folding the others again keeps the tree as it is",
 		)
 	})
 

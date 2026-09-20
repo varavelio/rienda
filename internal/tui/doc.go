@@ -83,8 +83,13 @@
 // color of its own and the query matches along with the message. The turns that
 // follow a turn fold away with ctrl+f, a single key that hides and shows the
 // subtree under the highlighted turn, so a long tree is walked a subtree at a
-// time; folding is how the reader looks at the session, not what it stores, so
-// it lasts as long as the tree is open.
+// time. The whole tree folds and unfolds at once with ctrl+a, which shows a
+// long conversation as the turns that open a branch, and ctrl+o folds every
+// subtree except the branch the session runs, which leaves that branch whole
+// beside the branches it left behind. Every key toggles or repeats safely, so
+// the reader folds without remembering whether the fold is already in effect;
+// folding is how the reader looks at the session, not what it stores, so it
+// lasts as long as the tree is open.
 //
 // An @ in the prompt opens the completion of the files of the project, so the
 // user never has to remember a path to point the model at a file. The

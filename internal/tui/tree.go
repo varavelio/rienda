@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -78,7 +79,8 @@ type tree struct {
 
 	// folded names the turns whose children the user hid, by entry identifier.
 	// It is what the reader decided, not what the session stores, so it lives
-	// with the screen and is gone once the tree closes.
+	// with the screen and is gone once the tree closes. The empty set shows
+	// every turn.
 	folded map[string]bool
 
 	// nodes lists the turns of the session the tree shows, in append order,
@@ -283,11 +285,13 @@ func turnText(entry session.Entry) string {
 	return text
 }
 
-// fold builds the tree from the entries it holds, keeping the turns the user
-// folded out of the nodes and the highlight on the turn it held, so folding
-// never moves the reader away from where they are.
-func (t *tree) fold() {
+// fold rebuilds the nodes of the tree from the entries it holds with the given
+// folded turns, keeping the turns they hide out of the nodes and the highlight
+// on the turn it held, so folding never moves the reader away from where they
+// are. The empty set shows the whole tree.
+func (t *tree) fold(folded map[string]bool) {
 	held := t.entryID(t.filter.selected())
+	t.folded = folded
 	t.nodes = treeNodes(t.entries, t.branch, t.folded)
 	t.filter.setCount(len(t.nodes))
 	t.filter.cursor = t.focusOn(held)
@@ -339,24 +343,67 @@ func (t *tree) entryID(index int) string {
 	return t.nodes[index].entry.ID
 }
 
-// foldChildren folds or unfolds the children of the turn at a node index,
-// reporting whether the turn holds any. Folding a turn hides the turns that
-// follow it, which lets the reader walk a long tree a subtree at a time.
-func (t *tree) foldChildren(index int) bool {
-	if index < 0 || index >= len(t.nodes) || t.nodes[index].children == 0 {
-		return false
+// toggleFolded folds the highlighted turn when the turns that follow it are
+// shown and unfolds it otherwise, so one key walks a long tree a subtree at a
+// time. A turn the reader cannot fold, because nothing follows it or because
+// the tree shows no turn at all, leaves the tree as it is.
+func (t *tree) toggleFolded() {
+	index := t.filter.selected()
+	if index < 0 || t.nodes[index].children == 0 {
+		return
 	}
 
-	if t.folded == nil {
-		t.folded = make(map[string]bool)
-	}
-	id := t.nodes[index].entry.ID
-	if t.folded[id] {
-		delete(t.folded, id)
+	folded := make(map[string]bool, len(t.folded))
+	maps.Copy(folded, t.folded)
+	if id := t.nodes[index].entry.ID; t.folded[id] {
+		delete(folded, id)
 	} else {
-		t.folded[id] = true
+		folded[id] = true
 	}
-	t.fold()
+	t.fold(folded)
+}
+
+// toggleAll folds every turn that holds a subtree when the tree still shows
+// one, and unfolds the whole tree when every subtree is folded, so one key
+// switches the tree between whole and outline.
+func (t *tree) toggleAll() {
+	if t.foldedWhole() {
+		t.fold(nil)
+		return
+	}
+
+	folded := make(map[string]bool)
+	for _, node := range treeNodes(t.entries, t.branch, nil) {
+		if node.children > 0 {
+			folded[node.entry.ID] = true
+		}
+	}
+	t.fold(folded)
+}
+
+// foldOthers folds every turn that holds a subtree except the turns of the
+// branch the session runs, so the tree shows the whole branch and leaves the
+// branches beside it folded. Folding a tree that already shows nothing but the
+// branch keeps it as it is, which makes the fold safe to repeat.
+func (t *tree) foldOthers() {
+	folded := make(map[string]bool)
+	for _, node := range treeNodes(t.entries, t.branch, nil) {
+		if node.children > 0 && !node.active {
+			folded[node.entry.ID] = true
+		}
+	}
+	t.fold(folded)
+}
+
+// foldedWhole reports whether every turn of the tree that holds a subtree is
+// folded, which is what tells a tree showing nothing but the turns that open a
+// branch from one the reader still has something to fold.
+func (t *tree) foldedWhole() bool {
+	for _, node := range t.nodes {
+		if node.children > 0 && !t.folded[node.entry.ID] {
+			return false
+		}
+	}
 	return true
 }
 

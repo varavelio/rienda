@@ -108,11 +108,25 @@ const (
 	keyPgDown = "pgdown"
 )
 
-// keyFold toggles the turns that follow the highlighted turn of the tree. It is
-// a toggle instead of a pair of keys because folding is one decision, and a
-// single key leaves the horizontal arrows free of a meaning the reader would
-// have to remember.
-const keyFold = "ctrl+f"
+// Keys of the session tree that fold it. Each one is a toggle or repeats
+// safely, so a fold is one decision the reader can take without remembering
+// whether it is already in effect, and a single key stays free of the pair of
+// keys a fold and an unfold would take.
+const (
+	// keyFold toggles the turns that follow the highlighted turn of the tree,
+	// which lets the reader walk a long tree a subtree at a time.
+	keyFold = "ctrl+f"
+
+	// keyFoldAll toggles the whole tree between folded and unfolded, folding
+	// every turn that holds a subtree or unfolding the tree when every one of
+	// them is already folded.
+	keyFoldAll = "ctrl+a"
+
+	// keyFoldOthers folds every turn that holds a subtree except the turns of
+	// the branch the session runs, so the tree shows that branch whole beside
+	// the branches left folded.
+	keyFoldOthers = "ctrl+o"
+)
 
 // confirmAction is the action a confirmation waits to run, which is what the
 // key that arms it does when pressed twice within confirmWindow.
@@ -989,9 +1003,8 @@ func (m *model) buildTree() {
 
 // handleTreeKey walks the session tree: the query narrows it, the arrows move
 // the highlight, enter returns the session to the highlighted turn, ctrl+t
-// labels it and ctrl+f folds or unfolds the turns that follow it, so a long
-// tree is walked a subtree at a time. Escape clears the query first and then
-// leaves the tree.
+// labels it and ctrl+f, ctrl+a and ctrl+o fold it, so a long tree is walked a
+// subtree at a time. Escape clears the query first and then leaves the tree.
 func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
 	if m.tree.editing {
 		return m.handleTagKey(key)
@@ -1003,7 +1016,11 @@ func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
 	case keyDown:
 		m.tree.filter.move(1)
 	case keyFold:
-		m.foldTree()
+		m.tree.toggleFolded()
+	case keyFoldAll:
+		m.tree.toggleAll()
+	case keyFoldOthers:
+		m.tree.foldOthers()
 	case keyEnter:
 		return m.rewind()
 	case keyEscape:
@@ -1017,15 +1034,6 @@ func (m *model) handleTreeKey(key tea.KeyPressMsg) tea.Cmd {
 		return m.tree.filter.update(key)
 	}
 	return nil
-}
-
-// foldTree hides or shows the turns that follow the highlighted one, which lets
-// the reader walk a long tree a subtree at a time. The highlight stays on the
-// turn it holds, or climbs to the turn that folded the subtree it was in.
-func (m *model) foldTree() {
-	if index := m.tree.filter.selected(); index >= 0 {
-		m.tree.foldChildren(index)
-	}
 }
 
 // handleTagKey edits the tag of the highlighted turn: enter stores it and

@@ -368,7 +368,7 @@ func (m *model) treeHints() string {
 	case m.tree.editing:
 		return "type a tag · enter save · esc cancel"
 	default:
-		return "type to filter · ↑/↓ move · enter rewind · ctrl+f fold · ctrl+t tag · esc back"
+		return "↑/↓ move · enter rewind · ctrl+f/a/o fold · ctrl+t tag · esc back"
 	}
 }
 
@@ -448,21 +448,23 @@ func treeGuides(guides []bool) string {
 	return line.String()
 }
 
-// treeConnector returns the glyph that opens a turn of the tree: the turns
-// that open a branch hold none, the last turn of a group closes it and the
-// turns before it keep it open. A turn whose children are folded closes its
-// group with the glyph that says so, so the reader knows a subtree is hidden
-// under it.
+// treeConnector returns the glyph that opens a turn of the tree: the last turn
+// of a group closes it and the turns before it keep it open, while a turn that
+// opens a branch holds no connector, because it hangs from nothing. A turn
+// whose children are folded carries the glyph that says so, so the reader
+// knows a subtree is hidden under it: the turn that opens a branch shows it
+// even when it closes no group, so a tree folded down to its roots still shows
+// that they hold turns.
 func treeConnector(node treeNode) string {
 	switch {
-	case node.parent < 0:
-		return ""
-	case node.last && node.folded:
+	case node.folded && node.last:
 		return "⊟─ "
-	case node.last:
-		return "└─ "
 	case node.folded:
 		return "⊞─ "
+	case node.parent < 0:
+		return ""
+	case node.last:
+		return "└─ "
 	default:
 		return "├─ "
 	}
