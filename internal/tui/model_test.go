@@ -255,10 +255,10 @@ func TestModel(t *testing.T) {
 		)
 
 		update(t, m, pressUp)
-		require.Equal(t, 1, m.cursor, "stepping up from the first agent wraps to the last")
+		require.Equal(t, 1, m.picker.cursor, "stepping up from the first agent wraps to the last")
 
 		update(t, m, pressDown)
-		require.Equal(t, 0, m.cursor, "stepping down from the last agent wraps to the first")
+		require.Equal(t, 0, m.picker.cursor, "stepping down from the last agent wraps to the first")
 	})
 
 	t.Run("reports preparation failures", func(t *testing.T) {
@@ -553,7 +553,13 @@ func TestModel(t *testing.T) {
 		require.Equal(t, phaseSettings, m.phase)
 
 		update(t, m, tea.KeyPressMsg{Code: 'a', Text: "a"})
-		require.Equal(t, "draft", m.input.Value())
+		require.Equal(t, "draft", m.input.Value(), "the query of the list stays out of the prompt")
+
+		update(t, m, pressSpace)
+		require.Equal(t, "a ", m.settings.query(), "space narrows the list, it does not toggle")
+
+		update(t, m, pressEscape)
+		require.Equal(t, phaseSettings, m.phase, "escape clears the query first")
 
 		update(t, m, pressEscape)
 
@@ -567,14 +573,14 @@ func TestModel(t *testing.T) {
 			selected: 0,
 			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
 		})
-		require.Equal(t, phaseMenu, m.phase)
+		require.Equal(t, phaseStart, m.phase)
 
 		update(t, m, pressCtrlP)
 		require.Equal(t, phaseSettings, m.phase)
 
 		update(t, m, pressCtrlP)
 
-		require.Equal(t, phaseMenu, m.phase)
+		require.Equal(t, phaseStart, m.phase)
 	})
 
 	t.Run("toggles the harness options", func(t *testing.T) {
@@ -587,29 +593,34 @@ func TestModel(t *testing.T) {
 		update(t, m, pressEnter)
 		require.True(t, m.preferences.ExpandToolOutput)
 
-		update(t, m, pressSpace)
+		update(t, m, pressEnter)
 		require.False(t, m.preferences.ExpandToolOutput)
 
 		update(t, m, pressDown)
-		update(t, m, pressSpace)
+		update(t, m, pressEnter)
 		require.True(t, m.preferences.ExpandThinking)
 
 		update(t, m, pressDown)
-		update(t, m, pressSpace)
+		update(t, m, pressEnter)
 		require.False(t, m.preferences.RenderMarkdown)
 
-		require.Equal(t, 2, m.settingCursor)
+		require.Equal(t, 2, m.settings.cursor)
 
 		update(t, m, pressDown)
 		require.Equal(
 			t,
 			0,
-			m.settingCursor,
+			m.settings.cursor,
 			"stepping down from the last option wraps to the first",
 		)
 
 		update(t, m, pressUp)
-		require.Equal(t, 2, m.settingCursor, "stepping up from the first option wraps to the last")
+		require.Equal(
+			t,
+			2,
+			m.settings.cursor,
+			"stepping up from the first option wraps to the last",
+		)
 	})
 
 	t.Run("expands the tool output from the command center", func(t *testing.T) {
@@ -792,12 +803,10 @@ func TestModel(t *testing.T) {
 			},
 		})
 		update(t, m, windowMsg(80, 24))
-		require.Equal(t, phaseMenu, m.phase)
+		require.Equal(t, phaseStart, m.phase)
 		require.Nil(t, m.Init())
 
 		update(t, m, pressDown)
-		require.Nil(t, update(t, m, pressEnter))
-		require.Equal(t, phaseSessions, m.phase)
 
 		cmd := update(t, m, pressEnter)
 		require.Equal(t, phasePreparing, m.phase)
@@ -810,23 +819,23 @@ func TestModel(t *testing.T) {
 		require.Contains(t, view, "hi")
 	})
 
-	t.Run("returns from the session list to the menu", func(t *testing.T) {
+	t.Run("returns from the agent picker to the start list", func(t *testing.T) {
 		m := newTestModelWith(t, modelConfig{
-			agents:   []agent.Agent{{ID: "coder"}},
-			selected: 0,
+			agents:   []agent.Agent{{ID: "coder"}, {ID: "writer"}},
+			selected: -1,
 			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
 		})
+		require.Equal(t, phaseStart, m.phase)
 
-		update(t, m, pressDown)
-		update(t, m, pressEnter)
-		require.Equal(t, phaseSessions, m.phase)
+		require.Nil(t, update(t, m, pressEnter))
+		require.Equal(t, phasePicker, m.phase)
 
 		update(t, m, pressEscape)
 
-		require.Equal(t, phaseMenu, m.phase)
+		require.Equal(t, phaseStart, m.phase)
 	})
 
-	t.Run("cycles through the sessions", func(t *testing.T) {
+	t.Run("cycles through the start list", func(t *testing.T) {
 		m := newTestModelWith(t, modelConfig{
 			agents:   []agent.Agent{{ID: "coder"}},
 			selected: 0,
@@ -835,13 +844,13 @@ func TestModel(t *testing.T) {
 				{ID: "session-2", Agent: "coder", Title: "two"},
 			},
 		})
-		m.phase = phaseSessions
+		m.phase = phaseStart
 
 		update(t, m, pressUp)
-		require.Equal(t, 1, m.chosen, "stepping up from the first session wraps to the last")
+		require.Equal(t, 2, m.start.cursor, "stepping up from the first entry wraps to the last")
 
 		update(t, m, pressDown)
-		require.Equal(t, 0, m.chosen, "stepping down from the last session wraps to the first")
+		require.Equal(t, 0, m.start.cursor, "stepping down from the last entry wraps to the first")
 	})
 
 	t.Run("starts a new session from the menu", func(t *testing.T) {
@@ -850,26 +859,41 @@ func TestModel(t *testing.T) {
 			selected: -1,
 			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
 		})
-		require.Equal(t, phaseMenu, m.phase)
+		require.Equal(t, phaseStart, m.phase)
 
 		require.Nil(t, update(t, m, pressEnter))
 
 		require.Equal(t, phasePicker, m.phase)
 	})
 
-	t.Run("cycles through the menu entries", func(t *testing.T) {
+	t.Run("narrows the start list and the picker by typing", func(t *testing.T) {
 		m := newTestModelWith(t, modelConfig{
-			agents:   []agent.Agent{{ID: "coder"}},
-			selected: 0,
-			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+			agents:   []agent.Agent{{ID: "coder"}, {ID: "writer"}},
+			selected: -1,
+			sessions: []session.Info{
+				{ID: "session-1", Agent: "coder", Title: "refactor parser"},
+				{ID: "session-2", Agent: "coder", Title: "write docs"},
+			},
 		})
-		require.Equal(t, menuNew, m.menu)
 
-		update(t, m, pressUp)
-		require.Equal(t, menuContinue, m.menu, "stepping up from the first entry wraps to the last")
+		update(t, m, tea.KeyPressMsg{Code: 'd', Text: "docs"})
 
-		update(t, m, pressDown)
-		require.Equal(t, menuNew, m.menu, "stepping down from the last entry wraps to the first")
+		require.Equal(t, []int{2}, m.start.shown, "only the matching session stays")
+		require.Equal(t, 2, m.start.selected())
+
+		// The offer of a new session leads the list and is matched like any
+		// other entry.
+		require.True(t, m.start.clear())
+		update(t, m, tea.KeyPressMsg{Code: 'n', Text: "new"})
+		require.Equal(t, 0, m.start.selected())
+
+		require.Nil(t, update(t, m, pressEnter))
+		require.Equal(t, phasePicker, m.phase)
+
+		update(t, m, tea.KeyPressMsg{Code: 'w', Text: "writ"})
+
+		require.Equal(t, []int{1}, m.picker.shown)
+		require.Equal(t, 1, m.picker.selected())
 	})
 
 	t.Run("prepares the only agent from the menu", func(t *testing.T) {
@@ -1025,7 +1049,7 @@ func TestStartPhase(t *testing.T) {
 	})
 
 	t.Run("asks with previous sessions", func(t *testing.T) {
-		require.Equal(t, phaseMenu, startPhase(modelConfig{
+		require.Equal(t, phaseStart, startPhase(modelConfig{
 			agents:   definitions,
 			selected: -1,
 			sessions: sessions,

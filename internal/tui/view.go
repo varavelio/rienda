@@ -9,7 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/varavelio/rienda/internal/agent"
+	"github.com/varavelio/rienda/internal/session"
 )
 
 // brand is the name of the interface, shown at the top of every phase.
@@ -60,10 +60,8 @@ func (m *model) renderPhase() string {
 	switch {
 	case m.fatal != nil:
 		return m.styles.errorText.Render("error: "+m.fatal.Error()) + "\n"
-	case m.phase == phaseMenu:
-		return m.viewMenu()
-	case m.phase == phaseSessions:
-		return m.viewSessions()
+	case m.phase == phaseStart:
+		return m.viewStart()
 	case m.phase == phasePicker:
 		return m.viewPicker()
 	case m.phase == phaseSettings:
@@ -95,45 +93,60 @@ func (m *model) footerRows(hints string) []string {
 	return []string{"", m.ruleLine(m.styles.separator), "", m.clip(m.styles.footer.Render(hints))}
 }
 
-// viewMenu renders the choice between a new session and a previous one.
-func (m *model) viewMenu() string {
+// viewStart renders the list that opens the interface: the offer to begin a
+// new session and the previous sessions of the workspace, narrowed by the
+// query typed into the list.
+func (m *model) viewStart() string {
 	rows := m.headerRows(m.brandIdentity())
-	rows = append(rows,
-		"What do you want to do?",
-		"",
-		m.row(m.menu == menuNew, "New session"),
-		m.row(m.menu == menuContinue, "Continue a previous session"),
-	)
-	rows = append(rows, m.footerRows("↑/↓ move · enter select · ctrl+p settings · ctrl+c quit")...)
-	return strings.Join(rows, "\n")
-}
+	rows = append(rows, "Start a new session or continue a previous one", "")
+	rows = append(rows, m.filterRow(&m.start), "")
 
-// viewSessions renders the list of previous sessions of the workspace.
-func (m *model) viewSessions() string {
-	rows := m.headerRows(m.brandIdentity())
-	rows = append(rows, "Continue a previous session", "")
-
-	first, last := visibleWindow(m.chosen, len(m.sessions), m.listRows())
-	for index := first; index < last; index++ {
-		rows = append(rows, m.sessionLine(index))
+	first, last := m.start.window(m.listRows())
+	for position := first; position < last; position++ {
+		rows = append(rows, m.startLine(position))
+	}
+	if m.start.empty() {
+		rows = append(rows, m.emptyLine())
 	}
 
 	rows = append(
 		rows,
-		m.footerRows("↑/↓ move · enter open · esc back · ctrl+p settings · ctrl+c quit")...,
+		m.footerRows("type to filter · ↑/↓ move · enter open · ctrl+p settings · ctrl+c quit")...,
 	)
 	return strings.Join(rows, "\n")
 }
 
-// sessionLine renders one row of the session list.
-func (m *model) sessionLine(index int) string {
-	info := m.sessions[index]
-	title := info.Title
-	if title == "" {
-		title = "untitled session"
+// startLine renders one entry of the start list: the offer of a new session or
+// a stored session with its agent and age.
+func (m *model) startLine(position int) string {
+	item := m.starts[m.start.shown[position]]
+	if item.newSession {
+		return m.row(position == m.start.cursor, "New session")
 	}
+
+	info := item.info
 	details := m.styles.dim.Render(info.Agent + " · " + formatAge(info.UpdatedAt))
-	return m.clip(m.row(index == m.chosen, title) + "  " + details)
+	return m.clip(m.row(position == m.start.cursor, sessionTitle(info)) + "  " + details)
+}
+
+// sessionTitle returns the title of a session, naming the ones that were never
+// titled so every entry of a list reads as something.
+func sessionTitle(info session.Info) string {
+	if info.Title == "" {
+		return "untitled session"
+	}
+	return info.Title
+}
+
+// filterRow renders the query input of a list, which stays focused while the
+// arrows move the highlight.
+func (m *model) filterRow(list *filter) string {
+	return m.clip(list.view())
+}
+
+// emptyLine renders the notice a list shows when its query matches nothing.
+func (m *model) emptyLine() string {
+	return m.clip("  " + m.styles.dim.Render("no matches"))
 }
 
 // row renders one list row, highlighted when it holds the cursor.
@@ -181,23 +194,35 @@ func formatAge(moment time.Time) string {
 	}
 }
 
-// viewPicker renders the list of agents to choose from.
+// viewPicker renders the list of agents to choose from, narrowed by the query
+// typed into it.
 func (m *model) viewPicker() string {
 	rows := m.headerRows(m.brandIdentity())
 	rows = append(rows, "Select an agent", "")
+	rows = append(rows, m.filterRow(&m.picker), "")
 
-	first, last := visibleWindow(m.cursor, len(m.agents), m.listRows())
-	for index := first; index < last; index++ {
-		rows = append(rows, m.pickerLine(index, m.agents[index]))
+	first, last := m.picker.window(m.listRows())
+	for position := first; position < last; position++ {
+		rows = append(rows, m.pickerLine(position))
+	}
+	if m.picker.empty() {
+		rows = append(rows, m.emptyLine())
 	}
 
-	rows = append(rows, m.footerRows("↑/↓ move · enter select · ctrl+p settings · ctrl+c quit")...)
+	// The picker only returns to the start list when it was opened from it,
+	// which is the case whenever the workspace holds a previous session.
+	hint := "type to filter · ↑/↓ move · enter select"
+	if len(m.starts) > 1 {
+		hint += " · esc back"
+	}
+	rows = append(rows, m.footerRows(hint+" · ctrl+p settings · ctrl+c quit")...)
 	return strings.Join(rows, "\n")
 }
 
 // pickerLine renders one agent row of the picker.
-func (m *model) pickerLine(index int, definition agent.Agent) string {
-	line := m.row(index == m.cursor, definition.ID)
+func (m *model) pickerLine(position int) string {
+	definition := m.agents[m.picker.shown[position]]
+	line := m.row(position == m.picker.cursor, definition.ID)
 	if definition.Description == "" {
 		return line
 	}
@@ -209,13 +234,17 @@ func (m *model) pickerLine(index int, definition agent.Agent) string {
 func (m *model) viewSettings() string {
 	rows := m.headerRows(m.settingsIdentity())
 	rows = append(rows, "Command center", "")
+	rows = append(rows, m.filterRow(&m.settings), "")
 
-	first, last := visibleWindow(m.settingCursor, len(preferencesList), m.listRows())
-	for index := first; index < last; index++ {
-		rows = append(rows, m.preferenceLine(index))
+	first, last := m.settings.window(m.listRows())
+	for position := first; position < last; position++ {
+		rows = append(rows, m.preferenceLine(position))
+	}
+	if m.settings.empty() {
+		rows = append(rows, m.emptyLine())
 	}
 
-	rows = append(rows, m.footerRows("↑/↓ move · enter toggle · esc close")...)
+	rows = append(rows, m.footerRows("type to filter · ↑/↓ move · enter toggle · esc close")...)
 	return strings.Join(rows, "\n")
 }
 
@@ -225,13 +254,13 @@ func (m *model) settingsIdentity() string {
 }
 
 // preferenceLine renders one option of the command center with its state.
-func (m *model) preferenceLine(index int) string {
-	option := preferencesList[index]
+func (m *model) preferenceLine(position int) string {
+	option := preferencesList[m.settings.shown[position]]
 	state := m.styles.off.Render("[off]")
 	if option.IsOn(m.preferences) {
 		state = m.styles.on.Render("[on]")
 	}
-	label := m.row(index == m.settingCursor, option.Label) + "  " + state
+	label := m.row(position == m.settings.cursor, option.Label) + "  " + state
 	return m.clip(label + "  " + m.styles.dim.Render(option.Note))
 }
 

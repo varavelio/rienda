@@ -41,6 +41,10 @@ const chatFooterRows = 1
 // the blank row after it.
 const listPromptRows = 2
 
+// listFilterRows is the number of rows a list phase spends on the query input
+// that narrows it and the blank row after it.
+const listFilterRows = 2
+
 // listFooterRows is the number of rows that close a list phase: the blank row,
 // the separator, the blank row after it and the hints.
 const listFooterRows = 4
@@ -49,9 +53,9 @@ const listFooterRows = 4
 // transcript and the input.
 const chatChrome = brandRows + activityRows + inputBoxRows + chatFooterRows
 
-// listChrome is the number of rows the list phases (the start menu, the
-// session list and the agent picker) reserve outside their rows.
-const listChrome = brandRows + listPromptRows + listFooterRows
+// listChrome is the number of rows the list phases (the start list, the agent
+// picker and the command center) reserve outside their rows.
+const listChrome = brandRows + listPromptRows + listFilterRows + listFooterRows
 
 // inputGutterWidth is the number of columns the input box spends on its border
 // and padding.
@@ -85,18 +89,15 @@ const defaultDarkBackground = true
 
 // Key names the interface handles, shared by the phase handlers.
 const (
-	keyUp      = "up"
-	keyDown    = "down"
-	keyEnter   = "enter"
-	keySpace   = "space"
-	keyEscape  = "esc"
-	keyTab     = "tab"
-	keyHome    = "home"
-	keyEnd     = "end"
-	keyPgUp    = "pgup"
-	keyPgDown  = "pgdown"
-	keyVimUp   = "k"
-	keyVimDown = "j"
+	keyUp     = "up"
+	keyDown   = "down"
+	keyEnter  = "enter"
+	keyEscape = "esc"
+	keyTab    = "tab"
+	keyHome   = "home"
+	keyEnd    = "end"
+	keyPgUp   = "pgup"
+	keyPgDown = "pgdown"
 )
 
 // activity is what a run is doing at the moment, reported by the single status
@@ -202,10 +203,9 @@ type contextFactory func() (context.Context, context.CancelFunc)
 type phase int
 
 const (
-	// phaseMenu asks the user to start a new session or continue a previous one.
-	phaseMenu phase = iota
-	// phaseSessions asks the user to choose a previous session.
-	phaseSessions
+	// phaseStart asks the user to start a new session or continue a previous
+	// one, both from the same list.
+	phaseStart phase = iota
 	// phasePicker asks the user to choose the agent to run.
 	phasePicker
 	// phasePreparing creates or opens the session of the choice.
@@ -216,16 +216,17 @@ const (
 	phaseSettings
 )
 
-// Menu entries, indexed by the menu cursor.
-const (
-	// menuNew starts a new session.
-	menuNew = iota
-	// menuContinue continues a previous session.
-	menuContinue
+// startItem is one entry of the start list: the offer to begin a new session,
+// which always leads the list, or a previous session to continue.
+type startItem struct {
+	// newSession reports that the entry starts a new session instead of
+	// opening a stored one.
+	newSession bool
 
-	// menuCount is the number of entries of the start menu.
-	menuCount = menuContinue + 1
-)
+	// info is the previous session the entry continues. It is zero for the
+	// entry that starts a new one.
+	info session.Info
+}
 
 // sessionReadyMsg carries a prepared session into the interface.
 type sessionReadyMsg struct {
@@ -260,7 +261,7 @@ type modelConfig struct {
 	selected int
 
 	// requested reports that the command line asked for the selected agent,
-	// which skips the start menu and the agent picker.
+	// which skips the start list and the agent picker.
 	requested bool
 
 	// sessions lists the previous sessions of the workspace, most recently
@@ -283,14 +284,26 @@ type modelConfig struct {
 
 // model is the Bubble Tea model of the interactive interface.
 type model struct {
-	agents   []agent.Agent
-	cursor   int
-	selected int
-	phase    phase
+	// agents lists the agent definitions the user may run.
+	agents []agent.Agent
 
-	sessions []session.Info
-	menu     int
-	chosen   int
+	// selected is the index of the chosen agent, or -1 while the user has not
+	// picked one.
+	selected int
+
+	// phase is the screen shown.
+	phase phase
+
+	// starts holds the entries of the start list: the offer to begin a new
+	// session followed by the previous sessions of the workspace.
+	starts []startItem
+
+	// start narrows the start list, picker the agent definitions and settings
+	// the options of the command center, each with the fuzzy query the user
+	// types.
+	start    filter
+	picker   filter
+	settings filter
 
 	session  Session
 	events   <-chan engine.Event
@@ -317,9 +330,8 @@ type model struct {
 	confirmInterrupt bool
 	interruptSeq     int
 
-	preferences   preferences
-	returnPhase   phase
-	settingCursor int
+	preferences preferences
+	returnPhase phase
 
 	transcript   transcript
 	conversation conversation
@@ -364,10 +376,9 @@ func newModel(cfg modelConfig) *model {
 	input.SetStyles(newInputStyles(styles, defaultDarkBackground))
 	input.SetHeight(minInputRows)
 
-	return &model{
+	built := &model{
 		agents:        cfg.agents,
 		selected:      cfg.selected,
-		sessions:      cfg.sessions,
 		phase:         startPhase(cfg),
 		preparing:     selectedAgentID(cfg),
 		preferences:   defaultPreferences(),
@@ -380,6 +391,53 @@ func newModel(cfg modelConfig) *model {
 		scanFiles:     cfg.scanFiles,
 		styles:        styles,
 	}
+	built.buildLists(cfg.sessions)
+	return built
+}
+
+// buildLists fills the lists the interface narrows by typing: the start list,
+// with the offer of a new session and the stored ones, the agent picker and
+// the options of the command center. Every list reads the text of its items
+// from the model, so it never holds a copy of them.
+func (m *model) buildLists(sessions []session.Info) {
+	m.starts = make([]startItem, 0, len(sessions)+1)
+	m.starts = append(m.starts, startItem{newSession: true})
+	for _, info := range sessions {
+		m.starts = append(m.starts, startItem{info: info})
+	}
+
+	m.start = newFilter(len(m.starts), m.startText, "Search sessions", m.styles, m.hasDarkBG)
+	m.picker = newFilter(len(m.agents), m.agentText, "Search agents", m.styles, m.hasDarkBG)
+	m.settings = newFilter(
+		len(preferencesList),
+		m.preferenceText,
+		"Search options",
+		m.styles,
+		m.hasDarkBG,
+	)
+}
+
+// startText returns the text of one entry of the start list that the query is
+// matched against.
+func (m *model) startText(index int) string {
+	item := m.starts[index]
+	if item.newSession {
+		return "new session"
+	}
+	return sessionTitle(item.info) + " " + item.info.Agent
+}
+
+// agentText returns the text of one agent that the query is matched against.
+func (m *model) agentText(index int) string {
+	definition := m.agents[index]
+	return definition.ID + " " + definition.Description
+}
+
+// preferenceText returns the text of one option of the command center that the
+// query is matched against.
+func (m *model) preferenceText(index int) string {
+	option := preferencesList[index]
+	return option.Label + " " + option.Note
 }
 
 // inputPrompt returns the prompt of one line of the input, shown only at the
@@ -391,7 +449,7 @@ func inputPrompt(info textarea.PromptInfo) string {
 	return strings.Repeat(" ", inputPromptWidth)
 }
 
-// startPhase returns the phase the interface opens with. The start menu needs
+// startPhase returns the phase the interface opens with. The start list needs
 // previous sessions to continue, and the agent picker needs several agents to
 // choose from.
 func startPhase(cfg modelConfig) phase {
@@ -399,7 +457,7 @@ func startPhase(cfg modelConfig) phase {
 	case cfg.requested:
 		return phasePreparing
 	case len(cfg.sessions) > 0:
-		return phaseMenu
+		return phaseStart
 	case cfg.selected >= 0:
 		return phasePreparing
 	default:
@@ -481,9 +539,28 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.advance()
 		return m, m.spinner.command()
 	default:
+		if narrowed := m.narrowedList(); narrowed != nil {
+			return m, narrowed.update(msg)
+		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, tea.Batch(cmd, m.syncPrompt())
+	}
+}
+
+// narrowedList returns the list the current phase narrows by typing, or nil
+// when the phase has no list. It routes the messages a key press does not
+// carry, such as a paste, to the query input of the visible list.
+func (m *model) narrowedList() *filter {
+	switch m.phase {
+	case phaseStart:
+		return &m.start
+	case phasePicker:
+		return &m.picker
+	case phaseSettings:
+		return &m.settings
+	default:
+		return nil
 	}
 }
 
@@ -496,6 +573,9 @@ func (m *model) applyBackground(isDark bool) {
 	m.hasDarkBG = isDark
 	m.styles = newStyles(isDark)
 	m.input.SetStyles(newInputStyles(m.styles, isDark))
+	m.start.setStyles(m.styles, isDark)
+	m.picker.setStyles(m.styles, isDark)
+	m.settings.setStyles(m.styles, isDark)
 	m.invalidateTranscript()
 	m.refreshTranscript()
 }
@@ -515,10 +595,8 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	}
 
 	switch m.phase {
-	case phaseMenu:
-		return m.handleMenuKey(key)
-	case phaseSessions:
-		return m.handleSessionsKey(key)
+	case phaseStart:
+		return m.handleStartKey(key)
 	case phasePicker:
 		return m.handlePickerKey(key)
 	case phasePreparing:
@@ -543,20 +621,40 @@ func moveCursor(cursor, delta, length int) int {
 	return ((cursor+delta)%length + length) % length
 }
 
-// handleMenuKey moves the menu selection or starts the chosen action.
-func (m *model) handleMenuKey(key tea.KeyPressMsg) tea.Cmd {
+// handleStartKey narrows the start list, moves its highlight and opens the
+// chosen entry, either a new session or a stored one. Escape clears the query.
+func (m *model) handleStartKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
-	case keyUp, keyVimUp:
-		m.menu = moveCursor(m.menu, -1, menuCount)
-	case keyDown, keyVimDown:
-		m.menu = moveCursor(m.menu, 1, menuCount)
+	case keyUp:
+		m.start.move(-1)
+	case keyDown:
+		m.start.move(1)
 	case keyEnter:
-		if m.menu == menuNew {
-			return m.startNewSession()
-		}
-		m.phase = phaseSessions
+		return m.selectStart()
+	case keyEscape:
+		m.start.clear()
+	default:
+		return m.start.update(key)
 	}
 	return nil
+}
+
+// selectStart opens the highlighted entry of the start list: a new session,
+// which moves to the agent picker or prepares the only agent, or a stored
+// session, which is opened with the agent it already carries.
+func (m *model) selectStart() tea.Cmd {
+	index := m.start.selected()
+	if index < 0 {
+		return nil
+	}
+
+	item := m.starts[index]
+	if item.newSession {
+		return m.startNewSession()
+	}
+
+	m.phase = phasePreparing
+	return m.prepareStoredSession(item.info)
 }
 
 // startNewSession moves to the agent picker, or prepares the only agent.
@@ -569,34 +667,30 @@ func (m *model) startNewSession() tea.Cmd {
 	return m.prepareNewSession()
 }
 
-// handleSessionsKey moves the session selection, opens the chosen session or
-// returns to the menu.
-func (m *model) handleSessionsKey(key tea.KeyPressMsg) tea.Cmd {
-	switch key.String() {
-	case keyEscape:
-		m.phase = phaseMenu
-	case keyUp, keyVimUp:
-		m.chosen = moveCursor(m.chosen, -1, len(m.sessions))
-	case keyDown, keyVimDown:
-		m.chosen = moveCursor(m.chosen, 1, len(m.sessions))
-	case keyEnter:
-		m.phase = phasePreparing
-		return m.prepareStoredSession()
-	}
-	return nil
-}
-
-// handlePickerKey moves the agent selection or starts the chosen agent.
+// handlePickerKey narrows the agent list, moves its highlight and starts the
+// chosen agent. Escape clears the query first and then returns to the start
+// list when there is one to return to.
 func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
-	case keyUp, keyVimUp:
-		m.cursor = moveCursor(m.cursor, -1, len(m.agents))
-	case keyDown, keyVimDown:
-		m.cursor = moveCursor(m.cursor, 1, len(m.agents))
+	case keyUp:
+		m.picker.move(-1)
+	case keyDown:
+		m.picker.move(1)
 	case keyEnter:
-		m.selected = m.cursor
+		index := m.picker.selected()
+		if index < 0 {
+			return nil
+		}
+		m.selected = index
 		m.phase = phasePreparing
 		return m.prepareNewSession()
+	case keyEscape:
+		if m.picker.clear() || len(m.starts) <= 1 {
+			return nil
+		}
+		m.phase = phaseStart
+	default:
+		return m.picker.update(key)
 	}
 	return nil
 }
@@ -614,14 +708,15 @@ func (m *model) toggleSettings() tea.Cmd {
 
 	m.returnPhase = m.phase
 	m.phase = phaseSettings
-	m.settingCursor = 0
+	m.settings.clear()
 	m.mention = mention{}
 	m.input.Blur()
 	return nil
 }
 
-// closeSettings returns to the phase the command center was opened from and
-// renders the conversation again with the current preferences.
+// closeSettings returns to the phase the command center was opened from. It
+// renders the conversation again with the current preferences when it returns
+// to the chat.
 func (m *model) closeSettings() tea.Cmd {
 	m.phase = m.returnPhase
 	if m.phase != phaseChat {
@@ -632,25 +727,35 @@ func (m *model) closeSettings() tea.Cmd {
 	return m.input.Focus()
 }
 
-// handleSettingsKey moves the cursor of the command center or toggles the
-// option under it.
+// handleSettingsKey narrows the options of the command center, moves its
+// highlight and toggles the option under it. Escape clears the query first and
+// then closes the command center.
 func (m *model) handleSettingsKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
+	case keyUp:
+		m.settings.move(-1)
+	case keyDown:
+		m.settings.move(1)
+	case keyEnter:
+		m.togglePreference(m.settings.selected())
 	case keyEscape:
+		if m.settings.clear() {
+			return nil
+		}
 		return m.closeSettings()
-	case keyUp, keyVimUp:
-		m.settingCursor = moveCursor(m.settingCursor, -1, len(preferencesList))
-	case keyDown, keyVimDown:
-		m.settingCursor = moveCursor(m.settingCursor, 1, len(preferencesList))
-	case keyEnter, keySpace:
-		m.togglePreference(m.settingCursor)
+	default:
+		return m.settings.update(key)
 	}
 	return nil
 }
 
 // togglePreference flips one option and drops the rendered conversation, which
-// changes with the preferences.
+// changes with the preferences. It does nothing when no option is highlighted,
+// which happens while the query matches none.
 func (m *model) togglePreference(index int) {
+	if index < 0 {
+		return
+	}
 	option := preferencesList[index]
 	next := m.preferences
 	option.Set(&next, !option.IsOn(next))
@@ -730,12 +835,11 @@ func (m *model) prepareNewSession() tea.Cmd {
 	return tea.Batch(m.spin(), sessionCommand(func() (Session, error) { return prepare(agentID) }))
 }
 
-// prepareStoredSession returns the command that opens the selected session.
-// The session brings its own agent, so the label names the session instead of
-// an agent of the current selection, which may be empty.
-func (m *model) prepareStoredSession() tea.Cmd {
+// prepareStoredSession returns the command that opens the given session. The
+// session brings its own agent, so the label names the session instead of an
+// agent of the current selection, which may be empty.
+func (m *model) prepareStoredSession(info session.Info) tea.Cmd {
 	prepare := m.resumeSession
-	info := m.sessions[m.chosen]
 	m.preparing = info.Agent
 	return tea.Batch(
 		m.spin(),
@@ -948,6 +1052,9 @@ func (m *model) resize(width, height int) {
 	m.width = width
 	m.height = height
 	m.input.SetWidth(max(1, width-inputGutterWidth))
+	m.start.setWidth(width)
+	m.picker.setWidth(width)
+	m.settings.setWidth(width)
 	m.syncInputHeight()
 	m.invalidateTranscript()
 	m.refreshTranscript()

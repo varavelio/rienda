@@ -68,7 +68,7 @@ Global flags:
   -v, --version   Print the version and the build metadata
 
 Flags of the interactive interface:
-  -a, --agent     Agent to run, skipping the start menu and the agent picker
+  -a, --agent     Agent to run, skipping the start list and the agent picker
   -C, --workdir   Directory sessions run in
       --config    Path of the configuration file
 

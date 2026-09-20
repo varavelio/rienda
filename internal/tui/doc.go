@@ -1,12 +1,19 @@
 // Package tui implements the interactive terminal user interface of Rienda.
 //
 // The interface is the default mode of the binary: when the command line
-// entry point receives no command it delegates here. It offers the previous
-// sessions of the workspace to continue, lists the available agent
-// definitions to start a new one, opens the chosen session through the harness
-// package and renders the events of every run as they arrive. The prompt
-// accepts several lines, so the user can write long instructions before
-// sending them.
+// entry point receives no command it delegates here. It opens on a single list
+// that starts a new session and continues any previous one of the workspace at
+// once, offers the agent definitions to run when a new session needs one, and
+// opens the chosen session through the harness package, rendering the events
+// of every run as they arrive. The prompt accepts several lines, so the user
+// can write long instructions before sending them.
+//
+// Every list of the interface, from the start list to the agent picker and the
+// command center, narrows as the user types: the query input stays focused, so
+// writing filters the entries by fuzzy match while the arrows move the
+// highlight over the result, which always leads with the best match. A list
+// that matches nothing says so instead of showing an empty screen, and escape
+// clears the query before it leaves the list.
 //
 // The interface is built around a single Bubble Tea model so the whole state
 // is explicit and testable: the model never performs input or output, it only

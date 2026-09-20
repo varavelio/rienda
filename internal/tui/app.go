@@ -17,9 +17,10 @@ import (
 	"github.com/varavelio/rienda/internal/session"
 )
 
-// Run starts the interactive interface. It parses the options, offers the
-// previous sessions of the workspace to continue and the agent definitions to
-// start a new one, and drives the chosen session until the user quits.
+// Run starts the interactive interface. It parses the options, offers a new
+// session and the previous ones of the workspace to continue from a single
+// list, plus the agent definitions a new session needs, and drives the chosen
+// session until the user quits.
 func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 	opts, err := parseOptions(args)
 	if err != nil {

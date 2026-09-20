@@ -59,6 +59,22 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "Writes prose")
 		require.Contains(t, view, "  minimal")
 		require.Contains(t, view, "enter select")
+		require.NotContains(t, view, "esc back", "the picker opened alone has nowhere to return")
+	})
+
+	t.Run("advertises the way back from the picker only when there is one", func(t *testing.T) {
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}, {ID: "writer"}},
+			selected: -1,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+		update(t, m, windowMsg(80, 24))
+		require.Equal(t, phaseStart, m.phase)
+
+		require.Nil(t, update(t, m, pressEnter))
+		require.Equal(t, phasePicker, m.phase)
+
+		require.Contains(t, plain(m.render()), "esc back")
 	})
 
 	t.Run("renders the session preparation", func(t *testing.T) {
@@ -81,7 +97,6 @@ func TestView(t *testing.T) {
 
 		update(t, m, windowMsg(80, 24))
 		update(t, m, pressDown)
-		update(t, m, pressEnter)
 		cmd := update(t, m, pressEnter)
 
 		// The runtime renders the preparation phase before the asynchronous
@@ -210,7 +225,7 @@ func TestView(t *testing.T) {
 		update(t, m, pressCtrlP)
 		update(t, m, pressDown)
 		update(t, m, pressDown)
-		update(t, m, pressSpace)
+		update(t, m, pressEnter)
 		update(t, m, pressEscape)
 
 		require.Contains(t, plain(m.render()), "# Title", "the raw markdown shows again")
@@ -389,22 +404,24 @@ func TestView(t *testing.T) {
 		require.Contains(t, plain(m.render()), "error: boom")
 	})
 
-	t.Run("renders the start menu", func(t *testing.T) {
+	t.Run("renders the start list", func(t *testing.T) {
 		m := newTestModelWith(t, modelConfig{
 			agents:   []agent.Agent{{ID: "coder"}},
 			selected: 0,
 			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
 		})
+		update(t, m, windowMsg(80, 24))
 
 		view := plain(m.render())
 
-		require.Contains(t, view, "What do you want to do?")
+		require.Contains(t, view, "Start a new session or continue a previous one")
+		require.Contains(t, view, "Search sessions")
 		require.Contains(t, view, "› New session")
-		require.Contains(t, view, "  Continue a previous session")
-		require.Contains(t, view, "enter select")
+		require.Contains(t, view, "  hello")
+		require.Contains(t, view, "type to filter")
 	})
 
-	t.Run("renders the session list", func(t *testing.T) {
+	t.Run("renders the stored sessions of the start list", func(t *testing.T) {
 		m := newTestModelWith(t, modelConfig{
 			agents:   []agent.Agent{{ID: "coder"}},
 			selected: 0,
@@ -414,17 +431,16 @@ func TestView(t *testing.T) {
 				{ID: "session-0", Agent: "coder"},
 			},
 		})
-		m.phase = phaseSessions
+		m.phase = phaseStart
 		update(t, m, windowMsg(80, 24))
 
 		view := plain(m.render())
 
-		require.Contains(t, view, "Continue a previous session")
-		require.Contains(t, view, "› second")
+		require.Contains(t, view, "› New session")
+		require.Contains(t, view, "  second")
 		require.Contains(t, view, "  first")
 		require.Contains(t, view, "untitled session")
 		require.Contains(t, view, "coder · ")
-		require.Contains(t, view, "esc back")
 	})
 
 	t.Run("renders the input box", func(t *testing.T) {
@@ -490,14 +506,16 @@ func TestView(t *testing.T) {
 			selected: 0,
 			sessions: sessions,
 		})
-		m.phase = phaseSessions
+		m.phase = phaseStart
 		update(t, m, windowMsg(80, 20))
 
 		view := plain(m.render())
 		require.Contains(t, view, "session 0")
 		require.NotContains(t, view, "session 19")
 
-		m.chosen = 19
+		// The offer of a new session leads the list, so the last stored
+		// session sits at the position after the whole list of them.
+		m.start.cursor = 20
 		view = plain(m.render())
 		require.Contains(t, view, "session 19")
 		require.NotContains(t, view, "session 0")
