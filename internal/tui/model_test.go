@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/varavelio/rienda/internal/agent"
+	"github.com/varavelio/rienda/internal/compaction"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/llm"
@@ -37,7 +38,8 @@ type fakeSession struct {
 	tagErr       error
 	context      tokens.Report
 	contextErr   error
-	canCompact   bool
+	refusal      compaction.Refusal
+	refused      bool
 	compact      chan engine.Event
 	compacted    int
 	canceled     chan struct{}
@@ -73,8 +75,8 @@ func (s *fakeSession) DisplayedBranch() []session.Entry { return s.entries }
 // Context returns the scripted context report of the session.
 func (s *fakeSession) Context() (tokens.Report, error) { return s.context, s.contextErr }
 
-// CanCompact reports the scripted readiness of the manual compaction.
-func (s *fakeSession) CanCompact() bool { return s.canCompact }
+// CompactRefusal reports the scripted reason the manual compaction cannot run.
+func (s *fakeSession) CompactRefusal() (compaction.Refusal, bool) { return s.refusal, s.refused }
 
 // Compact records the request and returns the scripted event channel.
 func (s *fakeSession) Compact(ctx context.Context) <-chan engine.Event {
@@ -191,10 +193,16 @@ func (s *storeSession) Context() (tokens.Report, error) {
 	return tokens.Measure(used, 1000), nil
 }
 
-// CanCompact reports whether the active branch still holds something to
-// summarize.
-func (s *storeSession) CanCompact() bool {
-	return s.store.Branch() != nil && len(s.store.Branch()) > 1
+// CompactRefusal reports why the active branch holds nothing to compact, and
+// false when it holds something. The readiness is derived from the branch the
+// fake session holds, exactly as the engine derives it, so the interface tests
+// exercise the same contract.
+func (s *storeSession) CompactRefusal() (compaction.Refusal, bool) {
+	branch := s.store.Branch()
+	if len(branch) > 1 {
+		return compaction.Refusal{}, false
+	}
+	return compaction.Refusal{Kind: compaction.RefusalShort, Needed: 20000}, true
 }
 
 // Compact returns the scripted event channel, recording the request.
@@ -2237,7 +2245,9 @@ func TestRefreshContext(t *testing.T) {
 // TestCompactContext verifies the manual compaction command.
 func TestCompactContext(t *testing.T) {
 	t.Run("lists the command and disables it with nothing to compact", func(t *testing.T) {
-		m, _ := chatModel(t)
+		m, scripted := chatModel(t)
+		scripted.refused = true
+		scripted.refusal = compaction.Refusal{Kind: compaction.RefusalShort, Needed: 20000}
 
 		var listed bool
 		for _, entry := range commandList {
@@ -2250,11 +2260,11 @@ func TestCompactContext(t *testing.T) {
 
 		update(t, m, pressCtrlP)
 		require.Contains(t, plain(m.render()), "Compact context")
+		require.Contains(t, plain(m.render()), "needs 20k more tokens of history")
 	})
 
 	t.Run("enables the command when the branch holds something to compact", func(t *testing.T) {
-		m, scripted := chatModel(t)
-		scripted.canCompact = true
+		m, _ := chatModel(t)
 
 		require.True(t, m.compactReady())
 
@@ -2263,8 +2273,7 @@ func TestCompactContext(t *testing.T) {
 	})
 
 	t.Run("disables the command while a run is in flight", func(t *testing.T) {
-		m, scripted := chatModel(t)
-		scripted.canCompact = true
+		m, _ := chatModel(t)
 		m.input.SetValue("hello")
 		require.NotNil(t, update(t, m, pressEnter))
 
@@ -2273,7 +2282,6 @@ func TestCompactContext(t *testing.T) {
 
 	t.Run("compacts a session the threshold would leave alone", func(t *testing.T) {
 		m, scripted := chatModel(t)
-		scripted.canCompact = true
 
 		cmd := m.compactContext()
 
@@ -2285,6 +2293,7 @@ func TestCompactContext(t *testing.T) {
 
 	t.Run("refuses to compact with nothing to summarize", func(t *testing.T) {
 		m, scripted := chatModel(t)
+		scripted.refused = true
 
 		require.Nil(t, m.compactContext())
 		require.Zero(t, scripted.compacted)
@@ -2321,5 +2330,106 @@ func TestLiveCompaction(t *testing.T) {
 		view := plain(m.render())
 		require.Contains(t, view, "Compaction")
 		require.Contains(t, view, compactionBody)
+	})
+}
+
+// TestCompactNote verifies the explanation of a disabled compaction command.
+func TestCompactNote(t *testing.T) {
+	t.Run("explains every reason the command cannot run", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			prepare func(*model, *fakeSession)
+			want    string
+		}{
+			{
+				name: "nothing to summarize with no tokens lacking",
+				prepare: func(_ *model, scripted *fakeSession) {
+					scripted.refused = true
+					scripted.refusal = compaction.Refusal{Kind: compaction.RefusalShort}
+				},
+				want: "there is not enough history to summarize yet",
+			},
+			{
+				name: "nothing to summarize with tokens lacking",
+				prepare: func(_ *model, scripted *fakeSession) {
+					scripted.refused = true
+					scripted.refusal = compaction.Refusal{
+						Kind:   compaction.RefusalShort,
+						Needed: 20000,
+					}
+				},
+				want: "needs 20k more tokens of history",
+			},
+			{
+				name: "the conversation already ends in a summary",
+				prepare: func(_ *model, scripted *fakeSession) {
+					scripted.refused = true
+					scripted.refusal = compaction.Refusal{Kind: compaction.RefusalCompacted}
+				},
+				want: "the conversation already ends in a summary",
+			},
+			{
+				name: "the branch holds no turn to summarize",
+				prepare: func(_ *model, scripted *fakeSession) {
+					scripted.refused = true
+					scripted.refusal = compaction.Refusal{Kind: compaction.RefusalNoTurn}
+				},
+				want: "the conversation holds no turn to summarize",
+			},
+			{
+				name: "the session holds no conversation",
+				prepare: func(_ *model, scripted *fakeSession) {
+					scripted.refused = true
+					scripted.refusal = compaction.Refusal{Kind: compaction.RefusalEmpty}
+				},
+				want: "the session holds no conversation yet",
+			},
+			{
+				name: "a run is in flight",
+				prepare: func(m *model, _ *fakeSession) {
+					m.input.SetValue("hello")
+					require.NotNil(t, update(t, m, pressEnter))
+				},
+				want: "a run is in flight",
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				m, scripted := chatModel(t)
+				test.prepare(m, scripted)
+
+				require.Equal(t, test.want, m.compactNote())
+
+				update(t, m, pressCtrlP)
+				require.Contains(
+					t,
+					plain(m.render()),
+					"Compact context  "+test.want,
+					"the note reaches the command center",
+				)
+			})
+		}
+	})
+
+	t.Run("explains an open session with no reason", func(t *testing.T) {
+		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, 0, nil)
+		update(t, m, windowMsg(80, 24))
+
+		require.Equal(t, "open a session first", m.compactNote())
+	})
+
+	t.Run("reports nothing while the command can run", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		require.True(t, m.compactReady())
+		require.Empty(t, m.compactNote())
+
+		update(t, m, pressCtrlP)
+		require.Contains(
+			t,
+			plain(m.render()),
+			"summarize the oldest turns into a checkpoint",
+		)
 	})
 }

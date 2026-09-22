@@ -30,10 +30,13 @@ type compactor struct {
 	prompt    string
 }
 
-// CanCompact reports whether the branch still holds something to summarize.
-func (c *compactor) CanCompact(branch []session.Entry) bool {
-	_, ok := compaction.Prepare(branch, c.settings)
-	return ok
+// Refusal reports why the branch holds nothing to compact, and false when it
+// holds something.
+func (c *compactor) Refusal(branch []session.Entry) (compaction.Refusal, bool) {
+	if _, ok := compaction.Prepare(branch, c.settings); ok {
+		return compaction.Refusal{}, false
+	}
+	return compaction.Classify(branch, c.settings), true
 }
 
 // Compact summarizes the branch, returning ok as false when there is nothing

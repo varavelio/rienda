@@ -21,9 +21,9 @@ var errRunInFlight = errors.New("engine: a run is already in flight")
 // provides the production implementation over internal/compaction; the engine
 // tests inject a no-op or a scripted one.
 type Compactor interface {
-	// CanCompact reports whether the branch still holds something to
-	// summarize.
-	CanCompact(branch []session.Entry) bool
+	// Refusal reports why the branch holds nothing to compact, and false when
+	// it holds something.
+	Refusal(branch []session.Entry) (compaction.Refusal, bool)
 
 	// Compact summarizes the branch. ok is false when there is nothing to
 	// compact.
@@ -41,13 +41,22 @@ type Compaction struct {
 	ReserveTokens int
 }
 
-// CanCompact reports whether the active branch still holds something to
-// summarize. The manual command is offered only when it does.
-func (e *Engine) CanCompact() bool {
+// CompactRefusal reports why the active branch holds nothing to compact, and
+// false when it holds something. The manual command is offered only when it
+// does, so the reason is what explains a command the interface cannot run.
+func (e *Engine) CompactRefusal() (compaction.Refusal, bool) {
 	if e.compactor == nil {
-		return false
+		return compaction.Refusal{Kind: compaction.RefusalEmpty}, true
 	}
-	return e.compactor.CanCompact(e.store.Branch())
+	return e.compactor.Refusal(e.store.Branch())
+}
+
+// CanCompact reports whether the active branch still holds something to
+// summarize. It derives from CompactRefusal, so the readiness and the reason a
+// front end explains can never disagree.
+func (e *Engine) CanCompact() bool {
+	_, refused := e.CompactRefusal()
+	return !refused
 }
 
 // Compact summarizes the active branch on demand and returns the channel
@@ -95,7 +104,7 @@ func (e *Engine) compactBranch(ctx context.Context, events chan<- Event) error {
 	}
 
 	branch := e.store.Branch()
-	if !e.compactor.CanCompact(branch) {
+	if _, refused := e.compactor.Refusal(branch); refused {
 		return nil
 	}
 
@@ -105,8 +114,8 @@ func (e *Engine) compactBranch(ctx context.Context, events chan<- Event) error {
 		return fmt.Errorf("engine: compact branch: %w", err)
 	}
 	if !ok {
-		// Defensive: CanCompact and Compact answer from the same preparation,
-		// so the two agree whenever the compactor is the real one.
+		// Defensive: Refusal and Compact answer from the same preparation, so
+		// the two agree whenever the compactor is the real one.
 		return nil
 	}
 

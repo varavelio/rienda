@@ -24,13 +24,13 @@ type scriptedCompactor struct {
 	settings   compaction.Settings
 }
 
-// CanCompact reports the scripted readiness.
-func (c *scriptedCompactor) CanCompact(branch []session.Entry) bool {
-	if c.err != nil {
-		return c.canCompact
+// Refusal reports why the branch holds nothing to compact, following the same
+// rules as the real compactor: the scripted readiness and the preparation.
+func (c *scriptedCompactor) Refusal(branch []session.Entry) (compaction.Refusal, bool) {
+	if _, ok := compaction.Prepare(branch, c.settings); ok && c.canCompact {
+		return compaction.Refusal{}, false
 	}
-	_, ok := compaction.Prepare(branch, c.settings)
-	return c.canCompact && ok
+	return compaction.Refusal{Kind: compaction.RefusalShort, Needed: 1000}, true
 }
 
 // Compact returns the scripted result.
@@ -318,18 +318,27 @@ func TestManualCompaction(t *testing.T) {
 		require.Zero(t, compactor.compacted)
 	})
 
-	t.Run("reports the readiness of the manual command", func(t *testing.T) {
+	t.Run("reports the readiness and the reason of the manual command", func(t *testing.T) {
 		compactor := &scriptedCompactor{canCompact: true}
 		engine, store, _ := newCompactionEngine(t, compactor, Compaction{}, 200)
 		grow(t, store, 2)
 
 		require.True(t, engine.CanCompact())
+		_, refused := engine.CompactRefusal()
+		require.False(t, refused)
 
 		empty, _, _ := newCompactionEngine(t, compactor, Compaction{}, 200)
 		require.False(t, empty.CanCompact())
+		refusal, refused := empty.CompactRefusal()
+		require.True(t, refused)
+		require.Equal(t, compaction.RefusalShort, refusal.Kind)
+		require.Positive(t, refusal.Needed)
 
 		none, _, _ := newCompactionEngine(t, nil, Compaction{}, 200)
 		require.False(t, none.CanCompact())
+		refusal, refused = none.CompactRefusal()
+		require.True(t, refused)
+		require.Equal(t, compaction.RefusalEmpty, refusal.Kind)
 	})
 
 	t.Run("refuses a second run while one is in flight", func(t *testing.T) {

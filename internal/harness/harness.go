@@ -10,6 +10,7 @@ import (
 
 	"github.com/varavelio/rienda/internal/agent"
 	"github.com/varavelio/rienda/internal/catalog"
+	"github.com/varavelio/rienda/internal/compaction"
 	"github.com/varavelio/rienda/internal/config"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/id"
@@ -80,6 +81,17 @@ func (s *Session) Context() (tokens.Report, error) {
 // checkpoint that summarizes them.
 func (s *Session) DisplayedBranch() []session.Entry {
 	return s.store.DisplayedBranch()
+}
+
+// CompactRefusal reports why the active branch holds nothing to compact, and
+// false when it holds something. The manual command is offered only when it
+// holds something, so the reason explains a command the interface cannot run.
+func (s *Session) CompactRefusal() (compaction.Refusal, bool) {
+	refusal, refused := s.engine.CompactRefusal()
+	if !refused {
+		return compaction.Refusal{}, false
+	}
+	return refusal, true
 }
 
 // CanCompact reports whether the active branch still holds something to

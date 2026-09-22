@@ -1,6 +1,8 @@
 package compaction
 
 import (
+	"slices"
+
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/tokens"
@@ -13,8 +15,8 @@ import (
 //
 //   - the branch is empty;
 //   - the branch already ends in a compaction;
-//   - nothing is left to summarize, because the cut landed at the start;
-//   - the branch holds no turn boundary to cut at.
+//   - nothing is left to summarize, because the cut landed at the start, which
+//     Classify explains as RefusalEmpty, RefusalShort or RefusalNoTurn.
 //
 // When a previous compaction exists, its summary becomes PreviousSummary and
 // the range to consider starts at its kept entry, so the messages that survived
@@ -30,13 +32,7 @@ func Prepare(entries []session.Entry, settings Settings) (Preparation, bool) {
 		return Preparation{}, false
 	}
 
-	previous := Preparation{}
-	start := 0
-	if index, found := newestCompaction(entries); found {
-		previous.PreviousSummary = entries[index].CompactionSummary
-		start = indexOf(entries, entries[index].CompactionKeptID)
-	}
-
+	start := rangeStart(entries)
 	cut, found := cutPoint(entries, start, settings.KeepRecentTokens)
 	if !found || cut <= start {
 		return Preparation{}, false
@@ -44,10 +40,37 @@ func Prepare(entries []session.Entry, settings Settings) (Preparation, bool) {
 
 	return Preparation{
 		Messages:        messagesOf(entries[start:cut]),
-		PreviousSummary: previous.PreviousSummary,
+		PreviousSummary: previousSummary(entries),
 		KeptID:          entries[cut].ID,
 		TokensBefore:    tokensBefore(entries[start:cut]),
 	}, true
+}
+
+// rangeStart returns the index the range to consider begins at: the kept entry
+// of the newest compaction, so the messages that survived it are folded into
+// the next one instead of being orphaned, or the start of the branch when it
+// holds none.
+func rangeStart(entries []session.Entry) int {
+	index, found := newestCompaction(entries)
+	if !found {
+		return 0
+	}
+	return indexOf(entries, entries[index].CompactionKeptID)
+}
+
+// previousSummary returns the summary of the newest compaction of a branch,
+// empty when the branch holds none.
+func previousSummary(entries []session.Entry) string {
+	if index, found := newestCompaction(entries); found {
+		return entries[index].CompactionSummary
+	}
+	return ""
+}
+
+// hasTurnBoundary reports whether a range holds at least one turn boundary, so
+// a cut could ever land inside it.
+func hasTurnBoundary(entries []session.Entry, start int) bool {
+	return slices.ContainsFunc(entries[start:], isTurnBoundary)
 }
 
 // cutPoint returns the index of the first entry of the kept tail: the walk

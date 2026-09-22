@@ -232,3 +232,126 @@ func TestPrepare(t *testing.T) {
 		)
 	})
 }
+
+// TestClassify verifies the reason a branch holds nothing to compact.
+func TestClassify(t *testing.T) {
+	t.Run("reports nothing for a branch that can be compacted", func(t *testing.T) {
+		branch := []session.Entry{
+			userEntry("u1", "aaaa"),
+			assistantEntry("a1", "aaaa"),
+			userEntry("u2", "aaaa"),
+			assistantEntry("a2", "aaaa"),
+		}
+
+		refusal := Classify(branch, Settings{KeepRecentTokens: 2})
+
+		require.Equal(t, RefusalNone, refusal.Kind)
+	})
+
+	t.Run("reports an empty branch", func(t *testing.T) {
+		refusal := Classify(nil, Settings{KeepRecentTokens: 20000})
+
+		require.Equal(t, RefusalEmpty, refusal.Kind)
+		require.Zero(t, refusal.Needed)
+	})
+
+	t.Run("reports a branch that already ends in a compaction", func(t *testing.T) {
+		branch := []session.Entry{
+			userEntry("u1", "one"),
+			compactionEntry("c1", "u1", "summary"),
+		}
+
+		refusal := Classify(branch, Settings{KeepRecentTokens: 1})
+
+		require.Equal(t, RefusalCompacted, refusal.Kind)
+		require.Zero(t, refusal.Needed)
+	})
+
+	t.Run("reports the tokens a short branch still lacks", func(t *testing.T) {
+		// Two messages of four bytes each are two tokens, against a budget of
+		// ten: eight tokens of history are missing.
+		branch := []session.Entry{
+			userEntry("u1", "aaaa"),
+			assistantEntry("a1", "aaaa"),
+		}
+
+		refusal := Classify(branch, Settings{KeepRecentTokens: 10})
+
+		require.Equal(t, RefusalShort, refusal.Kind)
+		require.Equal(t, 8, refusal.Needed)
+	})
+
+	t.Run("reports nothing lacking for a small range with no earlier turn", func(t *testing.T) {
+		// The range is the whole conversation, which is smaller than the
+		// budget, but its only turn is the one the walk starts at, so there is
+		// never anything older to summarize however much history is added.
+		branch := []session.Entry{
+			userEntry("u1", "aaaa"),
+			assistantEntry("a1", "aaaa"),
+		}
+
+		refusal := Classify(branch, Settings{KeepRecentTokens: 1})
+
+		require.Equal(t, RefusalShort, refusal.Kind)
+		require.Zero(t, refusal.Needed)
+	})
+
+	t.Run("reports a branch with no turn boundary at all", func(t *testing.T) {
+		branch := []session.Entry{
+			toolResultEntry("r1"),
+			assistantEntry("a1", "two"),
+			toolResultEntry("r2"),
+		}
+
+		refusal := Classify(branch, Settings{KeepRecentTokens: 1})
+
+		require.Equal(t, RefusalNoTurn, refusal.Kind)
+		require.Zero(t, refusal.Needed)
+	})
+
+	t.Run("agrees with Prepare for every case", func(t *testing.T) {
+		// The explanation is only meaningful when it cannot disagree with the
+		// boolean, so every classification is checked against Prepare itself.
+		cases := []struct {
+			name     string
+			branch   []session.Entry
+			settings Settings
+		}{
+			{name: "empty", branch: nil, settings: Settings{KeepRecentTokens: 10}},
+			{
+				name:     "compacted",
+				branch:   []session.Entry{userEntry("u1", "one"), compactionEntry("c1", "u1", "s")},
+				settings: Settings{KeepRecentTokens: 1},
+			},
+			{
+				name:     "short",
+				branch:   []session.Entry{userEntry("u1", "aaaa"), assistantEntry("a1", "aaaa")},
+				settings: Settings{KeepRecentTokens: 10},
+			},
+			{
+				name:     "no turn",
+				branch:   []session.Entry{toolResultEntry("r1"), assistantEntry("a1", "two")},
+				settings: Settings{KeepRecentTokens: 1},
+			},
+			{
+				name: "compactable",
+				branch: []session.Entry{
+					userEntry("u1", "aaaa"),
+					assistantEntry("a1", "aaaa"),
+					userEntry("u2", "aaaa"),
+					assistantEntry("a2", "aaaa"),
+				},
+				settings: Settings{KeepRecentTokens: 2},
+			},
+		}
+
+		for _, test := range cases {
+			t.Run(test.name, func(t *testing.T) {
+				_, ok := Prepare(test.branch, test.settings)
+				refusal := Classify(test.branch, test.settings)
+
+				require.Equal(t, ok, refusal.Kind == RefusalNone)
+			})
+		}
+	})
+}

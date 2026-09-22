@@ -56,7 +56,10 @@
 // compacts the conversation on demand, and holds the options of the harness.
 // The manual compaction is offered only when the branch still holds something
 // to summarize and no run is in flight, and it shares the code path, the prompt
-// and the events of an automatic one. The tool output and the reasoning start
+// and the events of an automatic one. A command the interface cannot run stays
+// faint and takes no highlight, and its note says why it cannot run, so the
+// reader is never left guessing whether the entry is broken or simply not
+// applicable yet. The tool output and the reasoning start
 // compact, previewing only their trailing lines so a working session stays
 // readable, and can be expanded to their full text; the answers of the model
 // can also be shown as plain text instead of markdown. A new session taken from

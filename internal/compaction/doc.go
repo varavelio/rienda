@@ -7,6 +7,8 @@
 // always starts with a complete user turn and no provider-specific repair is
 // ever needed. Compact then asks the model for one summary of the range through
 // the injected llm.Client, reusing the retry policy of an ordinary turn.
+// Classify returns why Prepare refused to compact a branch, so a caller can
+// explain the refusal instead of only knowing that one happened.
 //
 // The package owns no store: the caller persists the resulting checkpoint,
 // which is what keeps the procedure testable without a session file. It never

@@ -319,11 +319,18 @@ func (m *model) settingsIdentity() string {
 // a screen carry no state, so they only show what they do; the options of the
 // harness also show whether they are on. A command the interface cannot run
 // right now stays faint and takes no highlight, so the list never promises a
-// screen it cannot open.
+// screen it cannot open, and its note says why it cannot run so the reader is
+// never left guessing.
 func (m *model) commandLine(position int) string {
 	entry := commandList[m.commands.shown[position]]
 	if entry.Enabled != nil && !entry.Enabled(m) {
-		return m.clip("  " + m.styles.dim.Render(entry.Label+"  "+entry.Note))
+		note := entry.Note
+		if entry.NoteOff != nil {
+			if reason := entry.NoteOff(m); reason != "" {
+				note = reason
+			}
+		}
+		return m.clip("  " + m.styles.dim.Render(entry.Label+"  "+note))
 	}
 
 	label := m.row(position == m.commands.cursor, entry.Label)

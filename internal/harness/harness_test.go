@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/varavelio/rienda/internal/compaction"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/llm"
@@ -761,10 +762,37 @@ func TestCompaction(t *testing.T) {
 
 		require.False(t, prepared.CanCompact())
 
+		// The reason reaches the caller, so the interface can explain why the
+		// manual command is unavailable instead of only fading it.
+		refusal, refused := prepared.CompactRefusal()
+		require.True(t, refused)
+		require.Equal(t, compaction.RefusalShort, refusal.Kind)
+		require.Positive(t, refusal.Needed)
+
 		events := collectEvents(prepared.Compact(t.Context()))
 
 		require.Equal(t, engine.EndReasonTurn, events[len(events)-1].Reason)
 		require.NotContains(t, eventTypeList(events), engine.EventCompactionStart)
+	})
+
+	t.Run("explains a conversation that already ends in a compaction", func(t *testing.T) {
+		env := newTestEnvironment(
+			t,
+			textScript("one"),
+			textScript("two"),
+			textScript("the summary"),
+		)
+		writeCompactionConfig(t, env, "compaction:\n  keep_recent_tokens: 1\n")
+
+		prepared := env.prepare(t)
+		collectEvents(prepared.Run(t.Context(), "first"))
+		collectEvents(prepared.Run(t.Context(), "second"))
+		collectEvents(prepared.Compact(t.Context()))
+
+		refusal, refused := prepared.CompactRefusal()
+
+		require.True(t, refused)
+		require.Equal(t, compaction.RefusalCompacted, refusal.Kind)
 	})
 
 	t.Run("uses the declared summarization model", func(t *testing.T) {

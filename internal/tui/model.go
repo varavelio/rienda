@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/varavelio/rienda/internal/agent"
+	"github.com/varavelio/rienda/internal/compaction"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/filecomplete"
 	"github.com/varavelio/rienda/internal/llm"
@@ -206,6 +207,11 @@ type command struct {
 	// Note describes what the command does, shown next to the label.
 	Note string
 
+	// NoteOff replaces Note while the command cannot run, so the list explains
+	// why instead of only fading the entry. It is nil when the reason is the
+	// same for the whole command.
+	NoteOff func(*model) string
+
 	// Open opens the screen of the command and returns the command the
 	// interface runs next, or nil when the screen needs none. It is nil for
 	// the commands that flip an option in place.
@@ -247,6 +253,7 @@ var commandList = []command{
 	{
 		Label:   "Compact context",
 		Note:    "summarize the oldest turns into a checkpoint",
+		NoteOff: (*model).compactNote,
 		Open:    (*model).compactContext,
 		Enabled: (*model).compactReady,
 	},
@@ -288,9 +295,11 @@ type Session interface {
 	// against the context window of the session model.
 	Context() (tokens.Report, error)
 
-	// CanCompact reports whether the active branch still holds something to
-	// summarize.
-	CanCompact() bool
+	// CompactRefusal reports why the active branch holds nothing to compact,
+	// and false when it holds something. The interface offers the manual
+	// compaction only when it holds something, and explains the reason when it
+	// does not.
+	CompactRefusal() (compaction.Refusal, bool)
 
 	// Compact summarizes the active branch on demand and returns the channel
 	// carrying its events. It ignores the compaction threshold.
@@ -995,7 +1004,49 @@ func (m *model) treeReady() bool {
 // needs an open session, no run in flight, because a store is not safe for
 // concurrent use, and something left to summarize.
 func (m *model) compactReady() bool {
-	return m.session != nil && !m.running && m.session.CanCompact()
+	if m.session == nil || m.running {
+		return false
+	}
+	_, refused := m.session.CompactRefusal()
+	return !refused
+}
+
+// compactNote explains why the manual compaction cannot run, ready to be shown
+// in place of the note of the command. It returns nothing when the command can
+// run, which lets the caller keep the default note. The reason comes from the
+// same check the command runs on, so the explanation can never disagree with
+// the availability of the command.
+func (m *model) compactNote() string {
+	switch {
+	case m.session == nil:
+		return "open a session first"
+	case m.running:
+		return "a run is in flight"
+	}
+
+	refusal, refused := m.session.CompactRefusal()
+	if !refused {
+		return ""
+	}
+	return compactionRefusalNote(refusal)
+}
+
+// compactionRefusalNote renders why a branch holds nothing to compact.
+func compactionRefusalNote(refusal compaction.Refusal) string {
+	switch refusal.Kind {
+	case compaction.RefusalCompacted:
+		return "the conversation already ends in a summary"
+	case compaction.RefusalNoTurn:
+		return "the conversation holds no turn to summarize"
+	case compaction.RefusalShort:
+		if refusal.Needed > 0 {
+			return "needs " + formatTokens(refusal.Needed) +
+				" more tokens of history"
+		}
+		return "there is not enough history to summarize yet"
+	default:
+		return "the session holds no conversation yet"
+	}
 }
 
 // compactContext summarizes the conversation on demand, through the same code

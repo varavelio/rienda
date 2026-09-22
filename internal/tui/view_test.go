@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/varavelio/rienda/internal/agent"
+	"github.com/varavelio/rienda/internal/compaction"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
@@ -1447,4 +1448,57 @@ func TestCompactionRendering(t *testing.T) {
 			"the checkpoint keeps its white",
 		)
 	})
+}
+
+// TestCommandLine verifies the rendering of the command center entries.
+func TestCommandLine(t *testing.T) {
+	t.Run("renders a disabled command faint and explains why", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.refused = true
+		scripted.refusal = compaction.Refusal{Kind: compaction.RefusalShort, Needed: 20000}
+		update(t, m, windowSize)
+
+		position := commandPosition(t, m, "Compact context")
+		line := m.commandLine(position)
+
+		require.Contains(t, line, "Compact context")
+		require.Contains(t, plain(line), "needs 20k more tokens of history")
+		require.NotContains(t, line, "›", "a disabled command takes no highlight")
+		require.Contains(
+			t,
+			line,
+			m.styles.dim.Render("Compact context  needs 20k more tokens of history"),
+			"a disabled command stays faint",
+		)
+	})
+
+	t.Run("renders an enabled command with its own note", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowSize)
+
+		position := commandPosition(t, m, "Compact context")
+
+		require.Contains(
+			t,
+			plain(m.commandLine(position)),
+			"summarize the oldest turns into a checkpoint",
+		)
+	})
+}
+
+// windowSize is a terminal large enough for the whole command center.
+var windowSize = windowMsg(80, 24)
+
+// commandPosition returns the position of the command with the given label in
+// the list the command center shows.
+func commandPosition(t *testing.T, m *model, label string) int {
+	t.Helper()
+
+	for position, index := range m.commands.shown {
+		if commandList[index].Label == label {
+			return position
+		}
+	}
+	t.Fatalf("the command center holds no command %q", label)
+	return -1
 }
