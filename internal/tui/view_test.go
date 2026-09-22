@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1357,15 +1358,32 @@ func TestFormatTokens(t *testing.T) {
 		want  string
 	}{
 		{count: 0, want: "0"},
+		{count: 1, want: "1"},
 		{count: 999, want: "999"},
 		{count: 1000, want: "1k"},
-		{count: 68000, want: "68k"},
-		{count: 96432, want: "96k"},
-		{count: 200000, want: "200k"},
+		{count: 1050, want: "1.1k"},
+		{count: 1496, want: "1.5k"},
+		{count: 1500, want: "1.5k"},
+		{count: 96432, want: "96.4k"},
+		{count: 100000, want: "100k"},
+		{count: 250000, want: "250k"},
+		{count: 262144, want: "262.1k"},
+		// The rounding reaches the next unit, which renders as a million rather
+		// than as 1000k.
+		{count: 999949, want: "999.9k"},
+		{count: 999950, want: "1m"},
+		{count: 1000000, want: "1m"},
+		{count: 1000123, want: "1m"},
+		{count: 1049000, want: "1m"},
+		{count: 1050000, want: "1.1m"},
+		{count: 1500000, want: "1.5m"},
+		{count: 2000000, want: "2m"},
+		{count: 10500000, want: "10.5m"},
+		{count: 10500786, want: "10.5m"},
 	}
 
 	for _, test := range tests {
-		t.Run(test.want, func(t *testing.T) {
+		t.Run(strconv.Itoa(test.count), func(t *testing.T) {
 			require.Equal(t, test.want, formatTokens(test.count))
 		})
 	}

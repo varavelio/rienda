@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +35,17 @@ const (
 	// contextCriticalPercent is the window usage past which the figure is
 	// shown as a failure.
 	contextCriticalPercent = 90
+)
+
+// Units of the token figure the chat footer shows. A count below tokensPerK is
+// rendered plain, and the larger counts are rendered in the unit that keeps
+// them short.
+const (
+	// tokensPerK is the number of tokens one "k" stands for.
+	tokensPerK = 1000
+
+	// tokensPerM is the number of tokens one "m" stands for.
+	tokensPerM = 1000 * tokensPerK
 )
 
 // View renders the interface in the alternate screen.
@@ -692,13 +702,53 @@ func (m *model) contextLabel() string {
 	))
 }
 
-// formatTokens renders a token count for the footer: the plain number below a
-// thousand and the rounded thousands above it, so the figure stays short.
+// formatTokens renders a token count for the chat footer: the plain number
+// below a thousand, the thousands with a decimal below a million and the
+// millions with a decimal above it, so a small context keeps its precision
+// while a window of millions stays short. The decimal of a unit is its tenth —
+// a hundred tokens in the thousands and a hundred thousand in the millions —
+// and it is dropped when the count is a whole multiple of the unit.
 func formatTokens(count int) string {
-	if count < 1000 {
+	if count >= tokensPerM {
+		return formatMillions(count)
+	}
+	if count < tokensPerK {
 		return strconv.Itoa(count)
 	}
-	return strconv.Itoa(int(math.Round(float64(count)/1000))) + "k"
+
+	whole, tenths := roundTenths(count, tokensPerK)
+	if whole < tokensPerK {
+		return renderScaled(whole, tenths, "k")
+	}
+	// The rounding reached the next unit, which renders the count as 1m rather
+	// than as 1000k.
+	return formatMillions(count)
+}
+
+// formatMillions renders a token count in millions, with the decimal of the
+// unit.
+func formatMillions(count int) string {
+	whole, tenths := roundTenths(count, tokensPerM)
+	return renderScaled(whole, tenths, "m")
+}
+
+// roundTenths returns a count in units of scale, split into its whole part and
+// its number of tenths and rounded to the nearest tenth. The arithmetic stays
+// in integers, which keeps a count that lands off a unit boundary from
+// rendering as the unit below it.
+func roundTenths(count, scale int) (whole, tenths int) {
+	step := scale / 10
+	rounded := (count + step/2) / step
+	return rounded / 10, rounded % 10
+}
+
+// renderScaled renders a value in units of unit, dropping the decimal when it
+// carries none.
+func renderScaled(whole, tenths int, unit string) string {
+	if tenths == 0 {
+		return strconv.Itoa(whole) + unit
+	}
+	return strconv.Itoa(whole) + "." + strconv.Itoa(tenths) + unit
 }
 
 // renderEntry renders the transcript entry at the given index as a
