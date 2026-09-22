@@ -1,14 +1,21 @@
 // Package engine runs one agent over one session.
 //
-// The agent is not fixed for the life of the engine: the engine holds the
-// definitions it was given and resolves the one a branch runs on every turn
-// from the session, so a conversation can switch agent without a new engine
-// and without rewriting its file. The tools of the turn come from the
-// resolved agent, so a session that switched sends the tool definitions of
-// the agent that runs the turn. A branch that names an agent the engine was
-// not given fails before anything is written, so a session whose agent is gone
-// keeps its conversation intact and runs again as soon as a selection, or the
-// header, names an agent that exists.
+// Neither the agent nor the model is fixed for the life of the engine. The
+// engine holds the agent definitions it was given, and it resolves both the
+// agent and the model a branch runs on every turn from the session through the
+// injected Resolver. A conversation can therefore switch agent or model without
+// a new engine and without rewriting its file: every turn is planned from the
+// branch it runs, and the plan carries the agent, the model, the client and the
+// tools of the turn together, so they can never disagree with each other.
+//
+// The tools of the turn come from the resolved agent, and the request is built
+// with the generation settings and the context window of the resolved model, so
+// a session that switched sends the tools of the agent that runs the turn and
+// measures its context against the window of the model that runs it. A branch
+// that names an agent or a model the harness cannot run fails before anything
+// is written, so a session whose agent or model is gone keeps its conversation
+// intact and runs again as soon as a selection, or the header, names one that
+// exists.
 //
 // A run appends the user prompt to the session and then loops: it streams a
 // model response, persists it, runs the tool calls the response requested,

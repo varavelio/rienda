@@ -10,8 +10,6 @@ import (
 	"github.com/varavelio/rienda/internal/compaction"
 	"github.com/varavelio/rienda/internal/config"
 	"github.com/varavelio/rienda/internal/engine"
-	"github.com/varavelio/rienda/internal/llm"
-	"github.com/varavelio/rienda/internal/provider"
 	"github.com/varavelio/rienda/internal/session"
 )
 
@@ -20,14 +18,15 @@ import (
 const compactionPromptFile = "COMPACTION.md"
 
 // compactor summarizes the branch of a session through internal/compaction. It
-// holds the resolved client and model of the summarization, so a session may
-// run on one model and be summarized by another.
+// resolves the model and the client of the summarization when it runs, from the
+// resolver of the session, so a session may run on one model and be summarized
+// by another, and a session that switched model is summarized by the model it
+// runs.
 type compactor struct {
-	client    llm.Client
-	model     string
-	maxTokens int
-	settings  compaction.Settings
-	prompt    string
+	resolver engine.Resolver
+	pinned   string
+	settings compaction.Settings
+	prompt   string
 }
 
 // Refusal reports why the branch holds nothing to compact, and false when it
@@ -44,6 +43,7 @@ func (c *compactor) Refusal(branch []session.Entry) (compaction.Refusal, bool) {
 func (c *compactor) Compact(
 	ctx context.Context,
 	branch []session.Entry,
+	modelRef string,
 ) (compaction.Result, bool, error) {
 	prep, ok := compaction.Prepare(branch, c.settings)
 	if !ok {
@@ -55,11 +55,23 @@ func (c *compactor) Compact(
 		return compaction.Result{}, false, fmt.Errorf("harness: %w", err)
 	}
 
+	// The model of the summary is the one the configuration pins, or the one
+	// the branch runs at this moment, so a session that switched model is
+	// summarized by the model the user selected.
+	ref := c.pinned
+	if ref == "" {
+		ref = modelRef
+	}
+	model, client, err := c.resolver.Resolve(ref)
+	if err != nil {
+		return compaction.Result{}, false, fmt.Errorf("harness: %w", err)
+	}
+
 	result, err := compaction.Compact(ctx, prep, compaction.Deps{
-		Client:    c.client,
-		Model:     c.model,
+		Client:    client,
+		Model:     model.ID,
 		Prompt:    prompt,
-		MaxTokens: c.maxTokens,
+		MaxTokens: model.MaxTokens,
 	})
 	if err != nil {
 		return compaction.Result{}, false, fmt.Errorf("harness: %w", err)
@@ -67,40 +79,28 @@ func (c *compactor) Compact(
 	return result, true, nil
 }
 
-// newCompactor builds the compactor of a session from the resolved settings of
-// the summarization model. The session model summarizes unless the
-// configuration declares compaction.model, which is resolved and built the
-// same way the session client is.
-func newCompactor(
-	cfg *config.Config,
-	resolved config.Resolved,
-	sessionClient llm.Client,
-) (engine.Compactor, error) {
-	client, model, maxTokens := sessionClient, resolved.ModelID, resolved.MaxTokens
-
-	if ref := strings.TrimSpace(cfg.Compaction.Model); ref != "" {
-		summary, err := cfg.Resolve(ref)
-		if err != nil {
-			return nil, fmt.Errorf("harness: compaction: %w", err)
-		}
-		built, err := provider.New(summary.Protocol, summary.ProviderConfig)
-		if err != nil {
-			return nil, fmt.Errorf("harness: build compaction client: %w", err)
-		}
-		client, model, maxTokens = built, summary.ModelID, summary.MaxTokens
-	}
-
+// newCompactor builds the compactor of a session from the resolver of the
+// session, which is what turns a provider/model reference into a client:
+//
+//   - when the configuration declares compaction.model, the summary runs on it,
+//     which is how a user pins a cheap model to summarize;
+//   - otherwise the summary runs on the model the branch is running, so a
+//     conversation that switched model summarizes with the model the user
+//     selected, and nothing changes behind their back.
+//
+// The reference of the branch is resolved on every compaction, so a session
+// that switched model is summarized by the model it runs at that moment.
+func newCompactor(cfg *config.Config, resolver engine.Resolver) (engine.Compactor, error) {
 	promptPath, err := compactionPromptPath()
 	if err != nil {
 		return nil, err
 	}
 
 	return &compactor{
-		client:    client,
-		model:     model,
-		maxTokens: maxTokens,
-		settings:  compaction.Settings{KeepRecentTokens: cfg.Compaction.KeepRecentTokens},
-		prompt:    promptPath,
+		resolver: resolver,
+		pinned:   strings.TrimSpace(cfg.Compaction.Model),
+		settings: compaction.Settings{KeepRecentTokens: cfg.Compaction.KeepRecentTokens},
+		prompt:   promptPath,
 	}, nil
 }
 

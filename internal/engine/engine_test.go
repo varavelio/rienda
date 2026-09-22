@@ -120,6 +120,47 @@ func newTestStore(t *testing.T) *session.Store {
 	return store
 }
 
+// testResolver is the scripted engine.Resolver: every reference resolves to a
+// model of the map, or to a single default model when the map does not name
+// one, and every reference shares the client the resolver was built with.
+type testResolver struct {
+	client llm.Client
+	models map[string]Model
+}
+
+// Resolve returns the scripted model of a reference and the shared client.
+func (r *testResolver) Resolve(ref string) (Model, llm.Client, error) {
+	if model, found := r.models[ref]; found {
+		return model, r.client, nil
+	}
+	if len(r.models) == 0 {
+		return Model{ID: ref}, r.client, nil
+	}
+	return Model{}, nil, fmt.Errorf("testResolver: unknown model %q", ref)
+}
+
+// Refs returns the references the scripted resolver holds, in the order of the
+// map, which a test asserts on as a set.
+func (r *testResolver) Refs() []string {
+	refs := make([]string, 0, len(r.models))
+	for ref := range r.models {
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+// newTestResolver builds a resolver serving one model for every reference. The
+// model it is given names the wire identifier the tests assert on.
+func newTestResolver(client llm.Client, model Model) Resolver {
+	if client == nil {
+		client = &fakeClient{}
+	}
+	if model.ID == "" {
+		model.ID = "test-model"
+	}
+	return &testResolver{client: client, models: map[string]Model{"test/model": model}}
+}
+
 // newTestEngine builds an engine backed by a real session store in a
 // temporary directory and returns both.
 func newTestEngine(t *testing.T, cfg Config) (*Engine, *session.Store) {
@@ -127,11 +168,8 @@ func newTestEngine(t *testing.T, cfg Config) (*Engine, *session.Store) {
 
 	store := newTestStore(t)
 	cfg.Store = store
-	if cfg.Client == nil {
-		cfg.Client = &fakeClient{}
-	}
-	if cfg.Model.ID == "" {
-		cfg.Model.ID = "test-model"
+	if cfg.Resolver == nil {
+		cfg.Resolver = newTestResolver(&fakeClient{}, Model{ID: "test-model"})
 	}
 	if len(cfg.Agents) == 0 {
 		cfg.Agents = []agent.Agent{{ID: "coder"}}
@@ -174,10 +212,9 @@ func TestNew(t *testing.T) {
 	store := newTestStore(t)
 	base := func() Config {
 		return Config{
-			Client: &fakeClient{},
-			Store:  store,
-			Model:  Model{ID: "test-model"},
-			Agents: []agent.Agent{{ID: "coder"}},
+			Store:    store,
+			Agents:   []agent.Agent{{ID: "coder"}},
+			Resolver: newTestResolver(&fakeClient{}, Model{ID: "test-model"}),
 		}
 	}
 
@@ -188,19 +225,21 @@ func TestNew(t *testing.T) {
 			wantErr string
 		}{
 			{
-				name:    "missing client",
-				mutate:  func(cfg *Config) { cfg.Client = nil },
-				wantErr: "client is required",
-			},
-			{
 				name:    "missing store",
 				mutate:  func(cfg *Config) { cfg.Store = nil },
 				wantErr: "session store is required",
 			},
 			{
-				name:    "missing model id",
-				mutate:  func(cfg *Config) { cfg.Model.ID = "" },
-				wantErr: "model id is required",
+				name:    "missing resolver",
+				mutate:  func(cfg *Config) { cfg.Resolver = nil },
+				wantErr: "model resolver is required",
+			},
+			{
+				name: "a branch whose model the configuration does not hold",
+				mutate: func(cfg *Config) {
+					cfg.Resolver = &testResolver{models: map[string]Model{"other/model": {}}}
+				},
+				wantErr: `unknown model "test/model"`,
 			},
 			{
 				name:    "relative workdir",
@@ -265,11 +304,11 @@ func TestNew(t *testing.T) {
 			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"shell", "shell"}}},
 		})
 
-		request, tools, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
-		require.Len(t, request.Tools, 1)
-		require.Equal(t, "shell", request.Tools[0].Name)
-		require.Contains(t, tools.executors, "shell")
+		require.Len(t, plan.request.Tools, 1)
+		require.Equal(t, "shell", plan.request.Tools[0].Name)
+		require.Contains(t, plan.tools.executors, "shell")
 	})
 }
 
@@ -280,36 +319,38 @@ func TestRequest(t *testing.T) {
 	t.Run("sends the generation settings of the model", func(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{
 			Agents: []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
-			Model: Model{
+			Resolver: newTestResolver(&fakeClient{}, Model{
 				ID:          "wire-model",
 				MaxTokens:   100,
 				Temperature: &temperature,
 				TopP:        &topP,
 				Thinking:    llm.ThinkingConfig{Level: "high", MaxTokens: 200},
-			},
+			}),
 		})
 
-		request, _, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
 
-		require.Equal(t, "wire-model", request.Model)
-		require.Equal(t, "be nice", request.System)
-		require.Equal(t, 100, request.MaxTokens)
-		require.Equal(t, &temperature, request.Temperature)
-		require.Equal(t, &topP, request.TopP)
-		require.Equal(t, &llm.ThinkingConfig{Level: "high", MaxTokens: 200}, request.Thinking)
+		require.Equal(t, "wire-model", plan.request.Model)
+		require.Equal(t, "be nice", plan.request.System)
+		require.Equal(t, 100, plan.request.MaxTokens)
+		require.Equal(t, &temperature, plan.request.Temperature)
+		require.Equal(t, &topP, plan.request.TopP)
+		require.Equal(t, &llm.ThinkingConfig{Level: "high", MaxTokens: 200}, plan.request.Thinking)
 	})
 
 	t.Run("leaves unset generation settings untouched", func(t *testing.T) {
-		engine, _ := newTestEngine(t, Config{Model: Model{ID: "wire-model"}})
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(&fakeClient{}, Model{ID: "wire-model"}),
+		})
 
-		request, _, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
 
-		require.Zero(t, request.MaxTokens)
-		require.Nil(t, request.Temperature)
-		require.Nil(t, request.TopP)
-		require.Nil(t, request.Thinking)
+		require.Zero(t, plan.request.MaxTokens)
+		require.Nil(t, plan.request.Temperature)
+		require.Nil(t, plan.request.TopP)
+		require.Nil(t, plan.request.Thinking)
 	})
 
 	t.Run("sends the stored history", func(t *testing.T) {
@@ -320,9 +361,9 @@ func TestRequest(t *testing.T) {
 		}})
 		require.NoError(t, err)
 
-		request, _, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
-		require.Equal(t, store.History(), request.Messages)
+		require.Equal(t, store.History(), plan.request.Messages)
 	})
 
 	t.Run("includes the project instructions in the system prompt", func(t *testing.T) {
@@ -333,10 +374,10 @@ func TestRequest(t *testing.T) {
 			Workdir: dir,
 		})
 
-		request, _, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
-		require.Contains(t, request.System, "be nice")
-		require.Contains(t, request.System, "Use tabs.")
+		require.Contains(t, plan.request.System, "be nice")
+		require.Contains(t, plan.request.System, "Use tabs.")
 	})
 }
 
@@ -347,8 +388,8 @@ func TestContext(t *testing.T) {
 			Agents: []agent.Agent{
 				{ID: "coder", SystemPrompt: "be brief", Tools: []string{"shell"}},
 			},
-			Model:    Model{ID: "test-model", ContextWindow: 200},
 			Registry: newTestRegistry(t, &fakeTool{name: "shell"}),
+			Resolver: newTestResolver(&fakeClient{}, Model{ID: "test-model", ContextWindow: 200}),
 		})
 		_, err := store.Append(t.Context(), session.Entry{Message: llm.Message{
 			Role:   llm.RoleUser,
@@ -363,14 +404,20 @@ func TestContext(t *testing.T) {
 		require.NotZero(t, report.Used)
 		require.Greater(t, report.Percent, 0)
 
-		request, _, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
-		require.Equal(t, tokens.OfRequest(request), report.Used)
-		require.NotEmpty(t, request.Tools, "the measured request declares the tools of the agent")
+		require.Equal(t, tokens.OfRequest(plan.request), report.Used)
+		require.NotEmpty(
+			t,
+			plan.request.Tools,
+			"the measured request declares the tools of the agent",
+		)
 	})
 
 	t.Run("reports a window that is not usable", func(t *testing.T) {
-		engine, _ := newTestEngine(t, Config{Model: Model{ID: "test-model"}})
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(&fakeClient{}, Model{ID: "test-model"}),
+		})
 
 		report, err := engine.Context()
 

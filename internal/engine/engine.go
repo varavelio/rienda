@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 
 	"github.com/varavelio/rienda/internal/agent"
@@ -41,11 +42,22 @@ type Model struct {
 	Thinking llm.ThinkingConfig
 }
 
+// Resolver resolves a provider/model reference into the model the engine runs
+// and the client that talks to it. The harness provides the production
+// implementation over internal/config, which reads the credentials of the user
+// and caches one client per reference; the engine tests inject a scripted one.
+type Resolver interface {
+	// Resolve returns the model a reference names and a client that generates
+	// its responses. A reference the resolver does not know is an error.
+	Resolve(ref string) (Model, llm.Client, error)
+
+	// Refs returns every reference the resolver accepts, which is the roster a
+	// front end offers to switch the model of a session.
+	Refs() []string
+}
+
 // Config configures an Engine.
 type Config struct {
-	// Client generates the model responses. It is required.
-	Client llm.Client
-
 	// Store is the session the engine runs on. It is required and must stay
 	// open for the lifetime of the engine.
 	Store *session.Store
@@ -55,8 +67,10 @@ type Config struct {
 	// non-empty ID.
 	Agents []agent.Agent
 
-	// Model is the resolved model the engine runs on. Its ID is required.
-	Model Model
+	// Resolver resolves the model reference of the branch into the model and
+	// the client of the turn. It is required, and it is called for the model
+	// the session starts on and for every model a branch selects.
+	Resolver Resolver
 
 	// Registry holds the tools the agent may use. It is required when the
 	// agent declares tools.
@@ -74,17 +88,23 @@ type Config struct {
 	Workdir string
 }
 
-// Engine runs one agent over one session. The agent is resolved on every turn
-// from the session, so a branch can change the agent it runs without a new
-// engine: the definitions the engine was given are the ones it may select.
+// Engine runs one agent over one session. The agent and the model are resolved
+// on every turn from the session, so a branch can change either without a new
+// engine: the definitions the engine was given are the agents it may select,
+// and the resolver is what turns the model reference of the branch into a model
+// and a client.
+//
+// The engine holds no resolved model of its own, so it has no mutable state to
+// race over: everything a turn needs is rebuilt from the branch it runs. The
+// resolver it was given is the only collaborator that may hold a cache, and it
+// is the caller's business to make that cache safe for concurrent use.
 //
 // An Engine is not safe for concurrent use: runs append to a session store,
 // which callers serialize.
 type Engine struct {
-	client     llm.Client
 	store      *session.Store
 	agents     map[string]agent.Agent
-	model      Model
+	resolver   Resolver
 	registry   *tool.Registry
 	workdir    string
 	compactor  Compactor
@@ -98,12 +118,10 @@ type Engine struct {
 // New validates cfg and builds an Engine.
 func New(cfg Config) (*Engine, error) {
 	switch {
-	case cfg.Client == nil:
-		return nil, errors.New("engine: a client is required")
 	case cfg.Store == nil:
 		return nil, errors.New("engine: a session store is required")
-	case cfg.Model.ID == "":
-		return nil, errors.New("engine: the model id is required")
+	case cfg.Resolver == nil:
+		return nil, errors.New("engine: a model resolver is required")
 	case len(cfg.Agents) == 0:
 		return nil, errors.New("engine: at least one agent is required")
 	case cfg.Workdir != "" && !filepath.IsAbs(cfg.Workdir):
@@ -118,9 +136,10 @@ func New(cfg Config) (*Engine, error) {
 		agents[definition.ID] = definition
 	}
 
-	// The tools of the agent the session starts on are resolved eagerly, so a
-	// definition that declares a tool the harness does not provide fails the
-	// session instead of the run that first selects it.
+	// The agent and the model the session starts on are resolved eagerly, so a
+	// definition that declares a tool the harness does not provide, or a model
+	// reference the configuration does not hold, fails the session instead of
+	// the run that first selects it.
 	initial, found := agents[cfg.Store.ActiveAgent()]
 	if !found {
 		return nil, fmt.Errorf("engine: unknown agent %q", cfg.Store.ActiveAgent())
@@ -128,12 +147,14 @@ func New(cfg Config) (*Engine, error) {
 	if _, err := resolveTools(cfg.Registry, initial.Tools); err != nil {
 		return nil, err
 	}
+	if _, _, err := cfg.Resolver.Resolve(cfg.Store.ActiveModel()); err != nil {
+		return nil, fmt.Errorf("engine: resolve model: %w", err)
+	}
 
 	return &Engine{
-		client:     cfg.Client,
 		store:      cfg.Store,
 		agents:     agents,
-		model:      cfg.Model,
+		resolver:   cfg.Resolver,
 		registry:   cfg.Registry,
 		workdir:    cfg.Workdir,
 		compactor:  cfg.Compactor,
@@ -162,6 +183,20 @@ func (e *Engine) KnowsAgent(id string) bool {
 	return found
 }
 
+// Models returns the provider/model references the resolver accepts, which is
+// the roster a caller offers to switch the model of a session.
+func (e *Engine) Models() []string {
+	refs := e.resolver.Refs()
+	slices.Sort(refs)
+	return refs
+}
+
+// KnowsModel reports whether the resolver accepts the given reference, which is
+// what lets a caller offer only the selections the session can honor.
+func (e *Engine) KnowsModel(ref string) bool {
+	return slices.Contains(e.resolver.Refs(), ref)
+}
+
 // enter claims the engine for one run or compaction. It returns false when
 // another one is already in flight, which keeps the store free of concurrent
 // appends.
@@ -174,56 +209,94 @@ func (e *Engine) leave() {
 	e.busy.Store(false)
 }
 
-// request builds the provider request of the next turn from the stored
-// history. The system prompt is rebuilt on every turn so the instructions of
-// the project the session runs in stay current.
-func (e *Engine) request() (*llm.Request, turnTools, error) {
+// turnPlan is everything one turn of a run needs, resolved from the branch the
+// session runs at the moment the turn starts: the agent that writes it, the
+// model and the client that generate it, and the request that carries them.
+//
+// It is built once per turn and passed to the code that runs it, so the agent,
+// the model and the tools of a turn can never disagree with each other, and the
+// engine keeps no resolved state of its own between turns.
+type turnPlan struct {
+	// agent is the definition of the agent the branch runs.
+	agent agent.Agent
+
+	// model is the resolved model of the branch.
+	model Model
+
+	// client generates the response of the turn.
+	client llm.Client
+
+	// request is the provider request of the turn.
+	request *llm.Request
+
+	// tools pairs the tool definitions sent to the provider with the tools
+	// that execute the calls the model requests.
+	tools turnTools
+}
+
+// plan builds the plan of the next turn from the stored history: the agent, the
+// model and the client the branch runs, and its request. The system prompt is
+// rebuilt on every turn so the instructions of the project the session runs in
+// stay current.
+func (e *Engine) plan() (turnPlan, error) {
 	definition, err := e.agentOf()
 	if err != nil {
-		return nil, turnTools{}, err
+		return turnPlan{}, err
+	}
+
+	model, client, err := e.resolver.Resolve(e.store.ActiveModel())
+	if err != nil {
+		return turnPlan{}, fmt.Errorf("engine: resolve model: %w", err)
 	}
 
 	system, err := e.systemPrompt(definition)
 	if err != nil {
-		return nil, turnTools{}, err
+		return turnPlan{}, err
 	}
 
 	tools, err := resolveTools(e.registry, definition.Tools)
 	if err != nil {
-		return nil, turnTools{}, err
+		return turnPlan{}, err
 	}
 
-	return &llm.Request{
-		Model:       e.model.ID,
-		System:      system,
-		Messages:    e.store.History(),
-		Tools:       tools.definitions,
-		MaxTokens:   e.model.MaxTokens,
-		Temperature: e.model.Temperature,
-		TopP:        e.model.TopP,
-		Thinking:    e.thinking(),
-	}, tools, nil
+	return turnPlan{
+		agent:  definition,
+		model:  model,
+		client: client,
+		request: &llm.Request{
+			Model:       model.ID,
+			System:      system,
+			Messages:    e.store.History(),
+			Tools:       tools.definitions,
+			MaxTokens:   model.MaxTokens,
+			Temperature: model.Temperature,
+			TopP:        model.TopP,
+			Thinking:    thinking(model),
+		},
+		tools: tools,
+	}, nil
 }
 
 // Context reports the estimated context of the request the next turn would
-// send, measured against the context window of the model. It covers the system
-// prompt, the history of the active branch and the tool definitions, exactly
-// the request the automatic compaction measures against its threshold.
+// send, measured against the context window of the model the branch runs. It
+// covers the system prompt, the history of the active branch and the tool
+// definitions, exactly the request the automatic compaction measures against
+// its threshold.
 func (e *Engine) Context() (tokens.Report, error) {
-	request, _, err := e.request()
+	plan, err := e.plan()
 	if err != nil {
 		return tokens.Report{}, err
 	}
-	return tokens.Measure(tokens.OfRequest(request), e.model.ContextWindow), nil
+	return tokens.Measure(tokens.OfRequest(plan.request), plan.model.ContextWindow), nil
 }
 
-// thinking returns the extended thinking configuration of the run. It is nil
+// thinking returns the extended thinking configuration of a model. It is nil
 // when the model configures no thinking.
-func (e *Engine) thinking() *llm.ThinkingConfig {
-	if e.model.Thinking.Level == "" && e.model.Thinking.MaxTokens == 0 {
+func thinking(model Model) *llm.ThinkingConfig {
+	if model.Thinking.Level == "" && model.Thinking.MaxTokens == 0 {
 		return nil
 	}
-	return &e.model.Thinking
+	return &model.Thinking
 }
 
 // turnTools pairs the tool definitions sent to the provider with the tools

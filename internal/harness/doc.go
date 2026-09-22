@@ -6,14 +6,16 @@
 // project the working directory belongs to. Running the session then streams
 // the events of one prompt.
 //
-// The model comes from the header of the session, so reopening a session talks
-// to the provider it was created on, while the agent is resolved from the
-// branch on every turn. That is what lets a conversation switch agent through
-// SetAgent without a new session, a new engine or a rewritten file: the
-// selection is appended to the branch that wrote it, so another branch of the
-// same session keeps the agent it was running. An agent the roster does not
-// hold leaves the branch with nothing to run until another selection, or the
-// header, names one that exists.
+// Neither the agent nor the model is fixed for the life of a session: the agent
+// is resolved from the branch on every turn, and the model is resolved through
+// the modelResolver this package injects into the engine, which turns a
+// provider/model reference into a model and one cached client per reference.
+// That is what lets a conversation switch agent through SetAgent, or model
+// through SetModel, without a new session, a new engine or a rewritten file:
+// the selection is appended to the branch that wrote it, so another branch of
+// the same session keeps what it was running, and the header records what the
+// session was created with. An agent or a model the roster does not hold leaves
+// the branch with nothing to run until another selection names one that exists.
 //
 // Preparing a session also resolves the context window of its model, from the
 // configuration, the model catalog or a conservative fallback, and builds the

@@ -276,6 +276,20 @@ func (s *Store) ActiveAgent() string {
 	return s.info.Agent
 }
 
+// ActiveModel returns the provider/model reference the session runs at its
+// active leaf: the model the newest KindModel entry of the branch selects, or
+// the model the session was created with when the branch selects none. The
+// reference is what a caller resolves against the configuration, so a session
+// never stores the credentials a model resolves to.
+func (s *Store) ActiveModel() string {
+	for _, entry := range slices.Backward(s.Branch()) {
+		if entry.Kind == KindModel {
+			return entry.ModelRef
+		}
+	}
+	return s.info.Model
+}
+
 // Path returns the entries from the root of the tree down to the entry
 // identified by id.
 func (s *Store) Path(id string) ([]Entry, error) {
@@ -596,10 +610,6 @@ func (s *Store) SetLeaf(id string) error {
 // identifier exists is for the caller to know, and an agent that is missing
 // simply leaves the branch with nothing to run.
 func (s *Store) SetAgent(ctx context.Context, id string) error {
-	if s.file == nil {
-		return errors.New("session: the store is closed")
-	}
-
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return errors.New("session: the agent id must not be empty")
@@ -608,41 +618,101 @@ func (s *Store) SetAgent(ctx context.Context, id string) error {
 		return nil
 	}
 
-	entryID := s.generator.NewID(ctx)
+	_, err := appendSelection(
+		s,
+		ctx,
+		Entry{Kind: KindAgent, AgentID: id},
+		func(entry Entry) storedAgent {
+			return storedAgent{
+				Kind:      KindAgent,
+				ID:        entry.ID,
+				ParentID:  entry.ParentID,
+				CreatedAt: entry.CreatedAt,
+				AgentID:   entry.AgentID,
+			}
+		},
+	)
+	return err
+}
+
+// SetModel appends a model selection after the active leaf, so the branch that
+// follows it runs on another model. It behaves exactly like SetAgent: the
+// selection belongs to the branch that wrote it, the newest one of a branch
+// wins, and selecting the model the branch already runs changes nothing.
+//
+// The entry stores the provider/model reference as it was given. The
+// configuration that resolves it, and the credentials that resolution carries,
+// are read on every turn and never written to the session.
+func (s *Store) SetModel(ctx context.Context, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return errors.New("session: the model reference must not be empty")
+	}
+	if s.ActiveModel() == ref {
+		return nil
+	}
+
+	_, err := appendSelection(
+		s,
+		ctx,
+		Entry{Kind: KindModel, ModelRef: ref},
+		func(entry Entry) storedModel {
+			return storedModel{
+				Kind:      KindModel,
+				ID:        entry.ID,
+				ParentID:  entry.ParentID,
+				CreatedAt: entry.CreatedAt,
+				ModelRef:  entry.ModelRef,
+			}
+		},
+	)
+	return err
+}
+
+// appendSelection persists a selection entry after the active leaf and advances
+// the leaf to it, which binds the selection to the branch that wrote it and
+// makes it the state of the session from there on. Every selection shares this
+// path, so an agent selection and a model selection can never drift apart in
+// how they are validated, identified, written or indexed.
+//
+// The caller validates what the selection means, such as refusing an empty one
+// or the one the branch already holds; this helper owns the write itself.
+func appendSelection[T any](
+	s *Store,
+	ctx context.Context,
+	entry Entry,
+	encode func(Entry) T,
+) (Entry, error) {
+	if s.file == nil {
+		return Entry{}, errors.New("session: the store is closed")
+	}
+
+	id := s.generator.NewID(ctx)
 	switch {
-	case entryID == "":
-		return errors.New("session: the id generator returned an empty entry id")
-	case s.known(entryID):
-		return fmt.Errorf("session: the id generator returned duplicate entry id %q", entryID)
+	case id == "":
+		return Entry{}, errors.New("session: the id generator returned an empty entry id")
+	case s.known(id):
+		return Entry{}, fmt.Errorf("session: the id generator returned duplicate entry id %q", id)
 	}
 
 	now := time.Now().UTC()
-	entry := Entry{
-		ID:        entryID,
-		ParentID:  s.leaf,
-		CreatedAt: now,
-		Kind:      KindAgent,
-		AgentID:   id,
-	}
-	line, err := encodeLine(storedAgent{
-		Kind:      KindAgent,
-		ID:        entryID,
-		ParentID:  s.leaf,
-		CreatedAt: now,
-		AgentID:   id,
-	})
+	entry.ID = id
+	entry.ParentID = s.leaf
+	entry.CreatedAt = now
+
+	line, err := encodeLine(encode(entry))
 	if err != nil {
-		return err
+		return Entry{}, err
 	}
 	if _, err := s.file.Write(line); err != nil {
-		return fmt.Errorf("session: write %s: %w", s.path, err)
+		return Entry{}, fmt.Errorf("session: write %s: %w", s.path, err)
 	}
 
 	s.entries = append(s.entries, entry)
-	s.index[entryID] = len(s.entries) - 1
-	s.leaf = entryID
+	s.index[id] = len(s.entries) - 1
+	s.leaf = id
 	s.info.UpdatedAt = now
-	return nil
+	return entry, nil
 }
 
 // SetTag replaces the tag of the entry identified by id, an empty tag removing

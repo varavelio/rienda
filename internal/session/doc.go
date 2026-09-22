@@ -26,17 +26,19 @@
 //	{"kind":"title","createdAt":"...","title":"Fix the parser"}
 //	{"kind":"compaction","id":"...","parentId":"...","createdAt":"...","summary":"...","keptId":"...","tokensBefore":184203,"responseModel":"...","responseUsage":{...}}
 //	{"kind":"agent","id":"...","parentId":"...","createdAt":"...","agentId":"reviewer"}
+//	{"kind":"model","id":"...","parentId":"...","createdAt":"...","modelRef":"anthropic/claude-sonnet"}
 //
 // Files are append-only: branching in place never rewrites them, so every
-// branch stays recoverable. Four marker kinds carry the state of the session
+// branch stays recoverable. Five marker kinds carry the state of the session
 // instead of the conversation, and they are the only lines a session writes
 // without a user or a model turn behind them: a leaf marker moves the active
 // leaf, which is what SetLeaf persists; a tag marker labels the entry it
 // targets, which is what SetTag persists; a title marker names the session,
-// which is what SetTitle persists; and an agent marker selects the agent of
-// the branch, which is what SetAgent persists. A marker always describes the
-// state in full, so the last one of each kind wins when the file is read
-// again. The title belongs to the whole conversation rather than to a branch,
+// which is what SetTitle persists; an agent marker selects the agent of the
+// branch, which is what SetAgent persists; and a model marker selects the
+// model of the branch, which is what SetModel persists. A marker always
+// describes the state in full, so the last one of each kind wins when the file
+// is read again. The title belongs to the whole conversation rather than to a branch,
 // so its marker carries no target, and the name of a session without one is
 // derived from its first user message.
 //
@@ -61,6 +63,14 @@
 // a missing agent is not an error of the file: the branch simply has nothing
 // to run until another selection, or the header, points at an agent that
 // exists.
+//
+// A model marker selects the provider/model reference the branch runs, which
+// ActiveModel resolves from the newest one of the branch. It behaves exactly
+// like an agent marker: it belongs to the branch, so a branch that returns to
+// a turn before it runs on the model that was in effect there. Only the
+// reference is stored. The settings and credentials a reference resolves to
+// belong to the configuration of the user, are read on every turn and never
+// reach a session file.
 //
 // Returning to a turn of the past and writing again is what creates a branch:
 // the new messages follow the turn the session returned to, beside the ones

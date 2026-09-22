@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -125,9 +126,30 @@ const defaultDarkBackground = true
 // or a phase already uses, and every command added to it keeps the same shape.
 const keyLeader = "ctrl+x"
 
-// keyLeaderAgent is the leader chord that opens the agent selection of the
-// session, which changes the agent the branch runs.
-const keyLeaderAgent = "a"
+// Chords of the leader key that select what a session runs. Each one opens the
+// same picker over its own roster, so the two selections behave alike.
+const (
+	// keyLeaderAgent changes the agent the branch runs.
+	keyLeaderAgent = "a"
+
+	// keyLeaderModel changes the model the branch runs.
+	keyLeaderModel = "m"
+)
+
+// pickerMode selects what the picker offers, which the interface shows and what
+// choosing an entry does.
+type pickerMode int
+
+const (
+	// pickerNewAgent chooses the agent of a session that is about to be
+	// created, which is the mode the picker opens in when a new session needs
+	// an agent.
+	pickerNewAgent pickerMode = iota
+	// pickerAgent changes the agent the open conversation runs from now on.
+	pickerAgent
+	// pickerModel changes the model the open conversation runs from now on.
+	pickerModel
+)
 
 // Key names the interface handles, shared by the phase handlers.
 const (
@@ -297,6 +319,13 @@ var commandList = []command{
 		Enabled: (*model).switchReady,
 	},
 	{
+		Label:   "Switch model",
+		Note:    "run the conversation onwards with another model",
+		NoteOff: (*model).switchNote,
+		Open:    (*model).openModelPicker,
+		Enabled: (*model).switchReady,
+	},
+	{
 		Label:   "Compact context",
 		Note:    "summarize the oldest turns into a checkpoint",
 		NoteOff: (*model).compactNote,
@@ -377,6 +406,20 @@ type Session interface {
 	// The selection belongs to the branch, so returning to an earlier turn
 	// runs on the agent that was in effect there.
 	SetAgent(ctx context.Context, id string) error
+
+	// ActiveModel returns the provider/model reference the branch of the
+	// session runs now, which is the newest selection of the branch or the
+	// model the session was created with.
+	ActiveModel() string
+
+	// Models returns the provider/model references the session may run, which
+	// is the roster the picker offers.
+	Models() []string
+
+	// SetModel selects the model the branch of the session runs from now on.
+	// The selection belongs to the branch, so returning to an earlier turn
+	// runs on the model that was in effect there.
+	SetModel(ctx context.Context, ref string) error
 
 	// Run starts a run and returns the channel carrying its events.
 	Run(ctx context.Context, prompt string) <-chan engine.Event
@@ -586,9 +629,9 @@ type model struct {
 	// for the key that completes the chord.
 	leader bool
 
-	// switching reports that the agent picker was opened to change the agent
-	// of the open session rather than to choose the agent of a new one.
-	switching bool
+	// pickerMode is what the picker offers: the agent of a new session, the
+	// agent of the open conversation, or the model of the open conversation.
+	pickerMode pickerMode
 
 	// rewound reports that the session was moved back to an earlier turn, which
 	// the block above the prompt announces until the next message is sent.
@@ -677,7 +720,7 @@ func newModel(cfg modelConfig) *model {
 func (m *model) buildLists(sessions []session.Info) {
 	m.starts = startItems(sessions)
 	m.start = newFilter(len(m.starts), m.startText, "Search sessions", m.styles, m.hasDarkBG)
-	m.picker = newFilter(len(m.agents), m.agentText, "Search agents", m.styles, m.hasDarkBG)
+	m.picker = newFilter(len(m.agents), m.pickerText, "Search agents", m.styles, m.hasDarkBG)
 	m.commands = newFilter(
 		len(commandList),
 		m.commandText,
@@ -697,8 +740,14 @@ func (m *model) startText(index int) string {
 	return sessionTitle(item.info) + " " + item.info.Agent
 }
 
-// agentText returns the text of one agent that the query is matched against.
-func (m *model) agentText(index int) string {
+// pickerText returns the text of one entry of the picker that the query is
+// matched against: the identifier and the description of an agent, or the
+// reference of a model. The picker serves both rosters, so the text follows the
+// mode the picker was opened in.
+func (m *model) pickerText(index int) string {
+	if m.pickerMode == pickerModel {
+		return m.session.Models()[index]
+	}
 	definition := m.agents[index]
 	return definition.ID + " " + definition.Description
 }
@@ -943,24 +992,28 @@ func (m *model) handleLeaderKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	}
 
 	m.leader = false
-	if key.String() == keyLeaderAgent {
-		return m.openAgentPicker(), true
+	switch key.String() {
+	case keyLeaderAgent:
+		return m.openSwitchPicker(pickerAgent), true
+	case keyLeaderModel:
+		return m.openSwitchPicker(pickerModel), true
 	}
 	return nil, true
 }
 
-// openAgentPicker opens the agent picker to change the agent the session runs
-// from the active leaf onward. It needs an open session whose run is not in
-// flight, because a store is not safe for concurrent use.
-func (m *model) openAgentPicker() tea.Cmd {
-	if m.session == nil || m.running {
+// openSwitchPicker opens the picker over the roster of what the conversation
+// runs, which is where the leader chords and the command center lead. It needs
+// an open session whose run is not in flight, because a store is not safe for
+// concurrent use and a selection moves the branch a run appends to.
+func (m *model) openSwitchPicker(mode pickerMode) tea.Cmd {
+	if !m.switchReady() {
 		return nil
 	}
 
-	m.switching = true
-	m.picker.setCount(len(m.agents))
+	m.pickerMode = mode
+	m.picker.setCount(len(m.roster()))
 	m.picker.reset()
-	if index := m.agentIndex(m.session.ActiveAgent()); index >= 0 {
+	if index := slices.Index(m.roster(), m.activeRef()); index >= 0 {
 		m.selectPickerEntry(index)
 	}
 	m.phase = phasePicker
@@ -968,18 +1021,44 @@ func (m *model) openAgentPicker() tea.Cmd {
 	return nil
 }
 
-// agentIndex returns the index of the agent with the given identifier, or -1
-// when the roster holds none.
-func (m *model) agentIndex(id string) int {
-	for index, definition := range m.agents {
-		if definition.ID == id {
-			return index
-		}
-	}
-	return -1
+// openAgentPicker opens the picker over the agents, which the command center
+// uses to change the agent of the conversation.
+func (m *model) openAgentPicker() tea.Cmd {
+	return m.openSwitchPicker(pickerAgent)
 }
 
-// selectPickerEntry puts the highlight of the picker on the agent at an index,
+// openModelPicker opens the picker over the models of the configuration, which
+// the command center uses to change the model of the conversation.
+func (m *model) openModelPicker() tea.Cmd {
+	return m.openSwitchPicker(pickerModel)
+}
+
+// roster returns the entries the picker offers in its current mode: the agent
+// definitions of the interface, or the model references of the session.
+func (m *model) roster() []string {
+	if m.pickerMode == pickerModel && m.session != nil {
+		return m.session.Models()
+	}
+	ids := make([]string, 0, len(m.agents))
+	for _, definition := range m.agents {
+		ids = append(ids, definition.ID)
+	}
+	return ids
+}
+
+// activeRef returns what the session runs in the current mode, so the picker
+// opens on the agent or the model the conversation already runs.
+func (m *model) activeRef() string {
+	if m.session == nil {
+		return ""
+	}
+	if m.pickerMode == pickerModel {
+		return m.session.ActiveModel()
+	}
+	return m.session.ActiveAgent()
+}
+
+// selectPickerEntry puts the highlight of the picker on the entry at an index,
 // which is where the picker opens when the session already runs on it.
 func (m *model) selectPickerEntry(index int) {
 	for position, shown := range m.picker.shown {
@@ -1118,8 +1197,8 @@ func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 		if index < 0 {
 			return nil
 		}
-		if m.switching {
-			return m.switchAgent(m.agents[index].ID)
+		if m.pickerMode != pickerNewAgent {
+			return m.applySwitch(m.roster()[index])
 		}
 		m.selected = index
 		m.phase = phasePreparing
@@ -1128,8 +1207,8 @@ func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 		if m.picker.clear() {
 			return nil
 		}
-		if m.switching {
-			m.switching = false
+		if m.pickerMode != pickerNewAgent {
+			m.pickerMode = pickerNewAgent
 			return m.showChat()
 		}
 		if m.session != nil {
@@ -1145,22 +1224,32 @@ func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// switchAgent changes the agent the session runs from the active leaf onward
-// and shows the conversation again, which is where the change is read: the
-// identity names the new agent and every turn keeps the one that wrote it. The
-// selection is appended to the branch, so the turns written before it stay on
-// the agent that wrote them and another branch of the session keeps its own. A
-// selection the session cannot honor is reported by the conversation, which
-// refuses to send until another agent is selected.
-func (m *model) switchAgent(id string) tea.Cmd {
-	m.switching = false
-	if err := m.session.SetAgent(context.Background(), id); err != nil {
+// applySwitch selects what the session runs from the active leaf onward, in the
+// mode the picker was opened with, and shows the conversation again, which is
+// where the change is read: the identity names the new agent or model, and
+// every turn keeps the one that wrote it. The selection is appended to the
+// branch, so the turns written before it stay on what ran them and another
+// branch of the session keeps its own. A selection the session cannot honor is
+// reported by the conversation, which refuses to send until another one is
+// selected.
+func (m *model) applySwitch(ref string) tea.Cmd {
+	mode := m.pickerMode
+	m.pickerMode = pickerNewAgent
+
+	var err error
+	if mode == pickerModel {
+		err = m.session.SetModel(context.Background(), ref)
+	} else {
+		err = m.session.SetAgent(context.Background(), ref)
+	}
+	if err != nil {
 		m.fatal = err
 		return tea.Quit
 	}
 
-	// The conversation keeps its turns and changes who wrote them from here
-	// on, so the transcript is rebuilt to label every answer with its author.
+	// The conversation keeps its turns and changes what runs them from here
+	// on, so the transcript is rebuilt to label and measure it with the
+	// selection.
 	m.reloadTranscript()
 	m.refreshContext()
 	return m.showChat()

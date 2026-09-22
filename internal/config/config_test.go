@@ -320,6 +320,54 @@ func TestDefaultPath(t *testing.T) {
 	})
 }
 
+// TestModelRefs verifies the roster of models a front end offers.
+func TestModelRefs(t *testing.T) {
+	t.Run("returns every model as a sorted reference", func(t *testing.T) {
+		cfg := mustParse(t, `
+providers:
+  zeta:
+    preset: openrouter
+    models:
+      second: {}
+      first: {}
+  alpha:
+    preset: openrouter
+    models:
+      only: {}
+`)
+
+		require.Equal(t, []string{"alpha/only", "zeta/first", "zeta/second"}, cfg.ModelRefs())
+	})
+
+	t.Run("returns every reference Resolve accepts", func(t *testing.T) {
+		cfg := mustParse(t, `
+providers:
+  fake:
+    preset: openrouter
+    models:
+      one: {}
+      two: {}
+`)
+
+		refs := cfg.ModelRefs()
+		require.Len(t, refs, 2)
+		for _, ref := range refs {
+			_, err := cfg.Resolve(ref)
+			require.NoError(t, err, "the roster only offers references that resolve")
+		}
+	})
+
+	t.Run("returns nothing for a configuration without models", func(t *testing.T) {
+		cfg := mustParse(t, `
+providers:
+  fake:
+    preset: openrouter
+`)
+
+		require.Empty(t, cfg.ModelRefs())
+	})
+}
+
 func TestProviderNames(t *testing.T) {
 	t.Run("returns the configured names in sorted order", func(t *testing.T) {
 		cfg := mustParse(t, `

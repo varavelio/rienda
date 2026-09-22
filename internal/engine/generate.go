@@ -197,7 +197,7 @@ func normalizeArguments(raw string) (json.RawMessage, error) {
 func (e *Engine) generate(
 	ctx context.Context,
 	events chan<- Event,
-	request *llm.Request,
+	plan turnPlan,
 ) (turn, error) {
 	// delivered reports whether the attempt that just failed streamed output
 	// to the caller. It is read by the observer, which runs after the attempt
@@ -205,7 +205,7 @@ func (e *Engine) generate(
 	var delivered bool
 	//nolint:wrapcheck // the failure already names the call it aborted.
 	return retry.Do(ctx, func(ctx context.Context) (turn, error) {
-		response, streamed, err := e.streamTurn(ctx, events, request)
+		response, streamed, err := e.streamTurn(ctx, events, plan)
 		delivered = streamed
 		return response, err
 	}, func(attempt retry.Attempt) {
@@ -225,9 +225,9 @@ func (e *Engine) generate(
 func (e *Engine) streamTurn(
 	ctx context.Context,
 	events chan<- Event,
-	request *llm.Request,
+	plan turnPlan,
 ) (turn, bool, error) {
-	stream, err := e.client.Stream(ctx, request)
+	stream, err := plan.client.Stream(ctx, plan.request)
 	if err != nil {
 		return turn{}, false, fmt.Errorf("engine: stream response: %w", err)
 	}
@@ -259,6 +259,6 @@ func (e *Engine) streamTurn(
 		accumulator.observe(event)
 	}
 
-	response, err := accumulator.turn(e.model.ID)
+	response, err := accumulator.turn(plan.model.ID)
 	return response, delivered, err
 }

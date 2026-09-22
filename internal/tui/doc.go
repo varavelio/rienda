@@ -57,16 +57,19 @@
 //
 // The command center (ctrl+p) starts a new session, reopens the list that
 // starts a new one or continues a previous one, names the session, switches
-// the agent the conversation runs, shows the tree of the session, compacts the
-// conversation on demand, and holds the options of the harness. The agent of a
-// conversation is also reachable through the leader key: ctrl+x followed by a
-// opens the same picker, which marks the agent the session already runs, and
-// choosing one appends the selection to the branch, so the turns written
-// before it keep the agent that wrote them, another branch of the session
-// keeps its own, and the tree and the conversation label every answer with the
-// agent that produced it. A selection the agent directory no longer holds
-// leaves the branch with nothing to run: the conversation is still walked and
-// read, but sending waits until another agent is selected. Naming the session gives it the title the start list
+// what the conversation runs, shows the tree of the session, compacts the
+// conversation on demand, and holds the options of the harness. What a
+// conversation runs is also reachable through the leader key: ctrl+x followed
+// by a opens the picker over the agents and ctrl+x m the picker over the models
+// of the configuration. Both pickers mark what the session already runs, and
+// choosing an entry appends the selection to the branch, so the turns written
+// before it keep the agent and the model that produced them, another branch of
+// the session keeps its own, and the tree and the conversation label every
+// answer with the agent that wrote it and measure it against the window of the
+// model that runs it. A selection the agent directory or the configuration no
+// longer holds leaves the branch with nothing to run: the conversation is
+// still walked and read, but sending waits until another agent or model is
+// selected. Naming the session gives it the title the start list
 // offers it under, which is how a session the user comes back to is found
 // again; an empty name removes it and leaves the one derived from the first
 // message in its place. The name is shown in the identity line of the

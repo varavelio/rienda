@@ -616,6 +616,152 @@ func TestActiveAgent(t *testing.T) {
 	})
 }
 
+// TestActiveModel verifies resolving the model a branch runs.
+func TestActiveModel(t *testing.T) {
+	t.Run("reports the model of the header when the branch selects none", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+
+		require.Equal(t, "test/model", store.ActiveModel())
+	})
+
+	t.Run("reports the selection of the branch", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+
+		require.NoError(t, store.SetModel(t.Context(), "fake/other-model"))
+
+		require.Equal(t, "fake/other-model", store.ActiveModel())
+	})
+
+	t.Run("reports the newest selection", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+		require.NoError(t, store.SetModel(t.Context(), "fake/one"))
+		require.NoError(t, store.SetModel(t.Context(), "fake/two"))
+
+		require.Equal(t, "fake/two", store.ActiveModel())
+	})
+
+	t.Run("ignores a selection the branch left behind", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+		second := appendMessage(t, store, llm.RoleAssistant, "two")
+		require.NoError(t, store.SetModel(t.Context(), "fake/other-model"))
+
+		require.NoError(t, store.SetLeaf(second.ID))
+
+		require.Equal(t, "test/model", store.ActiveModel())
+	})
+
+	t.Run("keeps the agents and the models of a branch apart", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+
+		require.NoError(t, store.SetAgent(t.Context(), "reviewer"))
+		require.Equal(t, "reviewer", store.ActiveAgent())
+		// The agent selection is not a model selection, so it leaves the model
+		// of the session exactly where it was.
+		require.Equal(t, "test/model", store.ActiveModel())
+
+		require.NoError(t, store.SetModel(t.Context(), "fake/other-model"))
+		require.Equal(t, "reviewer", store.ActiveAgent(), "the model selection is not an agent one")
+		require.Equal(t, "fake/other-model", store.ActiveModel())
+	})
+}
+
+// TestSetModel verifies selecting the model of a branch, which is what lets one
+// conversation change model without losing its branches.
+func TestSetModel(t *testing.T) {
+	t.Run("selects the model of the branch and survives reopening", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent: "coder",
+			Model: "test/model",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+
+		first := appendMessage(t, store, llm.RoleUser, "one")
+		second := appendMessage(t, store, llm.RoleAssistant, "two")
+
+		require.NoError(t, store.SetModel(t.Context(), "fake/other-model"))
+
+		branch := store.Branch()
+		require.Len(t, branch, 3)
+		selection := branch[2]
+		require.Equal(t, KindModel, selection.Kind)
+		require.Equal(t, second.ID, selection.ParentID)
+		require.Equal(t, "fake/other-model", selection.ModelRef)
+		require.Equal(t, selection.ID, store.Leaf())
+
+		// The selection is not a message, so it never reaches the provider.
+		require.Equal(t, []llm.Message{first.Message, second.Message}, store.History())
+
+		id := store.ID()
+		require.NoError(t, store.Close())
+
+		reloaded, err := Open(dir, id, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reloaded.Close()) })
+
+		require.Equal(t, "fake/other-model", reloaded.ActiveModel())
+		require.Equal(t, selection.ID, reloaded.Leaf())
+		require.Equal(t, KindModel, reloaded.Entries()[2].Kind)
+		require.Equal(t, "fake/other-model", reloaded.Entries()[2].ModelRef)
+
+		// The header keeps the model the session was created with, which is
+		// what pins the provider the session talks to.
+		require.Equal(t, "test/model", reloaded.Info().Model)
+	})
+
+	t.Run("binds the selection to the branch that wrote it", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+		second := appendMessage(t, store, llm.RoleAssistant, "two")
+		require.NoError(t, store.SetModel(t.Context(), "fake/other-model"))
+
+		appendMessage(t, store, llm.RoleAssistant, "a")
+		require.Equal(t, "fake/other-model", store.ActiveModel())
+
+		require.NoError(t, store.SetLeaf(second.ID))
+		appendMessage(t, store, llm.RoleAssistant, "b")
+		require.Equal(t, "test/model", store.ActiveModel())
+
+		require.NoError(t, store.SetLeaf(store.Entries()[2].ID))
+		require.Equal(t, "fake/other-model", store.ActiveModel())
+	})
+
+	t.Run("writes nothing when the model does not change", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent: "coder",
+			Model: "test/model",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+		appendMessage(t, store, llm.RoleUser, "one")
+		before := readLines(t, store)
+
+		require.NoError(t, store.SetModel(t.Context(), "test/model"))
+
+		require.Equal(t, before, readLines(t, store))
+	})
+
+	t.Run("rejects an empty reference", func(t *testing.T) {
+		store := newTestStore(t)
+
+		require.ErrorContains(t, store.SetModel(t.Context(), "   "), "must not be empty")
+	})
+
+	t.Run("rejects a closed store", func(t *testing.T) {
+		store := newTestStore(t)
+		require.NoError(t, store.Close())
+
+		require.ErrorContains(t, store.SetModel(t.Context(), "fake/other"), "store is closed")
+	})
+}
+
 // TestSetAgent verifies selecting the agent of a branch, which is what lets
 // one conversation change agent without losing its branches.
 func TestSetAgent(t *testing.T) {

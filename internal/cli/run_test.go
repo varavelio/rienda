@@ -26,6 +26,11 @@ func TestRun(t *testing.T) {
 				wantErr: "an agent or a session is required",
 			},
 			{
+				name:    "model without an agent or a session",
+				args:    []string{"-m", "fake/model"},
+				wantErr: "an agent or a session is required",
+			},
+			{
 				name:    "missing prompt",
 				args:    []string{"-a", "coder"},
 				wantErr: "a prompt is required",

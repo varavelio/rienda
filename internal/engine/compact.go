@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/varavelio/rienda/internal/compaction"
-	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
@@ -26,8 +25,14 @@ type Compactor interface {
 	Refusal(branch []session.Entry) (compaction.Refusal, bool)
 
 	// Compact summarizes the branch. ok is false when there is nothing to
-	// compact.
-	Compact(ctx context.Context, branch []session.Entry) (compaction.Result, bool, error)
+	// compact. modelRef is the provider/model reference the branch runs, which
+	// the compactor may use to summarize with the model of the conversation
+	// rather than with one of its own.
+	Compact(
+		ctx context.Context,
+		branch []session.Entry,
+		modelRef string,
+	) (compaction.Result, bool, error)
 }
 
 // Compaction configures when the engine compacts automatically.
@@ -109,7 +114,7 @@ func (e *Engine) compactBranch(ctx context.Context, events chan<- Event) error {
 	}
 
 	emit(events, Event{Type: EventCompactionStart})
-	result, ok, err := e.compactor.Compact(ctx, branch)
+	result, ok, err := e.compactor.Compact(ctx, branch, e.store.ActiveModel())
 	if err != nil {
 		return fmt.Errorf("engine: compact branch: %w", err)
 	}
@@ -154,15 +159,16 @@ func (e *Engine) compactBranch(ctx context.Context, events chan<- Event) error {
 // A branch that already ends in a compaction is never compacted again: the
 // checkpoint is the newest thing the branch holds, so there is nothing left to
 // summarize.
-func (e *Engine) shouldCompact(request *llm.Request) bool {
-	if e.compactor == nil || !e.compaction.Enabled || e.model.ContextWindow <= 0 {
+func (e *Engine) shouldCompact(plan turnPlan) bool {
+	if e.compactor == nil || !e.compaction.Enabled || plan.model.ContextWindow <= 0 {
 		return false
 	}
 	if branch := e.store.Branch(); len(branch) > 0 &&
 		branch[len(branch)-1].Kind == session.KindCompaction {
 		return false
 	}
-	return tokens.OfRequest(request) > e.model.ContextWindow-e.compaction.ReserveTokens
+	return tokens.OfRequest(plan.request) >
+		plan.model.ContextWindow-e.compaction.ReserveTokens
 }
 
 // contextTokens returns the estimated size of the request the next turn would

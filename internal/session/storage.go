@@ -110,6 +110,29 @@ func (s storedAgent) entry() Entry {
 	}
 }
 
+// storedModel is a model selection line of a session file. The selection hangs
+// from the active leaf and carries no content, so the next message continues
+// from it under another model. It stores the reference the user named, never
+// the credentials the configuration resolves for it.
+type storedModel struct {
+	Kind      Kind      `json:"kind"`
+	ID        string    `json:"id"`
+	ParentID  string    `json:"parentId,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	ModelRef  string    `json:"modelRef"`
+}
+
+// entry converts a stored model selection into its in-memory form.
+func (s storedModel) entry() Entry {
+	return Entry{
+		ID:        s.ID,
+		ParentID:  s.ParentID,
+		CreatedAt: s.CreatedAt,
+		Kind:      KindModel,
+		ModelRef:  s.ModelRef,
+	}
+}
+
 // entry converts a stored compaction into its in-memory form.
 func (s storedCompaction) entry() Entry {
 	return Entry{
@@ -398,6 +421,16 @@ func decode(data []byte) (storedHeader, []Entry, string, string, error) {
 			leaf = entry.ID
 			lastWasLeaf = false
 
+		case KindModel:
+			entry, err := decodeModel(lineNumber, line, known)
+			if err != nil {
+				return storedHeader{}, nil, "", "", err
+			}
+			known[entry.ID] = len(entries)
+			entries = append(entries, entry)
+			leaf = entry.ID
+			lastWasLeaf = false
+
 		default:
 			// Entries written by newer versions are ignored so that an old
 			// binary keeps loading the session.
@@ -543,6 +576,34 @@ func decodeAgent(lineNumber int, line []byte, known map[string]int) (Entry, erro
 		)
 	case strings.TrimSpace(stored.AgentID) == "":
 		return Entry{}, fmt.Errorf("line %d: the agent id is required", lineNumber)
+	}
+	return stored.entry(), nil
+}
+
+// decodeModel decodes and validates a model selection line, which must carry
+// an identifier of its own, name the model it selects and follow an entry the
+// file already holds.
+func decodeModel(lineNumber int, line []byte, known map[string]int) (Entry, error) {
+	var stored storedModel
+	if err := json.Unmarshal(line, &stored); err != nil {
+		return Entry{}, fmt.Errorf("line %d: %w", lineNumber, err)
+	}
+
+	_, duplicate := known[stored.ID]
+	_, hasParent := known[stored.ParentID]
+	switch {
+	case stored.ID == "":
+		return Entry{}, fmt.Errorf("line %d: the entry id is required", lineNumber)
+	case duplicate:
+		return Entry{}, fmt.Errorf("line %d: duplicate entry id %q", lineNumber, stored.ID)
+	case stored.ParentID != "" && !hasParent:
+		return Entry{}, fmt.Errorf(
+			"line %d: parent %q is not an earlier entry",
+			lineNumber,
+			stored.ParentID,
+		)
+	case strings.TrimSpace(stored.ModelRef) == "":
+		return Entry{}, fmt.Errorf("line %d: the model reference is required", lineNumber)
 	}
 	return stored.entry(), nil
 }

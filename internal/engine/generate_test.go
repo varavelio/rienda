@@ -17,7 +17,9 @@ func newGenerateTest(t *testing.T, events []llm.StreamEvent) (*Engine, *fakeClie
 	t.Helper()
 
 	client := &fakeClient{scripts: []script{{events: events}}}
-	engine, _ := newTestEngine(t, Config{Client: client})
+	engine, _ := newTestEngine(t, Config{
+		Resolver: newTestResolver(client, Model{ID: "test-model"}),
+	})
 	return engine, client
 }
 
@@ -26,11 +28,11 @@ func newGenerateTest(t *testing.T, events []llm.StreamEvent) (*Engine, *fakeClie
 func generateTurn(t *testing.T, engine *Engine) (turn, []Event) {
 	t.Helper()
 
-	request, _, err := engine.request()
+	plan, err := engine.plan()
 	require.NoError(t, err)
 
 	events := make(chan Event, 128)
-	response, err := engine.generate(t.Context(), events, request)
+	response, err := engine.generate(t.Context(), events, plan)
 	require.NoError(t, err)
 	close(events)
 	return response, collect(events)
@@ -147,37 +149,41 @@ func TestGenerate(t *testing.T) {
 			{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
 		})
 
-		request, _, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
 
 		events := make(chan Event, 8)
-		_, err = engine.generate(t.Context(), events, request)
+		_, err = engine.generate(t.Context(), events, plan)
 
 		require.ErrorContains(t, err, "empty response")
 	})
 
 	t.Run("reports stream failures", func(t *testing.T) {
 		client := &fakeClient{scripts: []script{{nextErr: errors.New("boom")}}}
-		engine, _ := newTestEngine(t, Config{Client: client})
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
 
-		request, _, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
 
 		events := make(chan Event, 8)
-		_, err = engine.generate(t.Context(), events, request)
+		_, err = engine.generate(t.Context(), events, plan)
 
 		require.ErrorContains(t, err, "boom")
 	})
 
 	t.Run("reports streaming setup failures", func(t *testing.T) {
 		client := &fakeClient{scripts: []script{{openErr: errors.New("connect boom")}}}
-		engine, _ := newTestEngine(t, Config{Client: client})
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
 
-		request, _, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
 
 		events := make(chan Event, 8)
-		_, err = engine.generate(t.Context(), events, request)
+		_, err = engine.generate(t.Context(), events, plan)
 
 		require.ErrorContains(t, err, "connect boom")
 	})
@@ -194,7 +200,9 @@ func TestGenerate(t *testing.T) {
 				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
 			}},
 		}}
-		engine, _ := newTestEngine(t, Config{Client: client})
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
 
 		response, events := generateTurn(t, engine)
 
@@ -217,7 +225,9 @@ func TestGenerate(t *testing.T) {
 				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
 			}},
 		}}
-		engine, _ := newTestEngine(t, Config{Client: client})
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
 
 		response, events := generateTurn(t, engine)
 
@@ -240,7 +250,9 @@ func TestGenerate(t *testing.T) {
 				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
 			}},
 		}}
-		engine, _ := newTestEngine(t, Config{Client: client})
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
 
 		response, events := generateTurn(t, engine)
 
@@ -268,7 +280,9 @@ func TestGenerate(t *testing.T) {
 				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
 			}},
 		}}
-		engine, _ := newTestEngine(t, Config{Client: client})
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
 
 		_, events := generateTurn(t, engine)
 
@@ -285,13 +299,15 @@ func TestGenerate(t *testing.T) {
 				Message:  "rejected",
 			},
 		}}}
-		engine, _ := newTestEngine(t, Config{Client: client})
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
 
-		request, _, err := engine.request()
+		plan, err := engine.plan()
 		require.NoError(t, err)
 
 		events := make(chan Event, 8)
-		_, err = engine.generate(t.Context(), events, request)
+		_, err = engine.generate(t.Context(), events, plan)
 		close(events)
 		collected := collect(events)
 

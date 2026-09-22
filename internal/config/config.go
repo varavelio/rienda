@@ -101,6 +101,17 @@ type Provider struct {
 	Models map[string]Model `yaml:"models"`
 }
 
+// ModelNames returns the aliases of the models the provider offers, in sorted
+// order.
+func (p Provider) ModelNames() []string {
+	names := make([]string, 0, len(p.Models))
+	for name := range p.Models {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
 // Model declares a model offered by a provider. Every field except ID and
 // ContextWindow is a generation setting that shapes how the model is invoked:
 // the configuration is the single place where generation parameters live, and
@@ -193,6 +204,22 @@ func (c *Config) ProviderNames() []string {
 	}
 	slices.Sort(names)
 	return names
+}
+
+// ModelRefs returns every configured model as a provider/model reference in
+// sorted order, which is the roster a front end offers to switch the model of
+// a session. The references are the ones Resolve accepts, so an offer a user
+// picks is always a reference the configuration holds.
+func (c *Config) ModelRefs() []string {
+	refs := make([]string, 0, len(c.Providers))
+	for _, providerName := range c.ProviderNames() {
+		provider := c.Providers[providerName]
+		for _, modelName := range provider.ModelNames() {
+			refs = append(refs, providerName+"/"+modelName)
+		}
+	}
+	slices.Sort(refs)
+	return refs
 }
 
 // validate checks the configuration for structural problems and verifies that

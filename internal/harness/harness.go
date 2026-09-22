@@ -6,16 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/varavelio/rienda/internal/agent"
-	"github.com/varavelio/rienda/internal/catalog"
 	"github.com/varavelio/rienda/internal/compaction"
 	"github.com/varavelio/rienda/internal/config"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/id"
-	"github.com/varavelio/rienda/internal/llm"
-	"github.com/varavelio/rienda/internal/provider"
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
@@ -37,6 +35,13 @@ type Options struct {
 	// a new one. The agent of the resumed session comes from its stored
 	// header.
 	SessionID string
+
+	// ModelRef overrides the model the session runs, as a provider/model
+	// reference the configuration holds. For a new session it replaces the
+	// model of the agent definition, which is what the header records; for a
+	// resumed one it selects the model of the branch that continues the
+	// conversation.
+	ModelRef string
 
 	// Workdir is the directory the session runs commands in. It defaults to
 	// the process working directory.
@@ -148,6 +153,34 @@ func (s *Session) SetAgent(ctx context.Context, id string) error {
 	return nil
 }
 
+// ActiveModel returns the provider/model reference the branch of the session
+// runs now, which is the newest selection of the branch or the model the
+// session was created with.
+func (s *Session) ActiveModel() string {
+	return s.store.ActiveModel()
+}
+
+// Models returns the provider/model references the session may run, sorted,
+// which is the roster a front end offers to switch the model of the session.
+func (s *Session) Models() []string {
+	return s.engine.Models()
+}
+
+// SetModel selects the model the branch of the session runs from now on. The
+// selection is appended to the session and belongs to the branch that wrote it,
+// so returning to an earlier turn runs on the model that was in effect there. A
+// model reference the configuration does not hold is refused before anything is
+// written, so a session never ends up pointing at a model no run can honor.
+func (s *Session) SetModel(ctx context.Context, ref string) error {
+	if !s.engine.KnowsModel(ref) {
+		return fmt.Errorf("harness: unknown model %q", ref)
+	}
+	if err := s.store.SetModel(ctx, ref); err != nil {
+		return fmt.Errorf("harness: %w", err)
+	}
+	return nil
+}
+
 // SetTag replaces the tag of the entry identified by id, an empty tag removing
 // the one it carries.
 func (s *Session) SetTag(id, tag string) error {
@@ -205,25 +238,21 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, fmt.Errorf("harness: load agents: %w", err)
 	}
 
-	store, err := openSession(ctx, opts, projectDir, workdir, agentsDir, definitions)
+	store, err := openSession(ctx, opts, sessionDir{
+		dir:     projectDir,
+		workdir: workdir,
+		agents:  agentsDir,
+		roster:  definitions,
+		models:  cfg.ModelRefs(),
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	// The model comes from the header on both sides, so reopening a session
-	// talks to the provider it was created on. The agent the branch runs is
-	// resolved by the engine from the session, which is what lets a
-	// conversation switch agent without touching its model.
-	resolved, err := cfg.Resolve(store.Info().Model)
-	if err != nil {
-		closeStore(store)
-		return nil, fmt.Errorf("harness: model %q: %w", store.Info().Model, err)
-	}
-	client, err := provider.New(resolved.Protocol, resolved.ProviderConfig)
-	if err != nil {
-		closeStore(store)
-		return nil, fmt.Errorf("harness: build provider client: %w", err)
-	}
+	// Every model the configuration holds is resolvable by the engine, and the
+	// resolver caches one client per reference, so a session that switches
+	// model reuses the connections of the models it already talked to.
+	resolver := newModelResolver(cfg)
 
 	registry, err := newTools()
 	if err != nil {
@@ -231,20 +260,16 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
-	model := engineModel(resolved)
-	model.ContextWindow = resolveContextWindow(resolved)
-
-	summarizer, err := newCompactor(cfg, resolved, client)
+	summarizer, err := newCompactor(cfg, resolver)
 	if err != nil {
 		closeStore(store)
 		return nil, err
 	}
 
 	runner, err := engine.New(engine.Config{
-		Client:    client,
 		Store:     store,
 		Agents:    definitions,
-		Model:     model,
+		Resolver:  resolver,
 		Registry:  registry,
 		Workdir:   workdir,
 		Compactor: summarizer,
@@ -261,37 +286,65 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 	return &Session{store: store, engine: runner}, nil
 }
 
+// sessionDir gathers where a session lives and what it may run, so the
+// preparation helpers stay readable as the options of a session grow.
+type sessionDir struct {
+	// dir holds the session files of the workspace.
+	dir string
+
+	// workdir is the absolute directory the session runs tools in.
+	workdir string
+
+	// agents holds the agent definition files, named in the errors.
+	agents string
+
+	// roster lists the agents a session may run.
+	roster []agent.Agent
+
+	// models lists the provider/model references a session may run, which is
+	// the roster the configuration holds.
+	models []string
+}
+
 // openSession returns the store of the session to run: the one identified by
 // opts.SessionID, or a new one created for the agent identified by
-// opts.AgentID. Every agent the session may run comes from the roster the
-// caller loaded, and an agent named by the options must be one of them, so a
-// mistyped identifier fails with the path of the definition it expected.
-func openSession(
-	ctx context.Context,
-	opts Options,
-	dir, workdir, agentsDir string,
-	definitions []agent.Agent,
-) (*session.Store, error) {
+// opts.AgentID. Every agent and model the session may run comes from the roster
+// the caller resolved, and either named by the options must be one of them, so
+// a mistyped identifier fails with the path or the reference it expected.
+//
+// Resuming with an agent or a model selects it on the branch that continues the
+// conversation, which is the same change SetAgent and SetModel make. The
+// selection is validated before it is written, so a session never ends up
+// pointing at an agent or a model no run can honor.
+func openSession(ctx context.Context, opts Options, place sessionDir) (*session.Store, error) {
 	sessionID := strings.TrimSpace(opts.SessionID)
 	agentID := strings.TrimSpace(opts.AgentID)
+	modelRef := strings.TrimSpace(opts.ModelRef)
 	if sessionID == "" && agentID == "" {
 		return nil, errors.New("harness: an agent id is required")
 	}
 
 	if sessionID != "" {
-		store, err := session.Open(dir, sessionID, id.NewIDGenerator())
+		store, err := session.Open(place.dir, sessionID, id.NewIDGenerator())
 		if err != nil {
 			return nil, fmt.Errorf("harness: open session %q: %w", sessionID, err)
 		}
-		// Resuming with an agent selects it on the branch that continues the
-		// conversation, which is the same change SetAgent makes and the reason
-		// the two options are not exclusive.
+		switch {
+		case agentID != "" && !holds(place.roster, agentID):
+			closeStore(store)
+			return nil, undefinedAgent(place.agents, agentID)
+		case modelRef != "" && !slices.Contains(place.models, modelRef):
+			closeStore(store)
+			return nil, undefinedModel(modelRef)
+		}
 		if agentID != "" {
-			if _, found := findAgent(definitions, agentID); !found {
-				closeStore(store)
-				return nil, undefinedAgent(agentsDir, agentID)
-			}
 			if err := store.SetAgent(ctx, agentID); err != nil {
+				closeStore(store)
+				return nil, fmt.Errorf("harness: %w", err)
+			}
+		}
+		if modelRef != "" {
+			if err := store.SetModel(ctx, modelRef); err != nil {
 				closeStore(store)
 				return nil, fmt.Errorf("harness: %w", err)
 			}
@@ -299,19 +352,43 @@ func openSession(
 		return store, nil
 	}
 
-	definition, found := findAgent(definitions, agentID)
+	definition, found := findAgent(place.roster, agentID)
 	if !found {
-		return nil, undefinedAgent(agentsDir, agentID)
+		return nil, undefinedAgent(place.agents, agentID)
 	}
-	store, err := session.Create(ctx, dir, session.Header{
+	// A model named for a new session is the model the session is created with,
+	// which is what its header records.
+	model := definition.Model
+	if modelRef != "" {
+		if !slices.Contains(place.models, modelRef) {
+			return nil, undefinedModel(modelRef)
+		}
+		model = modelRef
+	}
+	store, err := session.Create(ctx, place.dir, session.Header{
 		Agent:   definition.ID,
-		Model:   definition.Model,
-		Workdir: workdir,
+		Model:   model,
+		Workdir: place.workdir,
 	}, id.NewIDGenerator())
 	if err != nil {
 		return nil, fmt.Errorf("harness: create session: %w", err)
 	}
 	return store, nil
+}
+
+// holds reports whether a roster of agents holds the one identified by id.
+func holds(roster []agent.Agent, id string) bool {
+	_, found := findAgent(roster, id)
+	return found
+}
+
+// undefinedModel reports a model reference the configuration does not hold,
+// naming the reference so a typo points at itself.
+func undefinedModel(ref string) error {
+	return fmt.Errorf(
+		"harness: model %q is not declared in the configuration",
+		ref,
+	)
 }
 
 // undefinedAgent reports an agent identifier the roster does not hold, naming
@@ -393,35 +470,6 @@ func (s *Session) Close() error {
 		return fmt.Errorf("harness: close session: %w", err)
 	}
 	return nil
-}
-
-// engineModel translates the resolved model settings into engine form.
-func engineModel(resolved config.Resolved) engine.Model {
-	return engine.Model{
-		ID:          resolved.ModelID,
-		MaxTokens:   resolved.MaxTokens,
-		Temperature: resolved.Temperature,
-		TopP:        resolved.TopP,
-		Thinking: llm.ThinkingConfig{
-			Level:     resolved.ThinkingLevel,
-			MaxTokens: resolved.ThinkingMaxTokens,
-		},
-	}
-}
-
-// resolveContextWindow returns the context window of a resolved model: the
-// value the configuration declares, the value the catalog knows, or the
-// conservative fallback. The catalog is best effort, so a home directory that
-// cannot be located falls back instead of failing the session.
-func resolveContextWindow(resolved config.Resolved) int {
-	facts, err := catalog.New(catalog.Options{})
-	if err != nil {
-		if resolved.ContextWindow > 0 {
-			return resolved.ContextWindow
-		}
-		return catalog.FallbackWindow
-	}
-	return facts.Window(resolved.ModelID, resolved.ContextWindow)
 }
 
 // newTools builds the registry of built-in tools. Every built-in is

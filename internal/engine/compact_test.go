@@ -37,6 +37,7 @@ func (c *scriptedCompactor) Refusal(branch []session.Entry) (compaction.Refusal,
 func (c *scriptedCompactor) Compact(
 	_ context.Context,
 	branch []session.Entry,
+	_ string,
 ) (compaction.Result, bool, error) {
 	c.compacted++
 	if c.err != nil {
@@ -75,11 +76,10 @@ func newCompactionEngine(
 
 	client := &fakeClient{scripts: scripts}
 	engine, store := newTestEngine(t, Config{
-		Client:     client,
 		Agents:     []agent.Agent{{ID: "coder", SystemPrompt: "be brief"}},
-		Model:      Model{ID: "test-model", ContextWindow: window},
 		Compactor:  compactor,
 		Compaction: compactionCfg,
+		Resolver:   newTestResolver(client, Model{ID: "test-model", ContextWindow: window}),
 	})
 	return engine, store, client
 }

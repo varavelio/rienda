@@ -40,6 +40,13 @@ func agentLine(id, parentID, agentID string) string {
 		`"createdAt":"2026-09-16T10:15:35Z","agentId":"` + agentID + `"}`
 }
 
+// modelLine builds a model selection line selecting ref, hanging from
+// parentID.
+func modelLine(id, parentID, ref string) string {
+	return `{"kind":"model","id":"` + id + `","parentId":"` + parentID + `",` +
+		`"createdAt":"2026-09-16T10:15:36Z","modelRef":"` + ref + `"}`
+}
+
 // compactionLine builds a compaction line replacing everything before keptID.
 func compactionLine(id, parentID, keptID, summary string) string {
 	return `{"kind":"compaction","id":"` + id + `","parentId":"` + parentID + `",` +
@@ -167,6 +174,22 @@ func TestDecode(t *testing.T) {
 		require.Equal(t, "m1", selection.ParentID)
 		require.Equal(t, "reviewer", selection.AgentID)
 		require.Equal(t, "a1", leaf)
+	})
+
+	t.Run("decodes a model selection and advances the leaf", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" +
+			modelLine("s1", "m1", "anthropic/claude-sonnet") + "\n"
+
+		_, entries, leaf, _, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Len(t, entries, 2)
+		selection := entries[1]
+		require.Equal(t, KindModel, selection.Kind)
+		require.Equal(t, "s1", selection.ID)
+		require.Equal(t, "m1", selection.ParentID)
+		require.Equal(t, "anthropic/claude-sonnet", selection.ModelRef)
+		require.Equal(t, "s1", leaf)
 	})
 
 	t.Run("ignores unknown entry kinds", func(t *testing.T) {
@@ -477,6 +500,23 @@ func TestDecode(t *testing.T) {
 				name: "agent selection with a missing parent",
 				data: validHeaderLine + "\n" + userMessageLine + "\n" +
 					agentLine("a1", "nope", "reviewer") + "\n",
+				wantErr: `parent "nope" is not an earlier entry`,
+			},
+			{
+				name:    "corrupt model selection",
+				data:    validHeaderLine + "\n" + `{"kind":"model",` + "\n",
+				wantErr: "line 2",
+			},
+			{
+				name: "model selection without a reference",
+				data: validHeaderLine + "\n" + userMessageLine + "\n" +
+					modelLine("s1", "m1", "") + "\n",
+				wantErr: "model reference is required",
+			},
+			{
+				name: "model selection with a missing parent",
+				data: validHeaderLine + "\n" + userMessageLine + "\n" +
+					modelLine("s1", "nope", "anthropic/claude-sonnet") + "\n",
 				wantErr: `parent "nope" is not an earlier entry`,
 			},
 			{

@@ -271,10 +271,10 @@ func formatElapsed(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
-// viewPicker renders the list of agents to choose from, narrowed by the query
-// typed into it. The list serves two purposes, and it says which one it is
-// serving: choosing the agent of a new session, or changing the agent the
-// conversation runs.
+// viewPicker renders the list the picker offers, narrowed by the query typed
+// into it. The list serves three purposes, and it says which one it is serving:
+// choosing the agent of a new session, changing the agent of the open
+// conversation, or changing its model.
 func (m *model) viewPicker() string {
 	rows := m.headerRows(m.brandIdentity())
 	rows = append(rows, m.pickerTitle(), "")
@@ -290,9 +290,9 @@ func (m *model) viewPicker() string {
 
 	// The picker only returns to the start list when it was opened from it,
 	// which is the case whenever the workspace holds a previous session and
-	// the list is not changing the agent of the open conversation.
+	// the list is not changing what the open conversation runs.
 	hint := "type to filter · ↑/↓ move · enter select"
-	if !m.switching && len(m.starts) > 1 {
+	if m.pickerMode == pickerNewAgent && len(m.starts) > 1 {
 		hint += " · esc back"
 	}
 	rows = append(rows, m.footerRows(hint+" · ctrl+p settings · ctrl+c quit")...)
@@ -300,30 +300,39 @@ func (m *model) viewPicker() string {
 }
 
 // pickerTitle names what the picker is asking for, so the reader never doubts
-// whether choosing an entry starts a conversation or changes the one in front
-// of them.
+// whether choosing an entry starts a conversation or changes what the one in
+// front of them runs.
 func (m *model) pickerTitle() string {
-	if m.switching {
+	switch m.pickerMode {
+	case pickerAgent:
 		return "Switch the agent of the conversation"
+	case pickerModel:
+		return "Switch the model of the conversation"
+	default:
+		return "Select an agent"
 	}
-	return "Select an agent"
 }
 
-// pickerLine renders one agent row of the picker. The agent the conversation
-// already runs is marked, so changing agent shows where the session stands
-// before the user moves the highlight.
+// pickerLine renders one row of the picker. The entry the conversation already
+// runs is marked, so changing what it runs shows where the session stands
+// before the user moves the highlight. Only the agents carry a description of
+// their own, which the row shows beside the identifier.
 func (m *model) pickerLine(position int) string {
 	index := m.picker.shown[position]
-	definition := m.agents[index]
+	entry := m.roster()[index]
 
-	line := m.row(position == m.picker.cursor, definition.ID)
-	if m.switching && m.session != nil && definition.ID == m.session.ActiveAgent() {
+	line := m.row(position == m.picker.cursor, entry)
+	if m.pickerMode != pickerNewAgent && m.session != nil && entry == m.activeRef() {
 		line += "  " + m.styles.on.Render("current")
 	}
-	if definition.Description == "" {
-		return line
+	// Only the agents carry a description of their own: the index of a model
+	// row names the model roster, which the agent slice does not.
+	if m.pickerMode != pickerModel {
+		if description := m.agents[index].Description; description != "" {
+			line += "  " + m.styles.dim.Render(description)
+		}
 	}
-	return m.clip(line + "  " + m.styles.dim.Render(definition.Description))
+	return m.clip(line)
 }
 
 // viewSettings renders the command center: the screens it opens, the options
@@ -717,7 +726,7 @@ func (m *model) mentionList(rows int) string {
 // in the list.
 func (m *model) chatIdentity() string {
 	info := m.session.Info()
-	parts := []string{m.session.ActiveAgent(), info.Model}
+	parts := []string{m.session.ActiveAgent(), m.session.ActiveModel()}
 	if info.ID != "" {
 		parts = append(parts, info.ID)
 	}
@@ -747,7 +756,7 @@ func (m *model) chatFooter() string {
 	// terminal cuts the rare ones instead of the ones the reader needs.
 	parts = append(
 		parts,
-		"@ files · enter send · ctrl+x a agent · ctrl+t tree · ctrl+p · ctrl+c quit",
+		"@ files · enter send · ctrl+x select · ctrl+t tree · ctrl+p · ctrl+c quit",
 	)
 
 	return m.footerHints(strings.Join(parts, " · "))

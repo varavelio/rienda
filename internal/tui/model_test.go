@@ -37,7 +37,11 @@ type fakeSession struct {
 	titles       []string
 	agents       []string
 	activeAgent  string
+	modelRefs    []string
+	models       []string
+	activeModel  string
 	agentErr     error
+	modelErr     error
 	leafErr      error
 	tagErr       error
 	titleErr     error
@@ -61,6 +65,7 @@ func newFakeSession() *fakeSession {
 			Model: "fake/test-model",
 		},
 		activeAgent: "coder",
+		activeModel: "fake/test-model",
 		events:      make(chan engine.Event, 16),
 		canceled:    make(chan struct{}),
 	}
@@ -138,6 +143,22 @@ func (s *fakeSession) SetAgent(_ context.Context, id string) error {
 	return nil
 }
 
+// ActiveModel returns the scripted model the session runs.
+func (s *fakeSession) ActiveModel() string { return s.activeModel }
+
+// Models returns the scripted model roster of the session.
+func (s *fakeSession) Models() []string { return s.models }
+
+// SetModel records the model the session is moved to.
+func (s *fakeSession) SetModel(_ context.Context, ref string) error {
+	if s.modelErr != nil {
+		return s.modelErr
+	}
+	s.modelRefs = append(s.modelRefs, ref)
+	s.activeModel = ref
+	return nil
+}
+
 // Run records the prompt and returns the scripted event channel.
 func (s *fakeSession) Run(ctx context.Context, prompt string) <-chan engine.Event {
 	s.prompts = append(s.prompts, prompt)
@@ -171,6 +192,7 @@ var (
 	pressCtrlO  = tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl}
 	pressCtrlX  = tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}
 	pressA      = tea.KeyPressMsg{Code: 'a'}
+	pressM      = tea.KeyPressMsg{Code: 'm'}
 	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
 	pressPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
 	wheelUp     = tea.MouseWheelMsg{Button: tea.MouseWheelUp}
@@ -183,11 +205,12 @@ var (
 // exercise the branching the store enforces instead of a reimplementation of
 // it.
 type storeSession struct {
-	t       *testing.T
-	dir     string
-	store   *session.Store
-	events  chan engine.Event
-	prompts []string
+	t         *testing.T
+	dir       string
+	store     *session.Store
+	events    chan engine.Event
+	prompts   []string
+	modelRefs []string
 }
 
 // newStoreSession opens a session whose store holds the given messages, linked
@@ -261,6 +284,20 @@ func (s *storeSession) SetTitle(title string) error { return s.store.SetTitle(ti
 
 // ActiveAgent reports the agent the active branch of the store runs.
 func (s *storeSession) ActiveAgent() string { return s.store.ActiveAgent() }
+
+// ActiveModel reports the model the active branch of the store runs.
+func (s *storeSession) ActiveModel() string { return s.store.ActiveModel() }
+
+// Models reports the models a store-backed session may run. The store itself
+// holds no roster, so the interface tests that need one set it on the model.
+func (s *storeSession) Models() []string { return s.modelRefs }
+
+// SetModel selects the model of the active branch of the store.
+func (s *storeSession) SetModel(ctx context.Context, ref string) error {
+	s.modelRefs = append(s.modelRefs, ref)
+	//nolint:wrapcheck // the session reports the failure of the store as it is.
+	return s.store.SetModel(ctx, ref)
+}
 
 // SetAgent selects the agent of the active branch of the store.
 func (s *storeSession) SetAgent(ctx context.Context, id string) error {
@@ -967,7 +1004,8 @@ func TestModel(t *testing.T) {
 		update(t, m, pressDown)
 		update(t, m, pressDown)
 		update(t, m, pressDown)
-		require.Equal(t, 6, m.commands.cursor, "the options follow the commands")
+		update(t, m, pressDown)
+		require.Equal(t, 7, m.commands.cursor, "the options follow the commands")
 		update(t, m, pressEnter)
 		require.True(t, m.preferences.ExpandToolOutput)
 
@@ -982,7 +1020,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressEnter)
 		require.False(t, m.preferences.RenderMarkdown)
 
-		require.Equal(t, 8, m.commands.cursor)
+		require.Equal(t, 9, m.commands.cursor)
 
 		update(t, m, pressDown)
 		require.Equal(
@@ -995,7 +1033,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressUp)
 		require.Equal(
 			t,
-			8,
+			9,
 			m.commands.cursor,
 			"stepping up from the first command wraps to the last",
 		)
@@ -2784,7 +2822,7 @@ func TestSwitchAgent(t *testing.T) {
 		update(t, m, pressA)
 
 		require.Equal(t, phasePicker, m.phase)
-		require.True(t, m.switching)
+		require.True(t, m.pickerMode != pickerNewAgent)
 		require.Contains(t, plain(m.render()), "Switch the agent of the conversation")
 		require.Contains(t, plain(m.render()), "current", "the running agent is marked")
 		require.Empty(t, stored.store.Branch()[0].AgentID, "nothing is selected yet")
@@ -2798,7 +2836,7 @@ func TestSwitchAgent(t *testing.T) {
 		update(t, m, pressEnter)
 
 		require.Equal(t, phasePicker, m.phase)
-		require.True(t, m.switching)
+		require.True(t, m.pickerMode != pickerNewAgent)
 	})
 
 	t.Run("selects the agent the conversation runs onward", func(t *testing.T) {
@@ -2814,7 +2852,7 @@ func TestSwitchAgent(t *testing.T) {
 		update(t, m, pressEnter)
 
 		require.Equal(t, phaseChat, m.phase)
-		require.False(t, m.switching)
+		require.False(t, m.pickerMode != pickerNewAgent)
 		require.Equal(t, "reviewer", stored.store.ActiveAgent())
 		require.Contains(t, plain(m.render()), "reviewer", "the identity follows the agent")
 	})
@@ -2827,7 +2865,7 @@ func TestSwitchAgent(t *testing.T) {
 		update(t, m, pressEscape)
 
 		require.Equal(t, phaseChat, m.phase)
-		require.False(t, m.switching)
+		require.False(t, m.pickerMode != pickerNewAgent)
 		require.Equal(t, "coder", stored.store.ActiveAgent(), "escape selects nothing")
 	})
 
@@ -2934,5 +2972,111 @@ func TestSwitchAgent(t *testing.T) {
 		view := plain(m.render())
 		require.Contains(t, view, "Agent (coder): one")
 		require.Contains(t, view, "Agent (reviewer): two")
+	})
+}
+
+// TestSwitchModel verifies the model selection of an open conversation: the
+// leader chord, the picker it opens over the models of the configuration and
+// the command center entry that reaches the same place.
+func TestSwitchModel(t *testing.T) {
+	// modelChat opens a conversation over a store-backed session whose model
+	// roster offers two models.
+	modelChat := func(t *testing.T) (*model, *storeSession) {
+		t.Helper()
+		m, stored := storeChat(t, textMessage(llm.RoleUser, "first"))
+		stored.modelRefs = []string{"fake/other-model", "fake/test-model"}
+		return m, stored
+	}
+
+	t.Run("opens the picker with the leader chord", func(t *testing.T) {
+		m, _ := modelChat(t)
+
+		require.Nil(t, update(t, m, pressCtrlX), "the leader only arms the chord")
+		update(t, m, pressM)
+
+		require.Equal(t, phasePicker, m.phase)
+		require.Equal(t, pickerModel, m.pickerMode)
+		view := plain(m.render())
+		require.Contains(t, view, "Switch the model of the conversation")
+		require.Contains(t, view, "fake/other-model")
+		require.Contains(t, view, "fake/test-model")
+		require.NotContains(t, view, "A test agent", "the model rows carry no description")
+	})
+
+	t.Run("opens on the model the conversation runs", func(t *testing.T) {
+		m, _ := modelChat(t)
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+
+		// The list shows the models in the order of the roster and the
+		// highlight lands on the running one.
+		require.Equal(t, "fake/test-model", m.roster()[m.picker.selected()])
+	})
+
+	t.Run("opens the picker from the command center", func(t *testing.T) {
+		m, _ := modelChat(t)
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Switch model")
+		update(t, m, pressEnter)
+
+		require.Equal(t, phasePicker, m.phase)
+		require.Equal(t, pickerModel, m.pickerMode)
+	})
+
+	t.Run("selects the model the conversation runs onward", func(t *testing.T) {
+		m, stored := modelChat(t)
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+		typeFilter(t, m, "other")
+		update(t, m, pressEnter)
+
+		require.Equal(t, phaseChat, m.phase)
+		require.Equal(t, pickerNewAgent, m.pickerMode)
+		require.Equal(t, "fake/other-model", stored.store.ActiveModel())
+		require.Contains(t, plain(m.render()), "fake/other-model", "the identity follows the model")
+	})
+
+	t.Run("leaves the conversation on escape", func(t *testing.T) {
+		m, stored := modelChat(t)
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+		update(t, m, pressEscape)
+
+		require.Equal(t, phaseChat, m.phase)
+		require.Equal(t, "fake/test-model", stored.store.ActiveModel(), "escape selects nothing")
+	})
+
+	t.Run("reports the failure of the session", func(t *testing.T) {
+		m, stored := modelChat(t)
+		require.NoError(t, stored.store.Close())
+
+		// The picker opens on the model the conversation runs, which selecting
+		// would leave unchanged, so the query moves the highlight to another
+		// one before the selection is made.
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+		typeFilter(t, m, "other")
+		update(t, m, pressEnter)
+
+		require.Error(t, m.fatal, "a selection the session cannot write fails the interface")
+		require.Contains(t, m.fatal.Error(), "store is closed")
+	})
+
+	t.Run("stays away while the agent works", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("hello")
+		require.NotNil(t, update(t, m, pressEnter))
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+		require.Equal(t, phaseChat, m.phase)
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Switch model")
+		require.Contains(t, plain(m.render()), "a run is in flight")
 	})
 }

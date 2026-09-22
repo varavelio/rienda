@@ -51,7 +51,11 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 		ctx = tool.WithWorkdir(ctx, e.workdir)
 	}
 
-	definition, err := e.agentOf()
+	// The plan of the first turn names the agent and the model of the run, which
+	// the start event reports. Building it here also fails the run before the
+	// prompt is written when the branch names an agent or a model the harness
+	// cannot run.
+	plan, err := e.plan()
 	if err != nil {
 		fail(events, err)
 		return
@@ -60,8 +64,8 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	start := Event{
 		Type:      EventRunStart,
 		SessionID: e.store.ID(),
-		AgentID:   definition.ID,
-		ModelID:   e.model.ID,
+		AgentID:   plan.agent.ID,
+		ModelID:   plan.model.ID,
 	}
 	switch {
 	case prompt != "":
@@ -93,12 +97,12 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			return
 		}
 
-		request, tools, err := e.request()
+		plan, err = e.plan()
 		if err != nil {
 			fail(events, err)
 			return
 		}
-		if !compacted && e.shouldCompact(request) {
+		if !compacted && e.shouldCompact(plan) {
 			compacted = true
 			if err := e.compactBranch(requestCtx, events); err != nil {
 				if ctx.Err() != nil {
@@ -108,13 +112,15 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 				fail(events, err)
 				return
 			}
-			if request, tools, err = e.request(); err != nil {
+			// The branch changed under the run: the compaction appended a
+			// checkpoint, so the plan is rebuilt from the branch as it stands.
+			if plan, err = e.plan(); err != nil {
 				fail(events, err)
 				return
 			}
 		}
 
-		response, err := e.generate(requestCtx, events, request)
+		response, err := e.generate(requestCtx, events, plan)
 		if err != nil {
 			if ctx.Err() != nil {
 				emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})
@@ -153,7 +159,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			return
 		}
 
-		results := e.executeTools(ctx, tools, response.argumentErrors, calls, events)
+		results := e.executeTools(ctx, plan.tools, response.argumentErrors, calls, events)
 		if _, err := e.store.Append(context.WithoutCancel(ctx), session.Entry{
 			Message: llm.Message{Role: llm.RoleUser, Blocks: results},
 		}); err != nil {

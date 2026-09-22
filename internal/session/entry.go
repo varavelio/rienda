@@ -35,6 +35,12 @@ const (
 	// branch that wrote it, and it describes the whole selection, so the
 	// newest one of a branch wins.
 	KindAgent Kind = "agent"
+	// KindModel selects the model the branch runs from this entry onward, so
+	// one conversation can be planned by a strong model and implemented by a
+	// cheap one. It behaves exactly like a KindAgent entry: it hangs from the
+	// active leaf, it belongs to the branch that wrote it, and the newest one
+	// of a branch wins.
+	KindModel Kind = "model"
 )
 
 // Entry is a single node of the session tree. Only the fields valid for the
@@ -93,4 +99,11 @@ type Entry struct {
 	// when it selects none. The entry carries no message: it only moves the
 	// branch it hangs from onto another agent.
 	AgentID string
+
+	// ModelRef is the provider/model reference a KindModel entry selects,
+	// empty when it selects none. The reference, never the resolved settings,
+	// is what a session stores: credentials belong to the configuration of the
+	// user and must never reach a session file. The entry carries no message:
+	// it only moves the branch it hangs from onto another model.
+	ModelRef string
 }

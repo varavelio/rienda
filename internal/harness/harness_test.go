@@ -2,11 +2,13 @@ package harness
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -192,6 +194,10 @@ type testEnvironment struct {
 	sessionsDir string
 	configPath  string
 	provider    *scriptedProvider
+
+	// extraModels lists the models the configuration declares besides the
+	// default one, so a test can switch the model of a session.
+	extraModels map[string]string
 }
 
 // newTestEnvironment writes a configuration and a coder agent definition
@@ -215,18 +221,45 @@ func newTestEnvironment(t *testing.T, scripts ...[]string) *testEnvironment {
 	require.NoError(t, os.MkdirAll(env.workdir, 0o750))
 	require.NoError(t, os.MkdirAll(env.agentsDir, 0o750))
 
+	env.writeConfig(t)
+	env.writeAgent(t, "coder", "fake/test-model")
+
+	return env
+}
+
+// writeConfig writes the configuration of the environment, with the models it
+// declares. Every model is an alias and the wire identifier it resolves to.
+func (e *testEnvironment) writeConfig(t *testing.T) {
+	t.Helper()
+
 	configuration := "providers:\n" +
 		"  fake:\n" +
 		"    protocol: openai_chat_completions\n" +
-		"    base_url: " + env.provider.server.URL + "\n" +
+		"    base_url: " + e.provider.server.URL + "\n" +
 		"    api_key: test-key\n" +
 		"    models:\n" +
 		"      test-model:\n" +
 		"        id: gpt-test\n"
-	require.NoError(t, os.WriteFile(env.configPath, []byte(configuration), 0o600))
-	env.writeAgent(t, "coder", "fake/test-model")
+	entries := make([]string, 0, len(e.extraModels))
+	for alias, id := range e.extraModels {
+		entries = append(entries, fmt.Sprintf("      %s:\n        id: %s\n", alias, id))
+	}
+	slices.Sort(entries)
+	configuration += strings.Join(entries, "")
+	require.NoError(t, os.WriteFile(e.configPath, []byte(configuration), 0o600))
+}
 
-	return env
+// writeSecondModel adds a model to the configuration of the environment, so a
+// test can switch the model of a session. It rewrites the whole configuration,
+// so the models it declares stay in one place.
+func (e *testEnvironment) writeSecondModel(t *testing.T, alias, id string) {
+	t.Helper()
+
+	if e.extraModels == nil {
+		e.extraModels = make(map[string]string)
+	}
+	e.extraModels[alias] = id
+	e.writeConfig(t)
 }
 
 // writeAgent writes an agent definition for model.
@@ -494,6 +527,54 @@ func TestPrepare(t *testing.T) {
 		require.Equal(t, "You review code.", env.provider.requests[1].Messages[0].Content)
 	})
 
+	t.Run("switches the model of a resumed session", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"), textScript("two"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+		stored := env.prepare(t)
+		collectEvents(stored.Run(t.Context(), "first"))
+		require.Equal(t, "fake/test-model", stored.ActiveModel())
+		require.NoError(t, stored.Close())
+
+		options := env.options()
+		options.SessionID = stored.ID()
+		options.ModelRef = "fake/second-model"
+
+		prepared, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+
+		require.Equal(t, "fake/second-model", prepared.ActiveModel())
+		collectEvents(prepared.Run(t.Context(), "second"))
+		require.Equal(t, "gpt-second", env.provider.requests[1].Model)
+	})
+
+	t.Run("creates a session on the requested model", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+
+		options := env.options()
+		options.ModelRef = "fake/second-model"
+
+		prepared, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+
+		require.Equal(t, "fake/second-model", prepared.Info().Model,
+			"a model named for a new session is what its header records")
+	})
+
+	t.Run("refuses a model the configuration does not hold", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+
+		options := env.options()
+		options.SessionID = ""
+		options.ModelRef = "fake/ghost"
+
+		_, err := Prepare(t.Context(), options)
+
+		require.ErrorContains(t, err, `model "fake/ghost" is not declared`)
+	})
+
 	t.Run("refuses an agent a resumed session does not know", func(t *testing.T) {
 		env := newTestEnvironment(t, textScript("one"))
 		stored := env.prepare(t)
@@ -588,6 +669,60 @@ func TestSession(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 		require.Equal(t, "reviewer", reopened.ActiveAgent())
+	})
+
+	t.Run("switches the model of the branch", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"), textScript("two"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+		prepared := env.prepare(t)
+
+		require.Equal(t, "fake/test-model", prepared.ActiveModel())
+		require.Equal(t, []string{"fake/second-model", "fake/test-model"}, prepared.Models())
+
+		collectEvents(prepared.Run(t.Context(), "first"))
+		require.NoError(t, prepared.SetModel(t.Context(), "fake/second-model"))
+
+		require.Equal(t, "fake/second-model", prepared.ActiveModel())
+
+		collectEvents(prepared.Run(t.Context(), "second"))
+		require.Len(t, env.provider.requests, 2)
+		require.Equal(t, "gpt-test", env.provider.requests[0].Model)
+		require.Equal(t, "gpt-second", env.provider.requests[1].Model,
+			"the second request carries the wire id of the new model")
+	})
+
+	t.Run("summarizes with the model the branch runs", func(t *testing.T) {
+		env := newTestEnvironment(t,
+			textScript("one"),
+			textScript("two"),
+			textScript("the summary"),
+		)
+		env.writeSecondModel(t, "summarizer", "gpt-summary")
+		writeCompactionConfig(t, env, "compaction:\n  keep_recent_tokens: 1\n")
+		prepared := env.prepare(t)
+
+		collectEvents(prepared.Run(t.Context(), "first"))
+		collectEvents(prepared.Run(t.Context(), "second"))
+		require.NoError(t, prepared.SetModel(t.Context(), "fake/summarizer"))
+
+		collectEvents(prepared.Compact(t.Context()))
+
+		require.Len(t, env.provider.requests, 3)
+		require.Equal(t, "gpt-summary", env.provider.requests[2].Model,
+			"an undeclared compaction model follows the model of the branch")
+	})
+
+	t.Run("refuses a model the configuration does not hold", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		prepared := env.prepare(t)
+		before := len(prepared.Tree())
+
+		require.ErrorContains(
+			t,
+			prepared.SetModel(t.Context(), "fake/ghost"),
+			`unknown model "fake/ghost"`,
+		)
+		require.Len(t, prepared.Tree(), before, "nothing was written")
 	})
 
 	t.Run("refuses an agent the roster does not hold", func(t *testing.T) {
