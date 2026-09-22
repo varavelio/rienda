@@ -432,9 +432,14 @@ func openAIResponsesFailure(raw *openAIResponsesResponse) *llm.Error {
 }
 
 // openAIResponsesUsageTo maps a wire usage object to canonical form.
+// input_tokens includes the cached tokens, which the canonical usage counts
+// apart, so both the cached reads and the cache writes are subtracted. The
+// subtraction clamps at zero, so a provider reporting more cached tokens than
+// input tokens never yields a negative count.
 func openAIResponsesUsageTo(raw openAIResponsesUsage) llm.Usage {
+	uncached := raw.InputTokens - raw.InputDetails.CachedTokens - raw.InputDetails.CacheWriteTokens
 	return llm.Usage{
-		InputTokens:      raw.InputTokens,
+		InputTokens:      max(0, uncached),
 		OutputTokens:     raw.OutputTokens,
 		ReasoningTokens:  raw.OutputDetails.ReasoningTokens,
 		CacheReadTokens:  raw.InputDetails.CachedTokens,

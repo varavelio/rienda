@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/varavelio/rienda/internal/llm"
+	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/tool"
 )
 
@@ -31,6 +32,11 @@ const (
 	// is being retried after a backoff. Discard reports that the failed
 	// attempt streamed output the consumer must drop.
 	EventRetry EventType = "retry"
+	// EventCompactionStart opens a compaction of the conversation.
+	EventCompactionStart EventType = "compaction_start"
+	// EventCompactionEnd closes a compaction with the persisted checkpoint and
+	// the measurements around it.
+	EventCompactionEnd EventType = "compaction_end"
 	// EventRunEnd closes a run. It is the last event of every channel.
 	EventRunEnd EventType = "run_end"
 	// EventError reports the failure that ended a run.
@@ -84,6 +90,24 @@ func usageFrom(usage llm.Usage) *Usage {
 	}
 }
 
+// CompactionInfo describes a finished compaction to a front end: the
+// checkpoint that was persisted and the measurements on either side of it.
+type CompactionInfo struct {
+	// Entry is the persisted checkpoint.
+	Entry session.Entry `json:"entry"`
+
+	// TokensBefore is the size of the summarized range, measured by the
+	// procedure.
+	TokensBefore int `json:"tokensBefore"`
+
+	// TokensAfter is the size of the request the next turn would send once the
+	// checkpoint is in place, measured by the engine.
+	TokensAfter int `json:"tokensAfter"`
+
+	// Usage reports the token consumption of the summarization call.
+	Usage *Usage `json:"usage,omitempty"`
+}
+
 // Event is a single update emitted while a run is in flight. Only the fields
 // valid for the event Type carry meaning; the rest stay at their zero value.
 //
@@ -133,6 +157,13 @@ type Event struct {
 	// streamed output, which the consumer must drop before the retried
 	// response replaces it.
 	Discard bool `json:"discard,omitempty"`
+
+	// Compaction carries the checkpoint of an EventCompactionEnd: the entry
+	// that was persisted, what the summarized range measured and what the
+	// request measured once the checkpoint was in place. It describes nothing
+	// about why the compaction happened, because a front end only renders the
+	// checkpoint.
+	Compaction *CompactionInfo `json:"compaction,omitempty"`
 
 	// Reason explains why the run ended in EventRunEnd.
 	Reason EndReason `json:"reason,omitempty"`

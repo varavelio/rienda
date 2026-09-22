@@ -495,3 +495,113 @@ func TestTreeForks(t *testing.T) {
 		require.True(t, tree.forks(4), "a prompt is always written again beside itself")
 	})
 }
+
+// TestTreeCompaction verifies the checkpoint node of the session tree.
+func TestTreeCompaction(t *testing.T) {
+	t.Run("draws the checkpoint as a labeled node", func(t *testing.T) {
+		entry := session.Entry{
+			ID:                "c1",
+			Kind:              session.KindCompaction,
+			CompactionSummary: "the summary",
+			CompactionKeptID:  "u1",
+		}
+
+		require.True(t, isTurnEntry(entry))
+		require.Equal(t, compactionBody, turnText(entry))
+		require.Equal(t, "Compaction:", treeName(entry, "coder"))
+	})
+
+	t.Run("renders the checkpoint with its color in the tree", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		first := stored.store.Branch()[0]
+		_, err := stored.store.AppendCompaction(
+			t.Context(),
+			"the summary",
+			first.ID,
+			1,
+			"m",
+			llm.Usage{},
+		)
+		require.NoError(t, err)
+
+		m.buildTree()
+		rendered := m.render()
+
+		require.Contains(t, plain(rendered), "Compaction:")
+		require.Contains(t, plain(rendered), compactionBody)
+		require.Contains(
+			t,
+			rendered,
+			m.styles.compaction.title.Render("Compaction:"),
+			"the node carries the color of a checkpoint",
+		)
+	})
+
+	t.Run("keeps the tag of a checkpoint visible beside its label", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		first := stored.store.Branch()[0]
+		compaction, err := stored.store.AppendCompaction(
+			t.Context(),
+			"the summary",
+			first.ID,
+			1,
+			"m",
+			llm.Usage{},
+		)
+		require.NoError(t, err)
+		require.NoError(t, stored.store.SetTag(compaction.ID, "checkpoint"))
+
+		m.buildTree()
+		rendered := m.render()
+
+		require.Contains(t, plain(rendered), "#checkpoint")
+		require.Contains(t, plain(rendered), "Compaction:")
+		require.Contains(
+			t,
+			rendered,
+			m.styles.compaction.title.Render("Compaction:"),
+			"the checkpoint keeps its white",
+		)
+		require.Contains(
+			t,
+			rendered,
+			m.styles.tag.Render("#checkpoint"),
+			"the tag keeps its own color",
+		)
+	})
+
+	t.Run("shows a checkpoint that holds children", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		first := stored.store.Branch()[0]
+		compaction, err := stored.store.AppendCompaction(
+			t.Context(),
+			"the summary",
+			first.ID,
+			1,
+			"m",
+			llm.Usage{},
+		)
+		require.NoError(t, err)
+		_, err = stored.store.Append(t.Context(), session.Entry{
+			ParentID: compaction.ID,
+			Message:  textMessage(llm.RoleAssistant, "after the checkpoint"),
+		})
+		require.NoError(t, err)
+
+		m.buildTree()
+
+		require.NotEmpty(t, m.tree.nodes)
+		last := m.tree.nodes[len(m.tree.nodes)-1]
+		require.Equal(t, session.KindCompaction, m.tree.nodes[len(m.tree.nodes)-2].entry.Kind)
+		require.Equal(t, "after the checkpoint", last.text)
+	})
+}

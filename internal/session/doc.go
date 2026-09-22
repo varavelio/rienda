@@ -23,6 +23,7 @@
 //	{"kind":"message","id":"01k5w9wr4ta9e5n6yk8r7s6t0b","parentId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"...","role":"assistant","responseModel":"kimi-k2","responseStopReason":"tool_use","blocks":[...]}
 //	{"kind":"leaf","targetId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"..."}
 //	{"kind":"tag","targetId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"...","tag":"bug"}
+//	{"kind":"compaction","id":"...","parentId":"...","createdAt":"...","summary":"...","keptId":"...","tokensBefore":184203,"responseModel":"...","responseUsage":{...}}
 //
 // Files are append-only: branching in place never rewrites them, so every
 // branch stays recoverable. Two marker kinds carry the state of the session
@@ -31,6 +32,18 @@
 // leaf, which is what SetLeaf persists, and a tag marker labels the entry it
 // targets, which is what SetTag persists. A marker always describes the state
 // in full, so the last one of each kind wins when the file is read again.
+//
+// A compaction entry replaces every entry before its kept one with a summary
+// of the conversation, so a session stays inside the context window of its
+// model. It hangs from the active leaf like any other appended entry, so it
+// belongs to the branch that produced it and to no other: a branch that shares
+// the compacted prefix rebuilds the summary, and a branch that rewinds to a
+// turn before the checkpoint does not hold it at all and keeps its full
+// history. DisplayedBranch applies the newest compaction and History derives
+// the messages a provider receives from it, with the summary carried as a
+// leading user message. A compaction whose kept entry does not resolve is a
+// decode error, so a file that was edited by hand never loses turns in
+// silence.
 //
 // Returning to a turn of the past and writing again is what creates a branch:
 // the new messages follow the turn the session returned to, beside the ones

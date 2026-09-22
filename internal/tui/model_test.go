@@ -19,6 +19,7 @@ import (
 	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/tokens"
 )
 
 // fakeSession is a scripted Session implementation. It serves the entries it
@@ -34,6 +35,11 @@ type fakeSession struct {
 	tags         map[string]string
 	leafErr      error
 	tagErr       error
+	context      tokens.Report
+	contextErr   error
+	canCompact   bool
+	compact      chan engine.Event
+	compacted    int
 	canceled     chan struct{}
 	canceledOnce sync.Once
 	closed       bool
@@ -60,6 +66,24 @@ func (s *fakeSession) Branch() []session.Entry { return s.entries }
 
 // Tree returns the stored entries of the session.
 func (s *fakeSession) Tree() []session.Entry { return s.entries }
+
+// DisplayedBranch returns the entries of the active branch the user reads.
+func (s *fakeSession) DisplayedBranch() []session.Entry { return s.entries }
+
+// Context returns the scripted context report of the session.
+func (s *fakeSession) Context() (tokens.Report, error) { return s.context, s.contextErr }
+
+// CanCompact reports the scripted readiness of the manual compaction.
+func (s *fakeSession) CanCompact() bool { return s.canCompact }
+
+// Compact records the request and returns the scripted event channel.
+func (s *fakeSession) Compact(ctx context.Context) <-chan engine.Event {
+	s.compacted++
+	if s.compact != nil {
+		return s.compact
+	}
+	return s.events
+}
 
 // SetLeaf records the entry the session is moved to.
 func (s *fakeSession) SetLeaf(id string) error {
@@ -156,6 +180,25 @@ func (s *storeSession) Branch() []session.Entry { return s.store.Branch() }
 
 // Tree returns every entry of the session.
 func (s *storeSession) Tree() []session.Entry { return s.store.Entries() }
+
+// DisplayedBranch returns the entries of the active branch the user reads.
+func (s *storeSession) DisplayedBranch() []session.Entry { return s.store.DisplayedBranch() }
+
+// Context reports a measurement derived from the active branch, so the tests
+// can assert that the figure follows the branch the session runs.
+func (s *storeSession) Context() (tokens.Report, error) {
+	used := len(s.store.Branch()) * 100
+	return tokens.Measure(used, 1000), nil
+}
+
+// CanCompact reports whether the active branch still holds something to
+// summarize.
+func (s *storeSession) CanCompact() bool {
+	return s.store.Branch() != nil && len(s.store.Branch()) > 1
+}
+
+// Compact returns the scripted event channel, recording the request.
+func (s *storeSession) Compact(context.Context) <-chan engine.Event { return s.events }
 
 // SetLeaf moves the active leaf of the store.
 //
@@ -474,23 +517,19 @@ func TestModel(t *testing.T) {
 		sendEvent(t, m, engine.Event{Type: engine.EventRunStart})
 		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "hi "})
 		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "there"})
-		sendEvent(t, m, engine.Event{
-			Type:  engine.EventMessageEnd,
-			Usage: &engine.Usage{InputTokens: 3, OutputTokens: 2},
-		})
+		scripted.context = tokens.Report{Used: 68000, Window: 200000, Percent: 34}
+		sendEvent(t, m, engine.Event{Type: engine.EventMessageEnd})
 		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
 			Reason: engine.EndReasonTurn,
 		})
 
 		require.False(t, m.running)
-		require.Equal(t, 3, m.usageIn)
-		require.Equal(t, 2, m.usageOut)
 
 		view := plain(m.render())
 		require.Contains(t, view, "hello")
 		require.Contains(t, view, "hi there")
-		require.Contains(t, view, "tokens 3 in")
+		require.Contains(t, view, "ctx 34% · 68k/200k")
 	})
 
 	t.Run("ignores empty prompts", func(t *testing.T) {
@@ -782,7 +821,8 @@ func TestModel(t *testing.T) {
 		update(t, m, pressDown)
 		update(t, m, pressDown)
 		update(t, m, pressDown)
-		require.Equal(t, 3, m.commands.cursor, "the options follow the commands")
+		update(t, m, pressDown)
+		require.Equal(t, 4, m.commands.cursor, "the options follow the commands")
 		update(t, m, pressEnter)
 		require.True(t, m.preferences.ExpandToolOutput)
 
@@ -797,7 +837,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressEnter)
 		require.False(t, m.preferences.RenderMarkdown)
 
-		require.Equal(t, 5, m.commands.cursor)
+		require.Equal(t, 6, m.commands.cursor)
 
 		update(t, m, pressDown)
 		require.Equal(
@@ -810,7 +850,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressUp)
 		require.Equal(
 			t,
-			5,
+			6,
 			m.commands.cursor,
 			"stepping up from the first command wraps to the last",
 		)
@@ -2125,5 +2165,161 @@ func TestStreamEvents(t *testing.T) {
 		require.Len(t, burst, 1)
 
 		require.IsType(t, eventsClosedMsg{}, streamEvents(events)())
+	})
+}
+
+// TestRefreshContext verifies the context figure the footer shows.
+func TestRefreshContext(t *testing.T) {
+	t.Run("reports the measurement of the branch", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.context = tokens.Report{Used: 68000, Window: 200000, Percent: 34}
+
+		m.refreshContext()
+
+		require.Equal(t, 34, m.context.Percent)
+		require.Contains(t, plain(m.render()), "ctx 34% · 68k/200k")
+	})
+
+	t.Run("follows the branch the interface shows", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.context = tokens.Report{Used: 100, Window: 1000, Percent: 10}
+		m.refreshContext()
+		require.Equal(t, 10, m.context.Percent)
+
+		// A run that ends changes the figure: the session answers a different
+		// measurement and the interface picks it up.
+		scripted.context = tokens.Report{Used: 900, Window: 1000, Percent: 90}
+		m.input.SetValue("hello")
+		require.NotNil(t, update(t, m, pressEnter))
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		require.Equal(t, 90, m.context.Percent)
+	})
+
+	t.Run("keeps the previous figure when the measurement fails", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.context = tokens.Report{Used: 100, Window: 1000, Percent: 10}
+		m.refreshContext()
+
+		scripted.contextErr = errors.New("boom")
+		m.refreshContext()
+
+		require.Equal(t, 10, m.context.Percent)
+		require.Contains(t, plain(m.render()), "ctx 10%")
+	})
+
+	t.Run("reports nothing without a session", func(t *testing.T) {
+		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, 0, nil)
+
+		m.refreshContext()
+
+		require.Zero(t, m.context)
+	})
+
+	t.Run("shows a different figure for two branches of one session", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "one"),
+			textMessage(llm.RoleAssistant, "two"),
+			textMessage(llm.RoleUser, "three"),
+			textMessage(llm.RoleAssistant, "four"),
+		)
+		require.Equal(t, 40, m.context.Percent, "the whole branch is measured")
+
+		// Returning to an earlier turn shortens the branch the session runs,
+		// so the figure of the same session changes with it.
+		require.NoError(t, stored.store.SetLeaf(stored.store.Branch()[1].ID))
+		m.refreshContext()
+
+		require.Equal(t, 20, m.context.Percent)
+	})
+}
+
+// TestCompactContext verifies the manual compaction command.
+func TestCompactContext(t *testing.T) {
+	t.Run("lists the command and disables it with nothing to compact", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		var listed bool
+		for _, entry := range commandList {
+			if entry.Label == "Compact context" {
+				listed = true
+				require.False(t, entry.Enabled(m), "nothing to compact yet")
+			}
+		}
+		require.True(t, listed, "the command center offers the command")
+
+		update(t, m, pressCtrlP)
+		require.Contains(t, plain(m.render()), "Compact context")
+	})
+
+	t.Run("enables the command when the branch holds something to compact", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.canCompact = true
+
+		require.True(t, m.compactReady())
+
+		update(t, m, pressCtrlP)
+		require.Contains(t, plain(m.render()), "Compact context")
+	})
+
+	t.Run("disables the command while a run is in flight", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.canCompact = true
+		m.input.SetValue("hello")
+		require.NotNil(t, update(t, m, pressEnter))
+
+		require.False(t, m.compactReady())
+	})
+
+	t.Run("compacts a session the threshold would leave alone", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.canCompact = true
+
+		cmd := m.compactContext()
+
+		require.NotNil(t, cmd)
+		require.Equal(t, 1, scripted.compacted)
+		require.True(t, m.running)
+		require.Equal(t, activityWorking, m.activity)
+	})
+
+	t.Run("refuses to compact with nothing to summarize", func(t *testing.T) {
+		m, scripted := chatModel(t)
+
+		require.Nil(t, m.compactContext())
+		require.Zero(t, scripted.compacted)
+	})
+}
+
+// TestLiveCompaction verifies the interface while a compaction is in flight.
+func TestLiveCompaction(t *testing.T) {
+	t.Run("reloads the conversation when the checkpoint is written", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		m.input.SetValue("go")
+		require.NotNil(t, update(t, m, pressEnter))
+
+		sendEvent(t, m, engine.Event{Type: engine.EventCompactionStart})
+		require.Equal(t, activityCompacting, m.activity)
+
+		first := stored.store.Branch()[0]
+		_, err := stored.store.AppendCompaction(
+			t.Context(),
+			"the summary",
+			first.ID,
+			1,
+			"m",
+			llm.Usage{},
+		)
+		require.NoError(t, err)
+		sendEvent(t, m, engine.Event{Type: engine.EventCompactionEnd})
+
+		require.Equal(t, activityWorking, m.activity)
+
+		view := plain(m.render())
+		require.Contains(t, view, "Compaction")
+		require.Contains(t, view, compactionBody)
 	})
 }

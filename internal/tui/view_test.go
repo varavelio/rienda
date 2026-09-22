@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/tokens"
 )
 
 // plain strips the styling and the padding of rendered output.
@@ -1288,4 +1290,143 @@ func BenchmarkStreamBurst(b *testing.B) {
 		}
 		m.Update(burst)
 	}
+}
+
+// TestContextLabel verifies the context figure of the chat footer.
+func TestContextLabel(t *testing.T) {
+	m, _ := chatModel(t)
+	m.context = tokens.Report{Used: 68000, Window: 200000}
+
+	tests := []struct {
+		name    string
+		percent int
+		style   lipgloss.Style
+	}{
+		{name: "fits the window", percent: 34, style: m.styles.footer},
+		{
+			name:    "reaches the warning threshold",
+			percent: contextWarningPercent,
+			style:   m.styles.footer,
+		},
+		{
+			name:    "passes the warning threshold",
+			percent: contextWarningPercent + 1,
+			style:   m.styles.notice,
+		},
+		{
+			name:    "reaches the critical threshold",
+			percent: contextCriticalPercent,
+			style:   m.styles.notice,
+		},
+		{
+			name:    "passes the critical threshold",
+			percent: contextCriticalPercent + 1,
+			style:   m.styles.errorText,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m.context.Percent = test.percent
+
+			require.Equal(
+				t,
+				test.style.Render(fmt.Sprintf("ctx %d%% · 68k/200k", test.percent)),
+				m.contextLabel(),
+			)
+		})
+	}
+
+	t.Run("is empty without a window", func(t *testing.T) {
+		m.context = tokens.Report{}
+
+		require.Empty(t, m.contextLabel())
+	})
+
+	t.Run("reaches the footer", func(t *testing.T) {
+		m.context = tokens.Report{Used: 68000, Window: 200000, Percent: 34}
+
+		require.Contains(t, plain(m.render()), "ctx 34% · 68k/200k")
+	})
+}
+
+// TestFormatTokens verifies the token counts of the chat footer.
+func TestFormatTokens(t *testing.T) {
+	tests := []struct {
+		count int
+		want  string
+	}{
+		{count: 0, want: "0"},
+		{count: 999, want: "999"},
+		{count: 1000, want: "1k"},
+		{count: 68000, want: "68k"},
+		{count: 96432, want: "96k"},
+		{count: 200000, want: "200k"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.want, func(t *testing.T) {
+			require.Equal(t, test.want, formatTokens(test.count))
+		})
+	}
+}
+
+// TestCompactionRendering verifies the checkpoint block of the conversation.
+func TestCompactionRendering(t *testing.T) {
+	t.Run("renders the block with its label, body and color", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.preferences = showAllPreferences()
+		m.transcript.addCompaction()
+		m.refreshTranscript()
+
+		rendered := m.render()
+		view := plain(rendered)
+
+		require.Contains(t, view, "Compaction")
+		require.Contains(t, view, compactionBody)
+		require.Contains(
+			t,
+			rendered,
+			m.styles.compaction.title.Render("Compaction"),
+			"the label carries the color of a checkpoint",
+		)
+		require.Contains(
+			t,
+			rendered,
+			m.styles.compaction.title.Render("Compaction"),
+			"white is the color of a checkpoint",
+		)
+	})
+
+	t.Run("renders a checkpoint carrying a tag without losing either color", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		first := stored.store.Branch()[0]
+		require.NoError(t, stored.store.SetTag(first.ID, "bug"))
+		_, err := stored.store.AppendCompaction(
+			t.Context(),
+			"the summary",
+			first.ID,
+			1,
+			"m",
+			llm.Usage{},
+		)
+		require.NoError(t, err)
+
+		// The tag and the checkpoint label live on different rows, so both
+		// colors survive: the tag in the tree and the label in the
+		// conversation.
+		m.reloadTranscript()
+		rendered := m.render()
+
+		require.Contains(t, plain(rendered), compactionBody)
+		require.Contains(
+			t,
+			rendered,
+			m.styles.compaction.title.Render("Compaction"),
+			"the checkpoint keeps its white",
+		)
+	})
 }

@@ -15,6 +15,10 @@ import (
 // maxToolOutput caps the tool output retained per invocation.
 const maxToolOutput = 64 << 10
 
+// compactionBody is the one-line note that closes a checkpoint block, so the
+// reader sees where the conversation was summarized.
+const compactionBody = "the conversation was compacted"
+
 // entryKind discriminates the transcript entries.
 type entryKind int
 
@@ -31,6 +35,9 @@ const (
 	entryNotice
 	// entryError reports a failure.
 	entryError
+	// entryCompaction reports that the conversation before it was summarized
+	// into a checkpoint.
+	entryCompaction
 )
 
 // isTurn reports whether an entry opens a turn of the conversation: a message
@@ -138,6 +145,12 @@ func (t *transcript) addNotice(text string) {
 	t.push(entry{kind: entryNotice, fragments: []string{text}})
 }
 
+// addCompaction appends the checkpoint of a compaction as a turn of its own,
+// labeled like any other turn.
+func (t *transcript) addCompaction() {
+	t.push(entry{kind: entryCompaction, fragments: []string{compactionBody}})
+}
+
 // finishTurn records how long the turn in flight took on the entry that closes
 // it, the last one, so the interface shows the time under the last message of
 // the turn. It does nothing while the transcript holds no entry.
@@ -173,6 +186,11 @@ func (t *transcript) load(entries []session.Entry) {
 
 // fold appends the content of one stored entry to the transcript.
 func (t *transcript) fold(entry session.Entry) {
+	if entry.Kind == session.KindCompaction {
+		t.addCompaction()
+		return
+	}
+
 	textKind := entryAssistant
 	if entry.Message.Role == llm.RoleUser {
 		textKind = entryUser
@@ -270,6 +288,8 @@ func (t *transcript) apply(event engine.Event) {
 			t.discard()
 		}
 		t.addNotice(retryNotice(event))
+	case engine.EventCompactionEnd:
+		t.addCompaction()
 	case engine.EventError:
 		t.push(entry{kind: entryError, fragments: []string{event.Error}})
 	}

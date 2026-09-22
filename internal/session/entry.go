@@ -20,6 +20,11 @@ const (
 	// KindTag labels the entry it targets, so a turn of the conversation can
 	// be found again by what it is about.
 	KindTag Kind = "tag"
+	// KindCompaction replaces every entry before the kept one with a summary
+	// of the conversation, so a session stays inside the context window of its
+	// model. The checkpoint hangs from the active leaf, so it belongs to the
+	// branch that produced it and to no other.
+	KindCompaction Kind = "compaction"
 )
 
 // Entry is a single node of the session tree. Only the fields valid for the
@@ -60,4 +65,17 @@ type Entry struct {
 	// the message it labels, recorded by a marker of its own so the message
 	// line never changes.
 	Tag string
+
+	// CompactionSummary is the checkpoint text of a KindCompaction entry: the
+	// summary of everything the entry replaces.
+	CompactionSummary string
+
+	// CompactionKeptID identifies the first entry kept verbatim after the
+	// compaction. It is a pointer rather than a copy, because the session file
+	// is append-only and the entries it points at are always there.
+	CompactionKeptID string
+
+	// CompactionTokensBefore is what the summarized range measured before it
+	// was compacted.
+	CompactionTokensBefore int
 }

@@ -35,6 +35,15 @@
 // restarted answer is never shown twice. Only a failure that repeating cannot
 // overcome, or the exhaustion of the attempts, ends the run.
 //
+// The engine keeps the conversation inside the context window of its model: at
+// the top of every loop iteration, before the request of the turn is built, it
+// measures the request against the window and asks the injected Compactor to
+// summarize the oldest turns when the estimate crosses the configured
+// threshold. At most one automatic compaction happens per run, a branch that
+// already ends in a compaction is skipped, and a compaction that fails ends the
+// run without writing an entry. The same procedure can be driven on demand
+// through Compact, which ignores the threshold because the user asked for it.
+//
 // Consumers follow a run through the channel returned by Run, which always
 // closes after a run_end event.
 package engine

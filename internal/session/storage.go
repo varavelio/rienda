@@ -61,6 +61,51 @@ type storedTag struct {
 	Tag       string    `json:"tag,omitempty"`
 }
 
+// storedCompaction is a compaction line of a session file. It reuses the
+// response fields of a message line for the summarization call, so the stored
+// usage of a session stays complete without a second concept.
+type storedCompaction struct {
+	Kind          Kind         `json:"kind"`
+	ID            string       `json:"id"`
+	ParentID      string       `json:"parentId,omitempty"`
+	CreatedAt     time.Time    `json:"createdAt"`
+	Summary       string       `json:"summary"`
+	KeptID        string       `json:"keptId"`
+	TokensBefore  int          `json:"tokensBefore,omitempty"`
+	ResponseModel string       `json:"responseModel,omitempty"`
+	ResponseUsage *storedUsage `json:"responseUsage,omitempty"`
+}
+
+// entry converts a stored compaction into its in-memory form.
+func (s storedCompaction) entry() Entry {
+	return Entry{
+		ID:                     s.ID,
+		ParentID:               s.ParentID,
+		CreatedAt:              s.CreatedAt,
+		Kind:                   KindCompaction,
+		CompactionSummary:      s.Summary,
+		CompactionKeptID:       s.KeptID,
+		CompactionTokensBefore: s.TokensBefore,
+		ResponseModel:          s.ResponseModel,
+		ResponseUsage:          s.responseUsage(),
+	}
+}
+
+// responseUsage converts the stored usage of a compaction into its canonical
+// form.
+func (s storedCompaction) responseUsage() llm.Usage {
+	if s.ResponseUsage == nil {
+		return llm.Usage{}
+	}
+	return llm.Usage{
+		InputTokens:      s.ResponseUsage.InputTokens,
+		OutputTokens:     s.ResponseUsage.OutputTokens,
+		ReasoningTokens:  s.ResponseUsage.ReasoningTokens,
+		CacheReadTokens:  s.ResponseUsage.CacheReadTokens,
+		CacheWriteTokens: s.ResponseUsage.CacheWriteTokens,
+	}
+}
+
 // storedBlock mirrors an llm.Block in the session file format.
 type storedBlock struct {
 	Type                 string          `json:"type"`
@@ -288,6 +333,16 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 			// leaves the leaf of the session where it found it.
 			entries[index].Tag = marker.Tag
 
+		case KindCompaction:
+			entry, err := decodeCompaction(lineNumber, line, known)
+			if err != nil {
+				return storedHeader{}, nil, "", err
+			}
+			known[entry.ID] = len(entries)
+			entries = append(entries, entry)
+			leaf = entry.ID
+			lastWasLeaf = false
+
 		default:
 			// Entries written by newer versions are ignored so that an old
 			// binary keeps loading the session.
@@ -370,6 +425,43 @@ func decodeMessage(lineNumber int, line []byte, known map[string]int) (Entry, er
 		return Entry{}, fmt.Errorf("line %d: %w", lineNumber, err)
 	}
 	return entry, nil
+}
+
+// decodeCompaction decodes and validates a compaction line. Its kept entry
+// must already be known, because the checkpoint always replaces entries of the
+// branch it hangs from and a reference that does not resolve would silently
+// hide turns. The failure is loud, following the precedent of the tag and leaf
+// checks: nothing is repaired silently.
+func decodeCompaction(lineNumber int, line []byte, known map[string]int) (Entry, error) {
+	var stored storedCompaction
+	if err := json.Unmarshal(line, &stored); err != nil {
+		return Entry{}, fmt.Errorf("line %d: %w", lineNumber, err)
+	}
+
+	_, duplicate := known[stored.ID]
+	_, hasParent := known[stored.ParentID]
+	_, hasKept := known[stored.KeptID]
+	switch {
+	case stored.ID == "":
+		return Entry{}, fmt.Errorf("line %d: the entry id is required", lineNumber)
+	case duplicate:
+		return Entry{}, fmt.Errorf("line %d: duplicate entry id %q", lineNumber, stored.ID)
+	case stored.ParentID != "" && !hasParent:
+		return Entry{}, fmt.Errorf(
+			"line %d: parent %q is not an earlier entry",
+			lineNumber,
+			stored.ParentID,
+		)
+	case stored.KeptID == "":
+		return Entry{}, fmt.Errorf("line %d: the kept entry id is required", lineNumber)
+	case !hasKept:
+		return Entry{}, fmt.Errorf(
+			"line %d: the compaction references unknown entry %q",
+			lineNumber,
+			stored.KeptID,
+		)
+	}
+	return stored.entry(), nil
 }
 
 // encodeLine marshals value into a single JSONL line.

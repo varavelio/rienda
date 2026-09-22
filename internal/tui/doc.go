@@ -40,9 +40,10 @@
 // mark, the same mark that opens the identity line of every phase, kept static
 // there, which gives the interface a motif of its own. It is the only
 // animation: the reasoning and tool blocks are static, and the footer under the
-// input only shows the token usage and the keys the interface listens to. The
-// status line occupies no room once the run is over, so the conversation grows
-// into its rows instead of leaving them blank.
+// input shows the live context figure of the branch the session runs, colored
+// by how much of the model window it uses, together with the keys the interface
+// listens to. The status line occupies no room once the run is over, so the
+// conversation grows into its rows instead of leaving them blank.
 //
 // Neither the escape that interrupts a run nor the ctrl+c and ctrl+d that leave
 // the interface act on a single press: the first one arms the request, which the
@@ -52,7 +53,10 @@
 //
 // The command center (ctrl+p) starts a new session, reopens the list that
 // starts a new one or continues a previous one, shows the tree of the session,
-// and holds the options of the harness. The tool output and the reasoning start
+// compacts the conversation on demand, and holds the options of the harness.
+// The manual compaction is offered only when the branch still holds something
+// to summarize and no run is in flight, and it shares the code path, the prompt
+// and the events of an automatic one. The tool output and the reasoning start
 // compact, previewing only their trailing lines so a working session stays
 // readable, and can be expanded to their full text; the answers of the model
 // can also be shown as plain text instead of markdown. A new session taken from
@@ -89,7 +93,10 @@
 // beside the branches it left behind. Every key toggles or repeats safely, so
 // the reader folds without remembering whether the fold is already in effect;
 // folding is how the reader looks at the session, not what it stores, so it
-// lasts as long as the tree is open.
+// lasts as long as the tree is open. A checkpoint that summarizes the oldest
+// turns is a turn like any other in both places: the conversation renders it
+// labeled Compaction where the compaction happened, and the tree draws it as a
+// node, so a branch shows at a glance where it was summarized.
 //
 // An @ in the prompt opens the completion of the files of the project, so the
 // user never has to remember a path to point the model at a file. The

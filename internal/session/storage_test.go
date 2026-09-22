@@ -27,6 +27,14 @@ func tagMarkerLine(id, tag string) string {
 	return `{"kind":"tag","targetId":"` + id + `","createdAt":"2026-09-16T10:15:33Z","tag":"` + tag + `"}`
 }
 
+// compactionLine builds a compaction line replacing everything before keptID.
+func compactionLine(id, parentID, keptID, summary string) string {
+	return `{"kind":"compaction","id":"` + id + `","parentId":"` + parentID + `",` +
+		`"createdAt":"2026-09-16T10:15:34Z","summary":"` + summary + `",` +
+		`"keptId":"` + keptID + `","tokensBefore":123,` +
+		`"responseModel":"kimi-k2","responseUsage":{"inputTokens":7,"outputTokens":3}}`
+}
+
 // assistantMessageLine is an assistant message line used by the decode tests.
 const assistantMessageLine = `{"kind":"message","id":"m2","parentId":"m1","createdAt":"2026-09-16T10:15:32Z","role":"assistant","responseModel":"kimi-k2","responseStopReason":"end_turn","itemId":"msg_2","blocks":[{"type":"text","text":"hi"}],"responseUsage":{"inputTokens":10,"outputTokens":5}}`
 
@@ -222,6 +230,36 @@ func TestDecode(t *testing.T) {
 		require.Equal(t, "m1", leaf)
 	})
 
+	t.Run("decodes a compaction with its model and usage", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" + assistantMessageLine + "\n" +
+			compactionLine("c1", "m2", "m1", "the summary") + "\n"
+
+		_, entries, leaf, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Len(t, entries, 3)
+		compaction := entries[2]
+		require.Equal(t, KindCompaction, compaction.Kind)
+		require.Equal(t, "c1", compaction.ID)
+		require.Equal(t, "m2", compaction.ParentID)
+		require.Equal(t, "the summary", compaction.CompactionSummary)
+		require.Equal(t, "m1", compaction.CompactionKeptID)
+		require.Equal(t, 123, compaction.CompactionTokensBefore)
+		require.Equal(t, "kimi-k2", compaction.ResponseModel)
+		require.Equal(t, llm.Usage{InputTokens: 7, OutputTokens: 3}, compaction.ResponseUsage)
+		require.Equal(t, "c1", leaf)
+	})
+
+	t.Run("loads a file written before the kind existed", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" + assistantMessageLine + "\n"
+
+		_, entries, leaf, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Len(t, entries, 2)
+		require.Equal(t, "m2", leaf)
+	})
+
 	t.Run("rejects invalid files", func(t *testing.T) {
 		tests := []struct {
 			name    string
@@ -320,6 +358,43 @@ func TestDecode(t *testing.T) {
 					"bug",
 				) + "\n",
 				wantErr: `references unknown entry "nope"`,
+			},
+			{
+				name:    "corrupt compaction",
+				data:    validHeaderLine + "\n" + `{"kind":"compaction",` + "\n",
+				wantErr: "line 2",
+			},
+			{
+				name: "compaction without a kept entry",
+				data: validHeaderLine + "\n" + userMessageLine + "\n" +
+					compactionLine("c1", "m1", "", "the summary") + "\n",
+				wantErr: "kept entry id is required",
+			},
+			{
+				name: "compaction naming an unknown kept entry",
+				data: validHeaderLine + "\n" + userMessageLine + "\n" +
+					compactionLine("c1", "m1", "nope", "the summary") + "\n",
+				wantErr: `line 3: the compaction references unknown entry "nope"`,
+			},
+			{
+				name: "compaction naming a kept entry that comes later",
+				data: validHeaderLine + "\n" +
+					compactionLine("c1", "", "m1", "the summary") + "\n" +
+					userMessageLine + "\n",
+				wantErr: `line 2: the compaction references unknown entry "m1"`,
+			},
+			{
+				name: "compaction with a missing parent",
+				data: validHeaderLine + "\n" + userMessageLine + "\n" +
+					compactionLine("c1", "nope", "m1", "the summary") + "\n",
+				wantErr: `parent "nope" is not an earlier entry`,
+			},
+			{
+				name: "message hanging from an ignored kind",
+				data: validHeaderLine + "\n" + userMessageLine + "\n" +
+					`{"kind":"custom","id":"c1","data":true}` + "\n" +
+					`{"kind":"message","id":"m2","parentId":"c1","role":"assistant","blocks":[{"type":"text","text":"hi"}]}` + "\n",
+				wantErr: `parent "c1" is not an earlier entry`,
 			},
 		}
 

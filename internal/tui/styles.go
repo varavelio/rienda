@@ -22,9 +22,9 @@ const (
 // rules adapt to the terminal background.
 //
 // Every element keeps a color of its own: the blue of a highlighted row, the
-// magenta of the user, the green of the agent and the yellow of the tags and
-// the notices. A color shared by two elements would make one read as the
-// other, which is what the palette avoids.
+// magenta of the user, the green of the agent, the yellow of the tags and the
+// notices and the white of a compaction checkpoint. A color shared by two
+// elements would make one read as the other, which is what the palette avoids.
 type styles struct {
 	header    lipgloss.Style
 	title     lipgloss.Style
@@ -47,11 +47,12 @@ type styles struct {
 	inputBox    lipgloss.Style
 	inputPrompt lipgloss.Style
 
-	user      section
-	assistant section
-	thinking  section
-	tool      section
-	failure   section
+	user       section
+	assistant  section
+	thinking   section
+	tool       section
+	failure    section
+	compaction section
 }
 
 // section groups the styles of one kind of conversation block.
@@ -176,6 +177,16 @@ func newStyles(isDark bool) styles {
 			markerStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")),
 			title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")),
 			body:        lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
+		},
+		// White is the only free color of the palette: 9 is failures, 10 the
+		// agent and the branch marks, 11 the tags and the notices, 12 the
+		// highlight, 13 the user and 14 the tools. It reads as metadata rather
+		// than as a voice in the conversation, which is what a checkpoint is.
+		compaction: section{
+			marker:      markerTurn,
+			markerStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")),
+			title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")),
+			body:        lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
 		},
 	}
 }

@@ -26,8 +26,11 @@ func newGenerateTest(t *testing.T, events []llm.StreamEvent) (*Engine, *fakeClie
 func generateTurn(t *testing.T, engine *Engine) (turn, []Event) {
 	t.Helper()
 
+	request, err := engine.request()
+	require.NoError(t, err)
+
 	events := make(chan Event, 128)
-	response, err := engine.generate(t.Context(), events)
+	response, err := engine.generate(t.Context(), events, request)
 	require.NoError(t, err)
 	close(events)
 	return response, collect(events)
@@ -144,8 +147,11 @@ func TestGenerate(t *testing.T) {
 			{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
 		})
 
+		request, err := engine.request()
+		require.NoError(t, err)
+
 		events := make(chan Event, 8)
-		_, err := engine.generate(t.Context(), events)
+		_, err = engine.generate(t.Context(), events, request)
 
 		require.ErrorContains(t, err, "empty response")
 	})
@@ -154,8 +160,11 @@ func TestGenerate(t *testing.T) {
 		client := &fakeClient{scripts: []script{{nextErr: errors.New("boom")}}}
 		engine, _ := newTestEngine(t, Config{Client: client})
 
+		request, err := engine.request()
+		require.NoError(t, err)
+
 		events := make(chan Event, 8)
-		_, err := engine.generate(t.Context(), events)
+		_, err = engine.generate(t.Context(), events, request)
 
 		require.ErrorContains(t, err, "boom")
 	})
@@ -164,8 +173,11 @@ func TestGenerate(t *testing.T) {
 		client := &fakeClient{scripts: []script{{openErr: errors.New("connect boom")}}}
 		engine, _ := newTestEngine(t, Config{Client: client})
 
+		request, err := engine.request()
+		require.NoError(t, err)
+
 		events := make(chan Event, 8)
-		_, err := engine.generate(t.Context(), events)
+		_, err = engine.generate(t.Context(), events, request)
 
 		require.ErrorContains(t, err, "connect boom")
 	})
@@ -275,8 +287,11 @@ func TestGenerate(t *testing.T) {
 		}}}
 		engine, _ := newTestEngine(t, Config{Client: client})
 
+		request, err := engine.request()
+		require.NoError(t, err)
+
 		events := make(chan Event, 8)
-		_, err := engine.generate(t.Context(), events)
+		_, err = engine.generate(t.Context(), events, request)
 		close(events)
 		collected := collect(events)
 

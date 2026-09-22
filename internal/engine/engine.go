@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/varavelio/rienda/internal/agent"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
 )
 
@@ -20,6 +22,11 @@ const eventBuffer = 64
 type Model struct {
 	// ID is the model identifier sent to the provider.
 	ID string
+
+	// ContextWindow is the context window of the model in tokens, used to
+	// measure how much of it a request consumes. The engine never resolves it;
+	// the harness hands it over already resolved.
+	ContextWindow int
 
 	// MaxTokens caps the response token limit when greater than zero.
 	MaxTokens int
@@ -54,6 +61,14 @@ type Config struct {
 	// agent declares tools.
 	Registry *tool.Registry
 
+	// Compactor summarizes the branch when the context grows too large. It is
+	// nil when the session compacts nothing, which the manual command and the
+	// automatic threshold both honor.
+	Compactor Compactor
+
+	// Compaction configures when the engine compacts automatically.
+	Compaction Compaction
+
 	// Workdir is the directory tools run in. It must be absolute when set.
 	Workdir string
 }
@@ -63,12 +78,18 @@ type Config struct {
 // An Engine is not safe for concurrent use: runs append to a session store,
 // which callers serialize.
 type Engine struct {
-	client  llm.Client
-	store   *session.Store
-	agent   agent.Agent
-	model   Model
-	tools   toolset
-	workdir string
+	client     llm.Client
+	store      *session.Store
+	agent      agent.Agent
+	model      Model
+	tools      toolset
+	workdir    string
+	compactor  Compactor
+	compaction Compaction
+
+	// busy guards the store against concurrent use: a run and a manual
+	// compaction both append to it, so only one may be in flight.
+	busy atomic.Bool
 }
 
 // New validates cfg and builds an Engine.
@@ -90,13 +111,27 @@ func New(cfg Config) (*Engine, error) {
 	}
 
 	return &Engine{
-		client:  cfg.Client,
-		store:   cfg.Store,
-		agent:   cfg.Agent,
-		model:   cfg.Model,
-		tools:   tools,
-		workdir: cfg.Workdir,
+		client:     cfg.Client,
+		store:      cfg.Store,
+		agent:      cfg.Agent,
+		model:      cfg.Model,
+		tools:      tools,
+		workdir:    cfg.Workdir,
+		compactor:  cfg.Compactor,
+		compaction: cfg.Compaction,
 	}, nil
+}
+
+// enter claims the engine for one run or compaction. It returns false when
+// another one is already in flight, which keeps the store free of concurrent
+// appends.
+func (e *Engine) enter() bool {
+	return e.busy.CompareAndSwap(false, true)
+}
+
+// leave releases the engine once a run or compaction finished.
+func (e *Engine) leave() {
+	e.busy.Store(false)
 }
 
 // request builds the provider request of the next turn from the stored
@@ -118,6 +153,18 @@ func (e *Engine) request() (*llm.Request, error) {
 		TopP:        e.model.TopP,
 		Thinking:    e.thinking(),
 	}, nil
+}
+
+// Context reports the estimated context of the request the next turn would
+// send, measured against the context window of the model. It covers the system
+// prompt, the history of the active branch and the tool definitions, exactly
+// the request the automatic compaction measures against its threshold.
+func (e *Engine) Context() (tokens.Report, error) {
+	request, err := e.request()
+	if err != nil {
+		return tokens.Report{}, err
+	}
+	return tokens.Measure(tokens.OfRequest(request), e.model.ContextWindow), nil
 }
 
 // thinking returns the extended thinking configuration of the run. It is nil

@@ -194,14 +194,18 @@ func normalizeArguments(raw string) (json.RawMessage, error) {
 // retry carries Discard when the failed attempt streamed output, so consumers
 // drop that partial response before the next attempt streams it again and a
 // retried answer is never shown twice.
-func (e *Engine) generate(ctx context.Context, events chan<- Event) (turn, error) {
+func (e *Engine) generate(
+	ctx context.Context,
+	events chan<- Event,
+	request *llm.Request,
+) (turn, error) {
 	// delivered reports whether the attempt that just failed streamed output
 	// to the caller. It is read by the observer, which runs after the attempt
 	// returns and before the wait, so it always describes the last failure.
 	var delivered bool
 	//nolint:wrapcheck // the failure already names the call it aborted.
 	return retry.Do(ctx, func(ctx context.Context) (turn, error) {
-		response, streamed, err := e.streamTurn(ctx, events)
+		response, streamed, err := e.streamTurn(ctx, events, request)
 		delivered = streamed
 		return response, err
 	}, func(attempt retry.Attempt) {
@@ -221,12 +225,8 @@ func (e *Engine) generate(ctx context.Context, events chan<- Event) (turn, error
 func (e *Engine) streamTurn(
 	ctx context.Context,
 	events chan<- Event,
+	request *llm.Request,
 ) (turn, bool, error) {
-	request, err := e.request()
-	if err != nil {
-		return turn{}, false, err
-	}
-
 	stream, err := e.client.Stream(ctx, request)
 	if err != nil {
 		return turn{}, false, fmt.Errorf("engine: stream response: %w", err)

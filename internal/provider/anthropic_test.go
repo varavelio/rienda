@@ -567,3 +567,26 @@ func TestAnthropicStopReasons(t *testing.T) {
 		}
 	})
 }
+
+// TestAnthropicUsageNormalization asserts the invariant the canonical usage
+// holds: the input of the Messages protocol already excludes both cache
+// figures, so nothing is subtracted from it.
+func TestAnthropicUsageNormalization(t *testing.T) {
+	raw := &anthropicResponse{ID: "msg_1", Usage: anthropicUsage{
+		InputTokens:              10,
+		OutputTokens:             5,
+		CacheCreationInputTokens: 2,
+		CacheReadInputTokens:     3,
+	}}
+
+	usage := anthropicResponseTo(raw).Usage
+
+	require.Equal(t, 10, usage.InputTokens)
+	require.Equal(t, 3, usage.CacheReadTokens)
+	require.Equal(t, 2, usage.CacheWriteTokens)
+	require.Equal(
+		t,
+		usage.InputTokens+usage.CacheReadTokens+usage.CacheWriteTokens+usage.OutputTokens,
+		20,
+	)
+}

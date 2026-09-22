@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +26,17 @@ const maxToolLabel = 400
 // reader keeps a sense of what is happening without the block flooding the
 // conversation.
 const previewLines = 3
+
+// Thresholds of the context figure the chat footer shows.
+const (
+	// contextWarningPercent is the window usage past which the figure is shown
+	// as a warning.
+	contextWarningPercent = 70
+
+	// contextCriticalPercent is the window usage past which the figure is
+	// shown as a failure.
+	contextCriticalPercent = 90
+)
 
 // View renders the interface in the alternate screen.
 func (m *model) View() tea.View {
@@ -471,21 +484,30 @@ func treeConnector(node treeNode) string {
 }
 
 // treeName returns the author of a turn, which the tree shows before the
-// message so the reader always knows who wrote it.
+// message so the reader always knows who wrote it. A checkpoint carries its
+// own label instead of an author.
 func treeName(entry session.Entry, agent string) string {
-	if entry.Message.Role == llm.RoleUser {
+	switch {
+	case entry.Kind == session.KindCompaction:
+		return "Compaction:"
+	case entry.Message.Role == llm.RoleUser:
 		return "You:"
+	default:
+		return "Agent (" + agent + "):"
 	}
-	return "Agent (" + agent + "):"
 }
 
 // treeNameStyle returns the style of the author of a turn, the color the
 // conversation gives the same author.
 func (m *model) treeNameStyle(entry session.Entry) lipgloss.Style {
-	if entry.Message.Role == llm.RoleUser {
+	switch {
+	case entry.Kind == session.KindCompaction:
+		return m.styles.compaction.title
+	case entry.Message.Role == llm.RoleUser:
 		return m.styles.user.title
+	default:
+		return m.styles.assistant.title
 	}
-	return m.styles.assistant.title
 }
 
 // treeGutter returns the cell the tree opens the row of a turn with: the dot of
@@ -592,6 +614,8 @@ func (m *model) activityLabel() string {
 		return "thinking"
 	case activityTool:
 		return "running " + m.activityTool
+	case activityCompacting:
+		return "compacting the conversation"
 	default:
 		return "working"
 	}
@@ -626,22 +650,55 @@ func (m *model) viewInput() string {
 	return m.styles.inputBox.Width(max(1, m.width)).Render(m.input.View())
 }
 
-// chatFooter renders the fixed row under the input box: the token usage and
-// the keys the interface listens to. The run in flight is reported by the
-// activity line above the input, not here.
+// chatFooter renders the fixed row under the input box: the live context
+// figure and the keys the interface listens to. The run in flight is reported
+// by the activity line above the input, not here.
 func (m *model) chatFooter() string {
 	parts := make([]string, 0, 3)
 	if !m.conversation.atBottom() {
 		parts = append(parts, "↑ scrolled")
 	}
-	if m.usageIn > 0 || m.usageOut > 0 {
-		parts = append(parts, fmt.Sprintf("tokens %d in · %d out", m.usageIn, m.usageOut))
+	if figure := m.contextLabel(); figure != "" {
+		parts = append(parts, figure)
 	}
 	// The keys lead with the ones a session uses all the time, so a narrow
 	// terminal cuts the rare ones instead of the ones the reader needs.
 	parts = append(parts, "@ files · enter send · ctrl+t tree · ctrl+p settings · ctrl+c quit")
 
 	return m.footerHints(strings.Join(parts, " · "))
+}
+
+// contextLabel renders the live context figure of the active branch, colored
+// by how much of the window it uses: faint while it fits, a warning past
+// contextWarningPercent and a failure past contextCriticalPercent. It is empty
+// while the interface holds no measurement.
+func (m *model) contextLabel() string {
+	if m.context.Window <= 0 {
+		return ""
+	}
+
+	style := m.styles.footer
+	switch {
+	case m.context.Percent > contextCriticalPercent:
+		style = m.styles.errorText
+	case m.context.Percent > contextWarningPercent:
+		style = m.styles.notice
+	}
+	return style.Render(fmt.Sprintf(
+		"ctx %d%% · %s/%s",
+		m.context.Percent,
+		formatTokens(m.context.Used),
+		formatTokens(m.context.Window),
+	))
+}
+
+// formatTokens renders a token count for the footer: the plain number below a
+// thousand and the rounded thousands above it, so the figure stays short.
+func formatTokens(count int) string {
+	if count < 1000 {
+		return strconv.Itoa(count)
+	}
+	return strconv.Itoa(int(math.Round(float64(count)/1000))) + "k"
 }
 
 // renderEntry renders the transcript entry at the given index as a
@@ -681,6 +738,8 @@ func (m *model) renderBlockBody(current *entry, width int) string {
 		return m.renderToolEntry(current, width)
 	case entryNotice:
 		return m.styles.notice.Render(wrap(current.text(), width))
+	case entryCompaction:
+		return m.styles.compaction.block(width, "Compaction", current.text())
 	default:
 		return m.styles.failure.block(width, "Error", current.text())
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
 )
 
@@ -308,5 +309,43 @@ func TestRequest(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, request.System, "be nice")
 		require.Contains(t, request.System, "Use tabs.")
+	})
+}
+
+// TestContext verifies the context read the interface reports.
+func TestContext(t *testing.T) {
+	t.Run("measures the system prompt, the tools and the history", func(t *testing.T) {
+		engine, store := newTestEngine(t, Config{
+			Agent:    agent.Agent{SystemPrompt: "be brief", Tools: []string{"shell"}},
+			Model:    Model{ID: "test-model", ContextWindow: 200},
+			Registry: newTestRegistry(t, &fakeTool{name: "shell"}),
+		})
+		_, err := store.Append(t.Context(), session.Entry{Message: llm.Message{
+			Role:   llm.RoleUser,
+			Blocks: []llm.Block{{Type: llm.BlockText, Text: "hello world"}},
+		}})
+		require.NoError(t, err)
+
+		report, err := engine.Context()
+
+		require.NoError(t, err)
+		require.Equal(t, 200, report.Window)
+		require.NotZero(t, report.Used)
+		require.Greater(t, report.Percent, 0)
+
+		request, err := engine.request()
+		require.NoError(t, err)
+		require.Equal(t, tokens.OfRequest(request), report.Used)
+		require.NotEmpty(t, request.Tools, "the measured request declares the tools of the agent")
+	})
+
+	t.Run("reports a window that is not usable", func(t *testing.T) {
+		engine, _ := newTestEngine(t, Config{Model: Model{ID: "test-model"}})
+
+		report, err := engine.Context()
+
+		require.NoError(t, err)
+		require.Zero(t, report.Window)
+		require.Zero(t, report.Percent)
 	})
 }

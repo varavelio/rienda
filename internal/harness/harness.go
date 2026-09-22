@@ -9,12 +9,14 @@ import (
 	"strings"
 
 	"github.com/varavelio/rienda/internal/agent"
+	"github.com/varavelio/rienda/internal/catalog"
 	"github.com/varavelio/rienda/internal/config"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/provider"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
 )
 
@@ -61,6 +63,36 @@ type Session struct {
 // is the conversation the session runs.
 func (s *Session) Branch() []session.Entry {
 	return s.store.Branch()
+}
+
+// Context reports the estimated context of the active branch, measured against
+// the context window resolved for the model of the session.
+func (s *Session) Context() (tokens.Report, error) {
+	report, err := s.engine.Context()
+	if err != nil {
+		return tokens.Report{}, fmt.Errorf("harness: %w", err)
+	}
+	return report, nil
+}
+
+// DisplayedBranch returns the entries of the active branch the user reads, with
+// the newest compaction applied: the summarized turns are replaced by the
+// checkpoint that summarizes them.
+func (s *Session) DisplayedBranch() []session.Entry {
+	return s.store.DisplayedBranch()
+}
+
+// CanCompact reports whether the active branch still holds something to
+// summarize, which is what the manual compaction command is offered on.
+func (s *Session) CanCompact() bool {
+	return s.engine.CanCompact()
+}
+
+// Compact summarizes the active branch on demand and returns the channel
+// carrying its events. It ignores the compaction threshold, because the user
+// asked for it, and it refuses to run while another run is in flight.
+func (s *Session) Compact(ctx context.Context) <-chan engine.Event {
+	return s.engine.Compact(ctx)
 }
 
 // Tree returns every entry of the session in append order, the branches it
@@ -142,13 +174,27 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
+	model := engineModel(resolved)
+	model.ContextWindow = resolveContextWindow(resolved)
+
+	summarizer, err := newCompactor(cfg, resolved, client)
+	if err != nil {
+		closeStore(store)
+		return nil, err
+	}
+
 	runner, err := engine.New(engine.Config{
-		Client:   client,
-		Store:    store,
-		Agent:    definition,
-		Model:    engineModel(resolved),
-		Registry: registry,
-		Workdir:  workdir,
+		Client:    client,
+		Store:     store,
+		Agent:     definition,
+		Model:     model,
+		Registry:  registry,
+		Workdir:   workdir,
+		Compactor: summarizer,
+		Compaction: engine.Compaction{
+			Enabled:       cfg.Compaction.Enabled,
+			ReserveTokens: cfg.Compaction.ReserveTokens,
+		},
 	})
 	if err != nil {
 		closeStore(store)
@@ -277,6 +323,21 @@ func engineModel(resolved config.Resolved) engine.Model {
 			MaxTokens: resolved.ThinkingMaxTokens,
 		},
 	}
+}
+
+// resolveContextWindow returns the context window of a resolved model: the
+// value the configuration declares, the value the catalog knows, or the
+// conservative fallback. The catalog is best effort, so a home directory that
+// cannot be located falls back instead of failing the session.
+func resolveContextWindow(resolved config.Resolved) int {
+	facts, err := catalog.New(catalog.Options{})
+	if err != nil {
+		if resolved.ContextWindow > 0 {
+			return resolved.ContextWindow
+		}
+		return catalog.FallbackWindow
+	}
+	return facts.Window(resolved.ModelID, resolved.ContextWindow)
 }
 
 // newTools builds the registry of built-in tools. Every built-in is

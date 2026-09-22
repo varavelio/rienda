@@ -267,17 +267,22 @@ func currentTurn(branch []session.Entry) string {
 }
 
 // isTurnEntry reports whether an entry is a turn of the conversation: a prompt
-// written by the user or an answer of the agent. The user turns that carry
-// tool results and the answers that only request tools are activities of a
-// turn, so the tree skips them and the reader finds the same stops the
-// conversation offers.
+// written by the user, an answer of the agent or a compaction checkpoint. The
+// user turns that carry tool results and the answers that only request tools
+// are activities of a turn, so the tree skips them and the reader finds the
+// same stops the conversation offers.
 func isTurnEntry(entry session.Entry) bool {
-	return opensTurn(entry) || closesTurn(entry)
+	return opensTurn(entry) || closesTurn(entry) || entry.Kind == session.KindCompaction
 }
 
 // turnText returns the message of one turn on a single line, so a turn of the
-// tree never takes more than one row.
+// tree never takes more than one row. A checkpoint says what it is instead of
+// carrying a message.
 func turnText(entry session.Entry) string {
+	if entry.Kind == session.KindCompaction {
+		return compactionBody
+	}
+
 	text := strings.Join(strings.Fields(textOf(entry.Message.Blocks)), " ")
 	if text == "" {
 		return "(no message)"

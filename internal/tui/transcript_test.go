@@ -423,3 +423,39 @@ func TestCutRunes(t *testing.T) {
 		require.Equal(t, "a", cutRunes("añejo", 2))
 	})
 }
+
+// TestTranscriptCompaction verifies the checkpoint block of the conversation.
+func TestTranscriptCompaction(t *testing.T) {
+	t.Run("appends a checkpoint on the end event", func(t *testing.T) {
+		var folded transcript
+
+		folded.apply(engine.Event{Type: engine.EventCompactionEnd})
+
+		require.Len(t, folded.entries, 1)
+		require.Equal(t, entryCompaction, folded.entries[0].kind)
+		require.Equal(t, compactionBody, folded.entries[0].text())
+	})
+
+	t.Run("folds a stored checkpoint into the transcript", func(t *testing.T) {
+		var folded transcript
+
+		folded.load([]session.Entry{
+			{ID: "u1", Kind: session.KindMessage, Message: textMessage(llm.RoleUser, "hello")},
+			{
+				ID:                "c1",
+				Kind:              session.KindCompaction,
+				CompactionSummary: "the summary",
+				CompactionKeptID:  "u1",
+			},
+		})
+
+		require.Len(t, folded.entries, 2)
+		require.Equal(t, entryUser, folded.entries[0].kind)
+		require.Equal(t, entryCompaction, folded.entries[1].kind)
+		require.Equal(t, compactionBody, folded.entries[1].text())
+	})
+
+	t.Run("keeps a checkpoint out of the stops the reader jumps between", func(t *testing.T) {
+		require.False(t, isTurn(entryCompaction))
+	})
+}

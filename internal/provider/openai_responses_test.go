@@ -212,7 +212,8 @@ func TestOpenAIResponsesGenerate(t *testing.T) {
 			},
 			StopReason: llm.StopReasonToolUse,
 			Usage: llm.Usage{
-				InputTokens: 30, OutputTokens: 12, ReasoningTokens: 4,
+				// input_tokens includes the 5 cached reads and the 1 cache write.
+				InputTokens: 24, OutputTokens: 12, ReasoningTokens: 4,
 				CacheReadTokens: 5, CacheWriteTokens: 1,
 			},
 		}, resp)
@@ -356,7 +357,8 @@ func TestOpenAIResponsesStream(t *testing.T) {
 				ItemID:     "msg_1",
 				StopReason: llm.StopReasonToolUse,
 				Usage: llm.Usage{
-					InputTokens: 30, OutputTokens: 12, ReasoningTokens: 4,
+					// input_tokens includes the 5 cached reads and the 1 cache write.
+					InputTokens: 24, OutputTokens: 12, ReasoningTokens: 4,
 					CacheReadTokens: 5, CacheWriteTokens: 1,
 				},
 			},
@@ -510,5 +512,36 @@ func TestOpenAIResponsesStopReasons(t *testing.T) {
 
 		plain := &openAIResponsesResponse{Status: "completed"}
 		require.Equal(t, llm.StopReasonEndTurn, openAIResponsesStopReason(plain))
+	})
+}
+
+// TestOpenAIResponsesUsageNormalization verifies the canonical usage of the
+// Responses protocol.
+func TestOpenAIResponsesUsageNormalization(t *testing.T) {
+	t.Run("subtracts the cached reads and writes from the input", func(t *testing.T) {
+		raw := openAIResponsesUsage{InputTokens: 100, OutputTokens: 7}
+		raw.InputDetails.CachedTokens = 40
+		raw.InputDetails.CacheWriteTokens = 10
+		raw.OutputDetails.ReasoningTokens = 3
+
+		usage := openAIResponsesUsageTo(raw)
+
+		require.Equal(t, 50, usage.InputTokens)
+		require.Equal(t, 7, usage.OutputTokens)
+		require.Equal(t, 3, usage.ReasoningTokens)
+		require.Equal(t, 40, usage.CacheReadTokens)
+		require.Equal(t, 10, usage.CacheWriteTokens)
+	})
+
+	t.Run("clamps an input smaller than its cached tokens", func(t *testing.T) {
+		raw := openAIResponsesUsage{InputTokens: 10}
+		raw.InputDetails.CachedTokens = 15
+		raw.InputDetails.CacheWriteTokens = 8
+
+		usage := openAIResponsesUsageTo(raw)
+
+		require.Equal(t, 0, usage.InputTokens)
+		require.Equal(t, 15, usage.CacheReadTokens)
+		require.Equal(t, 8, usage.CacheWriteTokens)
 	})
 }

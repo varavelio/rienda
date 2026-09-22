@@ -16,8 +16,20 @@ func TestRun(t *testing.T) {
 			args    []string
 			wantErr string
 		}{
-			{name: "missing agent", wantErr: "an agent is required"},
-			{name: "blank agent", args: []string{"-a", "  "}, wantErr: "an agent is required"},
+			{
+				name:    "missing agent and session",
+				wantErr: "an agent or a session is required",
+			},
+			{
+				name:    "blank agent",
+				args:    []string{"-a", "  "},
+				wantErr: "an agent or a session is required",
+			},
+			{
+				name:    "agent and session together",
+				args:    []string{"-a", "coder", "-s", "session-1"},
+				wantErr: "mutually exclusive",
+			},
 			{
 				name:    "missing prompt",
 				args:    []string{"-a", "coder"},

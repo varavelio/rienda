@@ -68,6 +68,10 @@ func render(events <-chan engine.Event, stdout, stderr io.Writer) error {
 			if err := flushLine(stdout, &pending); err != nil {
 				return err
 			}
+		case engine.EventCompactionStart:
+			if err := renderCompaction(stderr, event); err != nil {
+				return err
+			}
 		case engine.EventRetry:
 			if event.Discard {
 				attempt.Reset()
@@ -121,6 +125,19 @@ func renderToolResult(w io.Writer, event engine.Event, streamed bool) error {
 		if _, err := fmt.Fprintln(w, "tool failed"); err != nil {
 			return fmt.Errorf("render: write tool result: %w", err)
 		}
+	}
+	return nil
+}
+
+// renderCompaction reports that the conversation was compacted, so a
+// non-interactive run is not silent about it. The line says what happened and
+// nothing about why, because a compaction is a compaction.
+func renderCompaction(w io.Writer, event engine.Event) error {
+	if event.Type != engine.EventCompactionStart {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "compaction: the conversation was compacted"); err != nil {
+		return fmt.Errorf("render: write compaction notice: %w", err)
 	}
 	return nil
 }

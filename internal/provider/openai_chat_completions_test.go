@@ -148,7 +148,8 @@ func TestOpenAIChatGenerate(t *testing.T) {
 			}},
 			StopReason: llm.StopReasonToolUse,
 			Usage: llm.Usage{
-				InputTokens:     20,
+				// prompt_tokens includes the 7 cached tokens.
+				InputTokens:     13,
 				OutputTokens:    8,
 				ReasoningTokens: 3,
 				CacheReadTokens: 7,
@@ -239,7 +240,8 @@ func TestOpenAIChatStream(t *testing.T) {
 				Type:       llm.StreamMessageEnd,
 				StopReason: llm.StopReasonToolUse,
 				Usage: llm.Usage{
-					InputTokens:     20,
+					// prompt_tokens includes the 7 cached tokens.
+					InputTokens:     13,
 					OutputTokens:    8,
 					ReasoningTokens: 3,
 					CacheReadTokens: 7,
@@ -455,5 +457,32 @@ func TestOpenAIChatStopReasons(t *testing.T) {
 				wire,
 			)
 		}
+	})
+}
+
+// TestOpenAIChatUsageNormalization verifies the canonical usage of the Chat
+// Completions protocol.
+func TestOpenAIChatUsageNormalization(t *testing.T) {
+	t.Run("subtracts the cached tokens from the input", func(t *testing.T) {
+		raw := openAIChatCompletionsUsage{PromptTokens: 100, CompletionTokens: 7}
+		raw.PromptDetails.CachedTokens = 40
+		raw.CompletionDetails.ReasoningTokens = 3
+
+		usage := openAIChatCompletionsUsageTo(raw)
+
+		require.Equal(t, 60, usage.InputTokens)
+		require.Equal(t, 7, usage.OutputTokens)
+		require.Equal(t, 3, usage.ReasoningTokens)
+		require.Equal(t, 40, usage.CacheReadTokens)
+	})
+
+	t.Run("clamps an input smaller than its cached tokens", func(t *testing.T) {
+		raw := openAIChatCompletionsUsage{PromptTokens: 10}
+		raw.PromptDetails.CachedTokens = 25
+
+		usage := openAIChatCompletionsUsageTo(raw)
+
+		require.Equal(t, 0, usage.InputTokens)
+		require.Equal(t, 25, usage.CacheReadTokens)
 	})
 }

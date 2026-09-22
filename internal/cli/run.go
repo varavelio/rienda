@@ -11,20 +11,24 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/varavelio/rienda/internal/catalog"
 	"github.com/varavelio/rienda/internal/harness"
 )
 
-// Run executes the run command: it prepares one session, sends one prompt to
-// the agent and streams the result. Assistant text goes to stdout, tool
-// activity and notices go to stderr.
+// Run executes the run command: it prepares one session, either a new one
+// owned by an agent or a stored one it continues, sends one prompt to the
+// agent and streams the result. Assistant text goes to stdout, tool activity
+// and notices go to stderr.
 func Run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() { runUsage(stderr) }
 
-	var agentID, prompt, configPath, workdir string
-	flags.StringVar(&agentID, "agent", "", "agent definition to run (required)")
+	var agentID, sessionID, prompt, configPath, workdir string
+	flags.StringVar(&agentID, "agent", "", "agent definition to run")
 	flags.StringVar(&agentID, "a", "", "shorthand for --agent")
+	flags.StringVar(&sessionID, "session", "", "session to continue")
+	flags.StringVar(&sessionID, "s", "", "shorthand for --session")
 	flags.StringVar(&prompt, "prompt", "", "prompt to send to the agent (required)")
 	flags.StringVar(&prompt, "p", "", "shorthand for --prompt")
 	flags.StringVar(&configPath, "config", "", "path of the configuration file")
@@ -40,8 +44,11 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	if flags.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", flags.Arg(0))
 	}
-	if strings.TrimSpace(agentID) == "" {
-		return errors.New("an agent is required: use --agent")
+	if strings.TrimSpace(agentID) == "" && strings.TrimSpace(sessionID) == "" {
+		return errors.New("an agent or a session is required: use --agent or --session")
+	}
+	if strings.TrimSpace(agentID) != "" && strings.TrimSpace(sessionID) != "" {
+		return errors.New("an agent and a session are mutually exclusive")
 	}
 	if strings.TrimSpace(prompt) == "" {
 		return errors.New("a prompt is required: use --prompt")
@@ -52,8 +59,15 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The catalog keeps the model facts the context measurement resolves its
+	// window from current while the run lasts, and stops with the context.
+	if facts, err := catalog.New(catalog.Options{}); err == nil {
+		go facts.Run(ctx)
+	}
+
 	session, err := harness.Prepare(ctx, harness.Options{
 		AgentID:    agentID,
+		SessionID:  sessionID,
 		Workdir:    workdir,
 		ConfigPath: configPath,
 	})
@@ -70,9 +84,11 @@ func Run(args []string, stdout, stderr io.Writer) error {
 func runUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `Usage:
   rienda run -a <agent> -p <prompt> [flags]
+  rienda run -s <session> -p <prompt> [flags]
 
 Flags:
-  -a, --agent     Agent definition to run (required)
+  -a, --agent     Agent definition to run
+  -s, --session   Session to continue, named by the identifier it reported
   -p, --prompt    Prompt to send to the agent (required)
       --config    Path of the configuration file
   -C, --workdir   Directory the session runs in

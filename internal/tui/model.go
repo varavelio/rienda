@@ -16,6 +16,7 @@ import (
 	"github.com/varavelio/rienda/internal/filecomplete"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/tokens"
 )
 
 // brandRows is the number of rows the identity region of every phase
@@ -170,6 +171,8 @@ const (
 	activityThinking
 	// activityTool marks a tool invocation running.
 	activityTool
+	// activityCompacting marks the conversation being summarized.
+	activityCompacting
 )
 
 // preferences groups the options of the harness the command center flips.
@@ -242,6 +245,12 @@ var commandList = []command{
 		Enabled: (*model).treeReady,
 	},
 	{
+		Label:   "Compact context",
+		Note:    "summarize the oldest turns into a checkpoint",
+		Open:    (*model).compactContext,
+		Enabled: (*model).compactReady,
+	},
+	{
 		Label: "Expand tool output",
 		Note:  "show the whole output of a tool instead of its last lines",
 		IsOn:  func(current preferences) bool { return current.ExpandToolOutput },
@@ -270,6 +279,22 @@ type Session interface {
 	// Branch returns the entries of the active branch in conversation order,
 	// which is the conversation the interface shows.
 	Branch() []session.Entry
+
+	// DisplayedBranch returns the entries of the active branch the user reads,
+	// with the newest compaction applied.
+	DisplayedBranch() []session.Entry
+
+	// Context reports the estimated context of the active branch, measured
+	// against the context window of the session model.
+	Context() (tokens.Report, error)
+
+	// CanCompact reports whether the active branch still holds something to
+	// summarize.
+	CanCompact() bool
+
+	// Compact summarizes the active branch on demand and returns the channel
+	// carrying its events. It ignores the compaction threshold.
+	Compact(ctx context.Context) <-chan engine.Event
 
 	// Tree returns every entry of the session in append order, the branches
 	// the user left behind included, which is what the tree screen navigates.
@@ -447,13 +472,16 @@ type model struct {
 	picker   filter
 	commands filter
 
-	session  Session
-	events   <-chan engine.Event
-	cancel   context.CancelFunc
-	running  bool
-	fatal    error
-	usageIn  int
-	usageOut int
+	session Session
+	events  <-chan engine.Event
+	cancel  context.CancelFunc
+	running bool
+	fatal   error
+
+	// context is the last measurement of the active branch, shown by the chat
+	// footer. It is cached because building the request it measures reads the
+	// project instructions from disk, which must never happen once per frame.
+	context tokens.Report
 
 	// runStart is when the run in flight started, kept to report how long the
 	// turn takes. It is the zero time while no run is in flight.
@@ -963,6 +991,36 @@ func (m *model) treeReady() bool {
 	return m.session != nil && !m.running
 }
 
+// compactReady reports whether the conversation can be compacted on demand: it
+// needs an open session, no run in flight, because a store is not safe for
+// concurrent use, and something left to summarize.
+func (m *model) compactReady() bool {
+	return m.session != nil && !m.running && m.session.CanCompact()
+}
+
+// compactContext summarizes the conversation on demand, through the same code
+// path, prompt and events as an automatic compaction. It ignores the
+// compaction threshold, because the user asked for it, and it reports nothing
+// about the origin of the compaction.
+func (m *model) compactContext() tea.Cmd {
+	if !m.compactReady() {
+		return nil
+	}
+
+	show := m.showChat()
+	m.setRunning(true)
+	m.setActivity(activityWorking, "")
+	m.syncLayout()
+	m.refreshTranscript()
+
+	m.runStart = time.Now()
+	ctx, cancel := m.newRunContext()
+	m.cancel = cancel
+	m.events = m.session.Compact(ctx)
+
+	return tea.Batch(show, m.spin(), streamEvents(m.events))
+}
+
 // openTree shows the tree of the open session: the turns of its conversation,
 // the branch the session runs and the tags that label them. The tree always
 // returns to the conversation it walks.
@@ -1122,6 +1180,7 @@ func (m *model) rewind() tea.Cmd {
 	m.fork = m.tree.forks(index)
 	m.input.SetValue(prompt)
 	m.reloadTranscript()
+	m.refreshContext()
 
 	// The reader lands on the newest turn of the branch the session returned
 	// to, which is where the conversation goes on.
@@ -1316,6 +1375,7 @@ func (m *model) enterChat(prepared Session) tea.Cmd {
 	m.input.Reset()
 	m.syncLayout()
 	m.reloadTranscript()
+	m.refreshContext()
 	return m.input.Focus()
 }
 
@@ -1370,11 +1430,10 @@ func (m *model) applyEvent(event engine.Event) {
 	m.trackActivity(event)
 
 	switch event.Type {
-	case engine.EventMessageEnd:
-		if event.Usage != nil {
-			m.usageIn += event.Usage.InputTokens
-			m.usageOut += event.Usage.OutputTokens
-		}
+	case engine.EventCompactionEnd:
+		// The conversation the user reads changed: the summarized turns are
+		// replaced by the checkpoint, which is what DisplayedBranch returns.
+		m.reloadTranscript()
 	case engine.EventRunEnd:
 		m.finishRun(event.Reason)
 	}
@@ -1392,6 +1451,11 @@ func (m *model) trackActivity(event engine.Event) {
 	case engine.EventToolCall, engine.EventToolOutput:
 		m.setActivity(activityTool, event.ToolName)
 	case engine.EventToolResult, engine.EventRetry:
+		m.setActivity(activityWorking, "")
+	case engine.EventCompactionStart:
+		m.setActivity(activityCompacting, "")
+	case engine.EventCompactionEnd:
+		// The checkpoint is written, so the run goes back to the model.
 		m.setActivity(activityWorking, "")
 	}
 }
@@ -1434,6 +1498,7 @@ func (m *model) finishRun(reason engine.EndReason) {
 	m.events = nil
 	m.setActivity(activityIdle, "")
 	m.dropConfirm(confirmInterrupt)
+	m.refreshContext()
 }
 
 // recordElapsed closes the turn in flight with the time the agent worked on it,
@@ -1625,12 +1690,28 @@ func (m *model) invalidateTranscript() {
 	m.conversation.invalidate()
 }
 
+// refreshContext recomputes the context figure of the active branch. It runs
+// when the branch changes — a session opened, a run finished, a session
+// returned to an earlier turn — never once per frame. A failed measurement
+// keeps the previous figure instead of leaving the footer blank.
+func (m *model) refreshContext() {
+	if m.session == nil {
+		return
+	}
+
+	report, err := m.session.Context()
+	if err != nil {
+		return
+	}
+	m.context = report
+}
+
 // reloadTranscript rebuilds the conversation from the active branch of the
 // session, used whenever the branch the interface shows changes: a session that
 // was opened and a session the user returned to an earlier turn.
 func (m *model) reloadTranscript() {
 	m.transcript = transcript{}
-	m.transcript.load(m.session.Branch())
+	m.transcript.load(m.session.DisplayedBranch())
 	m.invalidateTranscript()
 	m.refreshTranscript()
 }

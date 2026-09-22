@@ -353,9 +353,13 @@ func concatTextBlocks(blocks []llm.Block) string {
 }
 
 // openAIChatCompletionsUsageTo maps a wire usage object to canonical form.
+// prompt_tokens includes the cached tokens, which the canonical usage counts
+// apart, so the cached ones are subtracted. The subtraction clamps at zero, so
+// a provider reporting more cached tokens than input tokens never yields a
+// negative count.
 func openAIChatCompletionsUsageTo(raw openAIChatCompletionsUsage) llm.Usage {
 	return llm.Usage{
-		InputTokens:     raw.PromptTokens,
+		InputTokens:     max(0, raw.PromptTokens-raw.PromptDetails.CachedTokens),
 		OutputTokens:    raw.CompletionTokens,
 		ReasoningTokens: raw.CompletionDetails.ReasoningTokens,
 		CacheReadTokens: raw.PromptDetails.CachedTokens,

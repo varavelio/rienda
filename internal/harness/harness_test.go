@@ -24,6 +24,7 @@ import (
 // inspect. The provider fixtures fill it from the recorded wire payload.
 type receivedRequest struct {
 	Model    string `json:"model"`
+	Stream   bool   `json:"stream"`
 	Messages []struct {
 		Role       string `json:"role"`
 		Content    string `json:"content"`
@@ -63,7 +64,9 @@ func newScriptedProvider(t *testing.T, scripts ...[]string) *scriptedProvider {
 	return provider
 }
 
-// serve answers one chat completions request with the next script.
+// serve answers one chat completions request with the next script. A
+// non-streamed request, which the summarization issues, is answered with the
+// complete JSON response instead of the server-sent events.
 func (p *scriptedProvider) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	var request receivedRequest
@@ -79,6 +82,12 @@ func (p *scriptedProvider) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !request.Stream {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, completeResponse(p.scripts[index]))
+		return
+	}
+
 	var response strings.Builder
 	for _, chunk := range p.scripts[index] {
 		response.WriteString("data: ")
@@ -89,6 +98,57 @@ func (p *scriptedProvider) serve(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	_, _ = io.WriteString(w, response.String())
+}
+
+// completeResponse folds a script of streamed chunks into the complete JSON
+// response a non-streamed call receives: the text fragments are joined and the
+// terminal chunk contributes the finish reason and the usage.
+func completeResponse(chunks []string) string {
+	var text strings.Builder
+	finishReason := "stop"
+	var usage map[string]any
+
+	for _, chunk := range chunks {
+		var decoded struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage map[string]any `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(chunk), &decoded); err != nil {
+			continue
+		}
+		for _, choice := range decoded.Choices {
+			text.WriteString(choice.Delta.Content)
+			if choice.FinishReason != "" {
+				finishReason = choice.FinishReason
+			}
+		}
+		if decoded.Usage != nil {
+			usage = decoded.Usage
+		}
+	}
+
+	response := map[string]any{
+		"id":    "chatcmpl_complete",
+		"model": "gpt-test",
+		"choices": []any{map[string]any{
+			"index":         0,
+			"message":       map[string]any{"role": "assistant", "content": text.String()},
+			"finish_reason": finishReason,
+		}},
+	}
+	if usage != nil {
+		response["usage"] = usage
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return `{"error":{"message":"encode complete response"}}`
+	}
+	return string(encoded)
 }
 
 // roleChunk opens a streamed completion, as real providers do.
@@ -139,6 +199,11 @@ func newTestEnvironment(t *testing.T, scripts ...[]string) *testEnvironment {
 	t.Helper()
 
 	root := t.TempDir()
+	// The catalog and the summarization prompt are resolved from the home
+	// directory, so the environment points HOME at the temporary root and no
+	// test ever reads the home of the developer running it.
+	t.Setenv("HOME", root)
+
 	env := &testEnvironment{
 		workdir:     filepath.Join(root, "work"),
 		agentsDir:   filepath.Join(root, "agents"),
@@ -609,4 +674,124 @@ func TestRun(t *testing.T) {
 		require.Equal(t, "call_1", second[3].ToolCallID)
 		require.Contains(t, second[3].Content, "harness")
 	})
+}
+
+// writeCompactionConfig rewrites the configuration of an environment, keeping
+// its provider and adding a compaction block.
+func writeCompactionConfig(t *testing.T, env *testEnvironment, compactionBlock string) {
+	t.Helper()
+
+	configuration := "providers:\n" +
+		"  fake:\n" +
+		"    protocol: openai_chat_completions\n" +
+		"    base_url: " + env.provider.server.URL + "\n" +
+		"    api_key: test-key\n" +
+		"    models:\n" +
+		"      test-model:\n" +
+		"        id: gpt-test\n" +
+		"      summarizer:\n" +
+		"        id: gpt-summary\n" +
+		compactionBlock
+	require.NoError(t, os.WriteFile(env.configPath, []byte(configuration), 0o600))
+}
+
+// TestCompaction verifies the compaction wiring of the harness.
+func TestCompaction(t *testing.T) {
+	t.Run("reaches the engine and can compact", func(t *testing.T) {
+		env := newTestEnvironment(t,
+			textScript("one"),
+			textScript("two"),
+			textScript("the summary"),
+		)
+		writeCompactionConfig(t, env, "compaction:\n  keep_recent_tokens: 1\n")
+
+		prepared := env.prepare(t)
+		collectEvents(prepared.Run(t.Context(), "first"))
+		collectEvents(prepared.Run(t.Context(), "second"))
+
+		require.True(t, prepared.CanCompact())
+
+		events := collectEvents(prepared.Compact(t.Context()))
+
+		require.Equal(
+			t,
+			engine.EndReasonTurn,
+			events[len(events)-1].Reason,
+			"events: %+v",
+			events,
+		)
+		require.Contains(t, eventTypeList(events), engine.EventCompactionEnd)
+
+		branch := prepared.Branch()
+		require.Equal(t, session.KindCompaction, branch[len(branch)-1].Kind)
+		require.Equal(t, "the summary", branch[len(branch)-1].CompactionSummary)
+	})
+
+	t.Run("reads the prompt override from the home directory", func(t *testing.T) {
+		env := newTestEnvironment(t,
+			textScript("one"),
+			textScript("two"),
+			textScript("the summary"),
+		)
+		writeCompactionConfig(t, env, "compaction:\n  keep_recent_tokens: 1\n")
+
+		override := filepath.Join(os.Getenv("HOME"), ".rienda", "COMPACTION.md")
+		//nolint:gosec // the path lives in a test temporary directory.
+		require.NoError(t, os.MkdirAll(filepath.Dir(override), 0o750))
+		//nolint:gosec // the path lives in a test temporary directory.
+		require.NoError(t, os.WriteFile(override, []byte("My own format."), 0o600))
+
+		prepared := env.prepare(t)
+		collectEvents(prepared.Run(t.Context(), "first"))
+		collectEvents(prepared.Run(t.Context(), "second"))
+		collectEvents(prepared.Compact(t.Context()))
+
+		require.Len(t, env.provider.requests, 3)
+		require.Equal(t, "My own format.", env.provider.requests[2].Messages[0].Content)
+	})
+
+	t.Run("carries keep_recent_tokens into the procedure", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		// A budget larger than the whole conversation leaves nothing to
+		// summarize, so the procedure refuses and nothing can be compacted.
+		writeCompactionConfig(t, env, "compaction:\n  keep_recent_tokens: 100000\n")
+
+		prepared := env.prepare(t)
+		collectEvents(prepared.Run(t.Context(), "first"))
+
+		require.False(t, prepared.CanCompact())
+
+		events := collectEvents(prepared.Compact(t.Context()))
+
+		require.Equal(t, engine.EndReasonTurn, events[len(events)-1].Reason)
+		require.NotContains(t, eventTypeList(events), engine.EventCompactionStart)
+	})
+
+	t.Run("uses the declared summarization model", func(t *testing.T) {
+		env := newTestEnvironment(t,
+			textScript("one"),
+			textScript("two"),
+			textScript("the summary"),
+		)
+		writeCompactionConfig(t, env, "compaction:\n"+
+			"  keep_recent_tokens: 1\n"+
+			"  model: fake/summarizer\n")
+
+		prepared := env.prepare(t)
+		collectEvents(prepared.Run(t.Context(), "first"))
+		collectEvents(prepared.Run(t.Context(), "second"))
+		collectEvents(prepared.Compact(t.Context()))
+
+		require.Len(t, env.provider.requests, 3)
+		require.Equal(t, "gpt-summary", env.provider.requests[2].Model)
+	})
+}
+
+// eventTypeList returns the types of a list of events.
+func eventTypeList(events []engine.Event) []engine.EventType {
+	types := make([]engine.EventType, 0, len(events))
+	for _, event := range events {
+		types = append(types, event.Type)
+	}
+	return types
 }

@@ -34,6 +34,11 @@ func (e *Engine) Run(ctx context.Context, prompt string) <-chan Event {
 	events := make(chan Event, eventBuffer)
 	go func() {
 		defer close(events)
+		if !e.enter() {
+			fail(events, errRunInFlight)
+			return
+		}
+		defer e.leave()
 		e.run(ctx, prompt, events)
 	}()
 	return events
@@ -72,13 +77,38 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	// The session identifier travels with the request so providers can group
 	// the calls of one conversation.
 	requestCtx := llm.WithSessionID(ctx, e.store.ID())
+
+	// At most one automatic compaction happens per run: without the guard a
+	// stubborn threshold would turn into a loop.
+	compacted := false
 	for {
 		if ctx.Err() != nil {
 			emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})
 			return
 		}
 
-		response, err := e.generate(requestCtx, events)
+		request, err := e.request()
+		if err != nil {
+			fail(events, err)
+			return
+		}
+		if !compacted && e.shouldCompact(request) {
+			compacted = true
+			if err := e.compactBranch(requestCtx, events); err != nil {
+				if ctx.Err() != nil {
+					emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})
+					return
+				}
+				fail(events, err)
+				return
+			}
+			if request, err = e.request(); err != nil {
+				fail(events, err)
+				return
+			}
+		}
+
+		response, err := e.generate(requestCtx, events, request)
 		if err != nil {
 			if ctx.Err() != nil {
 				emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})

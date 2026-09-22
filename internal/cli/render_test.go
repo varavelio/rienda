@@ -205,3 +205,39 @@ func TestRender(t *testing.T) {
 		require.EqualError(t, err, "the run was interrupted")
 	})
 }
+
+// TestRenderCompaction verifies the compaction notice of a non-interactive run.
+func TestRenderCompaction(t *testing.T) {
+	t.Run("writes one line to stderr on the start event", func(t *testing.T) {
+		stdout, stderr := &strings.Builder{}, &strings.Builder{}
+
+		err := render(eventsOf(
+			engine.Event{Type: engine.EventCompactionStart},
+			engine.Event{Type: engine.EventCompactionEnd},
+			engine.Event{Type: engine.EventTextDelta, Text: "answer"},
+			engine.Event{Type: engine.EventMessageEnd},
+			engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn},
+		), stdout, stderr)
+
+		require.NoError(t, err)
+		require.Equal(t, "answer\n", stdout.String(), "standard output carries only the answer")
+		require.Equal(
+			t,
+			"compaction: the conversation was compacted\n",
+			stderr.String(),
+			"the notice says what happened and nothing about why",
+		)
+	})
+
+	t.Run("writes nothing without a compaction", func(t *testing.T) {
+		stdout, stderr := &strings.Builder{}, &strings.Builder{}
+
+		err := render(eventsOf(
+			engine.Event{Type: engine.EventTextDelta, Text: "answer"},
+			engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn},
+		), stdout, stderr)
+
+		require.NoError(t, err)
+		require.Empty(t, stderr.String())
+	})
+}
