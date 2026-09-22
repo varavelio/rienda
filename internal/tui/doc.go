@@ -56,8 +56,13 @@
 // seconds, runs it, so a stray key never cancels a run nor closes a session.
 //
 // The command center (ctrl+p) starts a new session, reopens the list that
-// starts a new one or continues a previous one, shows the tree of the session,
-// compacts the conversation on demand, and holds the options of the harness.
+// starts a new one or continues a previous one, names the session, shows the
+// tree of the session, compacts the conversation on demand, and holds the
+// options of the harness. Naming the session gives it the title the start list
+// offers it under, which is how a session the user comes back to is found
+// again; an empty name removes it and leaves the one derived from the first
+// message in its place. The name is shown in the identity line of the
+// conversation, after the session id, only when the user gave one.
 // The manual compaction is offered only when the branch still holds something
 // to summarize and no run is in flight, and it shares the code path, the prompt
 // and the events of an automatic one. A command the interface cannot run stays

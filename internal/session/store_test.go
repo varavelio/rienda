@@ -668,6 +668,126 @@ func TestSetTag(t *testing.T) {
 	})
 }
 
+// TestSetTitle verifies naming a session, which is what lets the user find it
+// again in the list of stored sessions.
+func TestSetTitle(t *testing.T) {
+	t.Run("names a session and survives reopening", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent: "coder",
+			Model: "test/model",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+
+		appendMessage(t, store, llm.RoleUser, "hello")
+		require.NoError(t, store.SetTitle("Fix the parser"))
+		require.Equal(t, "Fix the parser", store.Info().Title)
+		require.True(t, store.Info().Named)
+
+		sessionID := store.ID()
+		require.NoError(t, store.Close())
+
+		reloaded, err := Open(dir, sessionID, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reloaded.Close()) })
+
+		require.Equal(t, "Fix the parser", reloaded.Info().Title)
+		require.True(t, reloaded.Info().Named)
+	})
+
+	t.Run("names a session that holds no message", func(t *testing.T) {
+		store := newTestStore(t)
+
+		require.NoError(t, store.SetTitle("Fix the parser"))
+
+		require.Equal(t, "Fix the parser", store.Info().Title)
+		require.True(t, store.Info().Named)
+	})
+
+	t.Run("leaves the derived title unnamed", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "hello")
+
+		require.Equal(t, "hello", store.Info().Title)
+		require.False(t, store.Info().Named)
+	})
+
+	t.Run("keeps the name when the session is branched", func(t *testing.T) {
+		store := newTestStore(t)
+		root := appendMessage(t, store, llm.RoleUser, "root")
+		appendMessage(t, store, llm.RoleAssistant, "answered")
+		require.NoError(t, store.SetTitle("Fix the parser"))
+
+		require.NoError(t, store.SetLeaf(root.ID))
+		appendMessage(t, store, llm.RoleAssistant, "other")
+
+		require.Equal(t, "Fix the parser", store.Info().Title, "the name belongs to the session")
+	})
+
+	t.Run("replaces the name of a session", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "hello")
+
+		require.NoError(t, store.SetTitle("first"))
+		require.NoError(t, store.SetTitle("second"))
+
+		require.Equal(t, "second", store.Info().Title)
+	})
+
+	t.Run("falls back to the derived title when the name is removed", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "Fix the bug")
+		require.NoError(t, store.SetTitle("named"))
+
+		require.NoError(t, store.SetTitle(""))
+
+		require.Equal(t, "Fix the bug", store.Info().Title)
+	})
+
+	t.Run("keeps the name over the derived title", func(t *testing.T) {
+		store := newTestStore(t)
+		require.NoError(t, store.SetTitle("named"))
+		appendMessage(t, store, llm.RoleUser, "Fix the bug")
+
+		require.Equal(t, "named", store.Info().Title)
+	})
+
+	t.Run("folds the name into a single line", func(t *testing.T) {
+		store := newTestStore(t)
+
+		require.NoError(t, store.SetTitle("  Fix\n\n the   parser  "))
+
+		require.Equal(t, "Fix the parser", store.Info().Title)
+	})
+
+	t.Run("writes nothing when the name does not change", func(t *testing.T) {
+		store := newTestStore(t)
+		require.NoError(t, store.SetTitle("named"))
+		before := readLines(t, store)
+
+		require.NoError(t, store.SetTitle(" named "))
+
+		require.Equal(t, before, readLines(t, store))
+	})
+
+	t.Run("leaves the update time untouched", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "hello")
+		updated := store.Info().UpdatedAt
+
+		require.NoError(t, store.SetTitle("named"))
+
+		require.Equal(t, updated, store.Info().UpdatedAt)
+	})
+
+	t.Run("rejects a closed store", func(t *testing.T) {
+		store := newTestStore(t)
+		require.NoError(t, store.Close())
+
+		require.ErrorContains(t, store.SetTitle("named"), "store is closed")
+	})
+}
+
 // TestOpen verifies session reopening.
 func TestOpen(t *testing.T) {
 	t.Run("round trips a stored session", func(t *testing.T) {
@@ -798,6 +918,25 @@ func TestList(t *testing.T) {
 		require.Equal(t, "first session", infos[1].Title)
 	})
 
+	t.Run("names the sessions the user renamed", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(
+			t.Context(),
+			dir,
+			Header{Agent: "coder", Model: "test/model"},
+			&stubGenerator{},
+		)
+		require.NoError(t, err)
+		appendMessage(t, store, llm.RoleUser, "first message")
+		require.NoError(t, store.SetTitle("Fix the parser"))
+		require.NoError(t, store.Close())
+
+		infos, err := List(dir)
+		require.NoError(t, err)
+		require.Len(t, infos, 1)
+		require.Equal(t, "Fix the parser", infos[0].Title)
+	})
+
 	t.Run("ignores unrelated files", func(t *testing.T) {
 		dir := t.TempDir()
 		store, err := Create(
@@ -869,14 +1008,22 @@ func TestDefaultDir(t *testing.T) {
 	require.True(t, strings.HasSuffix(filepath.ToSlash(dir), "/.rienda/sessions"))
 }
 
-// TestTruncateTitle verifies title truncation.
-func TestTruncateTitle(t *testing.T) {
+// TestOneLine verifies folding a text into a single line of at most maxRunes.
+func TestOneLine(t *testing.T) {
 	t.Run("keeps short texts untouched", func(t *testing.T) {
-		require.Equal(t, "hello", truncateTitle("hello", 10))
+		require.Equal(t, "hello", oneLine("hello", 10))
+	})
+
+	t.Run("folds whitespace and newlines into single spaces", func(t *testing.T) {
+		require.Equal(t, "Fix the bug", oneLine("  Fix\n\n the\tbug \n", 40))
 	})
 
 	t.Run("cuts long texts with an ellipsis", func(t *testing.T) {
-		require.Equal(t, "hello…", truncateTitle("hello world", 5))
+		require.Equal(t, "hello…", oneLine("hello world", 5))
+	})
+
+	t.Run("keeps an empty text empty", func(t *testing.T) {
+		require.Empty(t, oneLine("   \n ", 10))
 	})
 }
 

@@ -17,7 +17,8 @@ import (
 // Extension is the file extension of session files.
 const Extension = ".jsonl"
 
-// maxTitleRunes caps the length of the title derived from the first user message.
+// maxTitleRunes caps the length of a session title, whether it is derived from
+// the first user message or written by the user.
 const maxTitleRunes = 80
 
 // createFlags are the flags used to create session files.
@@ -49,8 +50,14 @@ type Info struct {
 	// Workdir is the absolute path the session runs commands in.
 	Workdir string
 
-	// Title is a short summary derived from the first user message.
+	// Title is the name of the session: the one the user gave it, or a short
+	// summary derived from the first user message when it carries none.
 	Title string
+
+	// Named reports that the user named the session, so a front end can show
+	// the name the user chose apart from the one derived from the first
+	// message.
+	Named bool
 
 	// CreatedAt is the moment the session was created.
 	CreatedAt time.Time
@@ -69,6 +76,7 @@ type Store struct {
 	entries   []Entry
 	index     map[string]int
 	leaf      string
+	title     string
 }
 
 // DefaultDir returns the base directory that groups the sessions of every
@@ -164,7 +172,7 @@ func Open(dir, id string, generator IDGenerator) (*Store, error) {
 	}
 
 	path := filepath.Join(dir, id+Extension)
-	header, entries, leaf, err := load(dir, id)
+	header, entries, leaf, title, err := load(dir, id)
 	if err != nil {
 		return nil, err
 	}
@@ -183,10 +191,11 @@ func Open(dir, id string, generator IDGenerator) (*Store, error) {
 		path:      path,
 		file:      file,
 		generator: generator,
-		info:      infoFrom(header, entries),
+		info:      infoFrom(header, entries, title),
 		entries:   entries,
 		index:     index,
 		leaf:      leaf,
+		title:     title,
 	}, nil
 }
 
@@ -212,12 +221,12 @@ func List(dir string) ([]Info, error) {
 		}
 
 		id := strings.TrimSuffix(name, Extension)
-		header, entries, _, err := load(dir, id)
+		header, entries, _, title, err := load(dir, id)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		infos = append(infos, infoFrom(header, entries))
+		infos = append(infos, infoFrom(header, entries, title))
 	}
 
 	slices.SortFunc(infos, func(a, b Info) int {
@@ -449,7 +458,7 @@ func (s *Store) Append(ctx context.Context, entry Entry) (Entry, error) {
 	s.index[id] = len(s.entries) - 1
 	s.leaf = id
 	s.info.UpdatedAt = now
-	if s.info.Title == "" && entry.Message.Role == llm.RoleUser {
+	if s.title == "" && s.info.Title == "" && entry.Message.Role == llm.RoleUser {
 		s.info.Title = titleFromMessage(entry.Message)
 	}
 	return entry, nil
@@ -595,6 +604,43 @@ func (s *Store) SetTag(id, tag string) error {
 	return nil
 }
 
+// SetTitle names the session, an empty title removing the name it carries and
+// leaving the derived one in its place. The name belongs to the whole
+// conversation rather than to a branch, so it is recorded by a marker of its
+// own and never rewrites a message.
+//
+// Setting the title the session already carries changes nothing.
+func (s *Store) SetTitle(title string) error {
+	if s.file == nil {
+		return errors.New("session: the store is closed")
+	}
+
+	title = oneLine(title, maxTitleRunes)
+	if s.title == title {
+		return nil
+	}
+
+	line, err := encodeLine(storedTitle{
+		Kind:      KindTitle,
+		CreatedAt: time.Now().UTC(),
+		Title:     title,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := s.file.Write(line); err != nil {
+		return fmt.Errorf("session: write %s: %w", s.path, err)
+	}
+
+	s.title = title
+	s.info.Title = title
+	s.info.Named = title != ""
+	if s.info.Title == "" {
+		s.info.Title = deriveTitle(s.entries)
+	}
+	return nil
+}
+
 // Close releases the session file. It is safe to call more than once.
 func (s *Store) Close() error {
 	if s.file == nil {
@@ -616,28 +662,31 @@ func (s *Store) known(id string) bool {
 }
 
 // load reads and decodes one stored session.
-func load(dir, id string) (storedHeader, []Entry, string, error) {
+func load(dir, id string) (storedHeader, []Entry, string, string, error) {
 	path := filepath.Join(dir, id+Extension)
 	data, err := os.ReadFile(path) //nolint:gosec // validated id.
 	if err != nil {
-		return storedHeader{}, nil, "", fmt.Errorf("session: open %s: %w", path, err)
+		return storedHeader{}, nil, "", "", fmt.Errorf("session: open %s: %w", path, err)
 	}
 
-	header, entries, leaf, err := decode(data)
+	header, entries, leaf, title, err := decode(data)
 	if err != nil {
-		return storedHeader{}, nil, "", fmt.Errorf("session %s: %w", path, err)
+		return storedHeader{}, nil, "", "", fmt.Errorf("session %s: %w", path, err)
 	}
-	return header, entries, leaf, nil
+	return header, entries, leaf, title, nil
 }
 
-// infoFrom builds the metadata of a decoded session.
-func infoFrom(header storedHeader, entries []Entry) Info {
+// infoFrom builds the metadata of a decoded session. The title is the one the
+// user gave the session, falling back to the one derived from its first user
+// message when it carries none.
+func infoFrom(header storedHeader, entries []Entry, title string) Info {
 	info := Info{
 		ID:        header.ID,
 		Agent:     header.Agent,
 		Model:     header.Model,
 		Workdir:   header.Workdir,
-		Title:     deriveTitle(entries),
+		Title:     effectiveTitle(title, entries),
+		Named:     title != "",
 		CreatedAt: header.CreatedAt,
 		UpdatedAt: header.CreatedAt,
 	}
@@ -645,6 +694,15 @@ func infoFrom(header storedHeader, entries []Entry) Info {
 		info.UpdatedAt = entries[len(entries)-1].CreatedAt
 	}
 	return info
+}
+
+// effectiveTitle returns the name of a session: the one the user gave it when
+// it carries one, the one derived from its first user message otherwise.
+func effectiveTitle(title string, entries []Entry) string {
+	if title != "" {
+		return title
+	}
+	return deriveTitle(entries)
 }
 
 // deriveTitle builds a single line title from the first user message.
@@ -666,16 +724,18 @@ func titleFromMessage(message llm.Message) string {
 		if block.Type != llm.BlockText {
 			continue
 		}
-		text := strings.Join(strings.Fields(block.Text), " ")
-		if text != "" {
-			return truncateTitle(text, maxTitleRunes)
+		if text := oneLine(block.Text, maxTitleRunes); text != "" {
+			return text
 		}
 	}
 	return ""
 }
 
-// truncateTitle cuts text to maxRunes, appending an ellipsis when it cuts.
-func truncateTitle(text string, maxRunes int) string {
+// oneLine folds text into a single line of at most maxRunes, cutting it with an
+// ellipsis when it does not fit. Titles are shown in lists and stored in one
+// line, so every title of the session goes through it.
+func oneLine(text string, maxRunes int) string {
+	text = strings.Join(strings.Fields(text), " ")
 	runes := []rune(text)
 	if len(runes) <= maxRunes {
 		return text

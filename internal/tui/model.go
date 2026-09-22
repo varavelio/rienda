@@ -8,6 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -19,6 +20,14 @@ import (
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/tokens"
 )
+
+// renamePrompt opens the input that names the session, which reads as the
+// label of the session it is about to name.
+const renamePrompt = "name: "
+
+// renamePromptWidth is the number of columns the rename input spends on its
+// prompt.
+const renamePromptWidth = len(renamePrompt)
 
 // brandRows is the number of rows the identity region of every phase
 // occupies: the identity line, the separator under it and the padding below
@@ -250,6 +259,13 @@ var commandList = []command{
 		Open:  (*model).openStart,
 	},
 	{
+		Label:   "Rename session",
+		Note:    "name the session to find it again in the list",
+		NoteOff: (*model).renameNote,
+		Open:    (*model).renameSession,
+		Enabled: (*model).renameReady,
+	},
+	{
 		Label:   "Tree",
 		Note:    "navigate the session tree and return to an earlier turn",
 		Open:    (*model).openTree,
@@ -322,6 +338,10 @@ type Session interface {
 	// SetTag replaces the tag of the entry identified by id, an empty tag
 	// removing the one it carries.
 	SetTag(id, tag string) error
+
+	// SetTitle names the session, an empty title removing the name it carries
+	// and leaving the one derived from its first user message in its place.
+	SetTitle(title string) error
 
 	// Run starts a run and returns the channel carrying its events.
 	Run(ctx context.Context, prompt string) <-chan engine.Event
@@ -486,6 +506,17 @@ type model struct {
 	picker   filter
 	commands filter
 
+	// rename edits the name of the session while renaming is set.
+	rename textinput.Model
+
+	// renaming reports that the rename input holds the keys instead of the
+	// query of the command center.
+	renaming bool
+
+	// renameErr reports the failure of the last change to the session, which
+	// the command center shows instead of leaving it with the user.
+	renameErr string
+
 	session Session
 	events  <-chan engine.Event
 	cancel  context.CancelFunc
@@ -581,6 +612,7 @@ func newModel(cfg modelConfig) *model {
 		preparing:     selectedAgentID(cfg),
 		preferences:   defaultPreferences(),
 		input:         input,
+		rename:        newRenameInput(styles, defaultDarkBackground),
 		conversation:  newConversation(),
 		hasDarkBG:     defaultDarkBackground,
 		newSession:    cfg.newSession,
@@ -690,6 +722,18 @@ func newInputStyles(base styles, isDark bool) textarea.Styles {
 	return input
 }
 
+// newRenameInput builds the input that names the session, which shares the
+// styles of the query inputs so it reads as another line of the command
+// center.
+func newRenameInput(base styles, isDark bool) textinput.Model {
+	input := textinput.New()
+	input.Prompt = renamePrompt
+	input.Placeholder = "name, empty removes it"
+	input.SetStyles(newFilterStyles(base, isDark))
+	input.Blur()
+	return input
+}
+
 // Init starts the interface.
 func (m *model) Init() tea.Cmd {
 	if m.phase == phasePreparing {
@@ -769,6 +813,11 @@ func (m *model) routeInput(msg tea.Msg) (tea.Cmd, bool) {
 	case phasePicker:
 		return m.picker.update(msg), true
 	case phaseSettings:
+		if m.renaming {
+			var cmd tea.Cmd
+			m.rename, cmd = m.rename.Update(msg)
+			return cmd, true
+		}
 		return m.commands.update(msg), true
 	case phaseTree:
 		return m.tree.update(msg), true
@@ -788,6 +837,7 @@ func (m *model) applyBackground(isDark bool) {
 	m.start.setStyles(m.styles, isDark)
 	m.picker.setStyles(m.styles, isDark)
 	m.commands.setStyles(m.styles, isDark)
+	m.rename.SetStyles(newFilterStyles(m.styles, isDark))
 	m.tree.setStyles(m.styles, isDark)
 	m.invalidateTranscript()
 	m.refreshTranscript()
@@ -991,6 +1041,7 @@ func (m *model) toggleSettings() tea.Cmd {
 	m.returnPhase = m.phase
 	m.phase = phaseSettings
 	m.commands.clear()
+	m.clearRename()
 	m.mention = mention{}
 	m.input.Blur()
 	return nil
@@ -998,6 +1049,7 @@ func (m *model) toggleSettings() tea.Cmd {
 
 // closeSettings returns to the phase the command center was opened from.
 func (m *model) closeSettings() tea.Cmd {
+	m.clearRename()
 	if m.returnPhase != phaseChat {
 		m.phase = m.returnPhase
 		return nil
@@ -1084,6 +1136,87 @@ func (m *model) compactContext() tea.Cmd {
 	return tea.Batch(show, m.spin(), streamEvents(m.events))
 }
 
+// renameReady reports whether the session can be named: it needs an open
+// session whose run is not in flight, because a store is not safe for
+// concurrent use.
+func (m *model) renameReady() bool {
+	return m.session != nil && !m.running
+}
+
+// renameNote explains why the session cannot be named, ready to be shown in
+// place of the note of the command. It returns nothing when the command can
+// run, which lets the caller keep the default note. The reason comes from the
+// same check the command runs on, so the explanation can never disagree with
+// the availability of the command.
+func (m *model) renameNote() string {
+	switch {
+	case m.session == nil:
+		return "open a session first"
+	case m.running:
+		return "a run is in flight"
+	default:
+		return ""
+	}
+}
+
+// renameSession opens the input that names the session, offering the name the
+// user gave it. A session the user never named opens an empty input, so saving
+// it unchanged never turns the name derived from the first message into one
+// the user did not write.
+func (m *model) renameSession() tea.Cmd {
+	if !m.renameReady() {
+		return nil
+	}
+
+	info := m.session.Info()
+	m.renaming = true
+	m.renameErr = ""
+	m.commands.blur()
+	if info.Named {
+		m.rename.SetValue(info.Title)
+	}
+	m.rename.CursorEnd()
+	return m.rename.Focus()
+}
+
+// handleRenameKey edits the name of the session: enter stores it and escape
+// leaves it as it was.
+func (m *model) handleRenameKey(key tea.KeyPressMsg) tea.Cmd {
+	switch key.String() {
+	case keyEnter:
+		return m.saveRename()
+	case keyEscape:
+		m.clearRename()
+		return m.commands.focus()
+	}
+
+	var cmd tea.Cmd
+	m.rename, cmd = m.rename.Update(key)
+	return cmd
+}
+
+// saveRename names the session with the text typed into the input. An empty
+// name removes the one the session carries, so the list falls back to the one
+// derived from its first message.
+func (m *model) saveRename() tea.Cmd {
+	if err := m.session.SetTitle(m.rename.Value()); err != nil {
+		m.renameErr = err.Error()
+		return nil
+	}
+
+	m.clearRename()
+	return m.commands.focus()
+}
+
+// clearRename drops the rename in progress, if any, leaving the command center
+// as it found it. It is safe to call when no rename is in progress.
+func (m *model) clearRename() {
+	m.renaming = false
+	m.renameErr = ""
+	m.rename.Reset()
+	m.rename.Blur()
+}
+
 // openTree shows the tree of the open session: the turns of its conversation,
 // the branch the session runs and the tags that label them. The tree always
 // returns to the conversation it walks.
@@ -1094,6 +1227,7 @@ func (m *model) openTree() tea.Cmd {
 
 	m.buildTree()
 	m.phase = phaseTree
+	m.clearRename()
 	m.mention = mention{}
 	m.input.Blur()
 	return nil
@@ -1264,6 +1398,10 @@ func (m *model) showChat() tea.Cmd {
 // highlight and activates the command under it. Escape clears the query first
 // and then closes the command center.
 func (m *model) handleSettingsKey(key tea.KeyPressMsg) tea.Cmd {
+	if m.renaming {
+		return m.handleRenameKey(key)
+	}
+
 	switch key.String() {
 	case keyUp:
 		m.commands.move(-1)
@@ -1692,6 +1830,7 @@ func (m *model) resize(width, height int) {
 	m.start.setWidth(width)
 	m.picker.setWidth(width)
 	m.commands.setWidth(width)
+	m.rename.SetWidth(max(1, width-renamePromptWidth))
 	m.tree.setWidth(width)
 	m.syncInputHeight()
 	m.invalidateTranscript()

@@ -20,6 +20,10 @@ const (
 	// KindTag labels the entry it targets, so a turn of the conversation can
 	// be found again by what it is about.
 	KindTag Kind = "tag"
+	// KindTitle names the session, so the user finds it again in the list of
+	// stored sessions by what it is about. The marker describes the whole
+	// name, so the last one wins and an empty one removes it.
+	KindTitle Kind = "title"
 	// KindCompaction replaces every entry before the kept one with a summary
 	// of the conversation, so a session stays inside the context window of its
 	// model. The checkpoint hangs from the active leaf, so it belongs to the

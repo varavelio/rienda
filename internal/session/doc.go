@@ -23,15 +23,20 @@
 //	{"kind":"message","id":"01k5w9wr4ta9e5n6yk8r7s6t0b","parentId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"...","role":"assistant","responseModel":"kimi-k2","responseStopReason":"tool_use","blocks":[...]}
 //	{"kind":"leaf","targetId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"..."}
 //	{"kind":"tag","targetId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"...","tag":"bug"}
+//	{"kind":"title","createdAt":"...","title":"Fix the parser"}
 //	{"kind":"compaction","id":"...","parentId":"...","createdAt":"...","summary":"...","keptId":"...","tokensBefore":184203,"responseModel":"...","responseUsage":{...}}
 //
 // Files are append-only: branching in place never rewrites them, so every
-// branch stays recoverable. Two marker kinds carry the state of the session
+// branch stays recoverable. Three marker kinds carry the state of the session
 // instead of the conversation, and they are the only lines a session writes
 // without a user or a model turn behind them: a leaf marker moves the active
-// leaf, which is what SetLeaf persists, and a tag marker labels the entry it
-// targets, which is what SetTag persists. A marker always describes the state
-// in full, so the last one of each kind wins when the file is read again.
+// leaf, which is what SetLeaf persists; a tag marker labels the entry it
+// targets, which is what SetTag persists; and a title marker names the
+// session, which is what SetTitle persists. A marker always describes the
+// state in full, so the last one of each kind wins when the file is read
+// again. The title belongs to the whole conversation rather than to a branch,
+// so its marker carries no target, and the name of a session without one is
+// derived from its first user message.
 //
 // A compaction entry replaces every entry before its kept one with a summary
 // of the conversation, so a session stays inside the context window of its

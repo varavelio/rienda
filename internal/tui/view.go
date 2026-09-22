@@ -311,7 +311,7 @@ func (m *model) pickerLine(position int) string {
 func (m *model) viewSettings() string {
 	rows := m.headerRows(m.settingsIdentity())
 	rows = append(rows, "Command center", "")
-	rows = append(rows, m.filterRow(&m.commands), "")
+	rows = append(rows, m.settingsInputRow(), "")
 
 	first, last := m.commands.window(m.listRows())
 	for position := first; position < last; position++ {
@@ -321,13 +321,36 @@ func (m *model) viewSettings() string {
 		rows = append(rows, m.emptyLine("no matches"))
 	}
 
-	rows = append(rows, m.footerRows("type to filter · ↑/↓ move · enter run · esc close")...)
+	rows = append(rows, m.footerRows(m.settingsHints())...)
 	return strings.Join(rows, "\n")
 }
 
 // settingsIdentity renders the identity of the command center.
 func (m *model) settingsIdentity() string {
 	return m.brandIdentity() + m.styles.header.Render(" · settings")
+}
+
+// settingsInputRow renders the input of the command center: the name of the
+// session while it is edited, the query that narrows the commands otherwise.
+func (m *model) settingsInputRow() string {
+	if m.renaming {
+		return m.clip(m.rename.View())
+	}
+	return m.filterRow(&m.commands)
+}
+
+// settingsHints returns the keys the command center listens to, or the failure
+// of the last change to the session, which takes their place so the screen
+// reports it without leaving the command center.
+func (m *model) settingsHints() string {
+	switch {
+	case m.renameErr != "":
+		return "error: " + m.renameErr + " · esc cancel"
+	case m.renaming:
+		return "type a name · enter save · esc cancel"
+	default:
+		return "type to filter · ↑/↓ move · enter run · esc close"
+	}
 }
 
 // commandLine renders one entry of the command center. The commands that open
@@ -667,12 +690,17 @@ func (m *model) mentionList(rows int) string {
 }
 
 // chatIdentity renders the identity of the session: the brand followed by the
-// agent, the model and the session id.
+// agent, the model, the session id and, when the user named it, the name,
+// which closes the line so the reader sees the name the session is found under
+// in the list.
 func (m *model) chatIdentity() string {
 	info := m.session.Info()
 	parts := []string{info.Agent, info.Model}
 	if info.ID != "" {
 		parts = append(parts, info.ID)
+	}
+	if info.Named {
+		parts = append(parts, info.Title)
 	}
 	return m.brandIdentity() + m.styles.header.Render(" · "+strings.Join(parts, " · "))
 }

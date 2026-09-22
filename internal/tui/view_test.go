@@ -1544,3 +1544,49 @@ func commandPosition(t *testing.T, m *model, label string) int {
 	t.Fatalf("the command center holds no command %q", label)
 	return -1
 }
+
+// TestSettingsInput verifies the input row of the command center, which shows
+// the query that narrows the commands or the input that names the session.
+func TestSettingsInput(t *testing.T) {
+	t.Run("shows the query of the commands by default", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, pressCtrlP)
+		update(t, m, windowSize)
+
+		require.Contains(t, plain(m.render()), "Search commands")
+		require.Contains(t, plain(m.render()), "type to filter · ↑/↓ move · enter run · esc close")
+	})
+
+	t.Run("shows the name of the session while it is edited", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.info.Title = "named"
+		scripted.info.Named = true
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		update(t, m, windowSize)
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "name: named")
+		require.NotContains(t, view, "Search commands", "the query input gives way to the name")
+		require.Contains(t, view, "type a name · enter save · esc cancel")
+	})
+
+	t.Run("reports the failure of the session in place of the hints", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.titleErr = errors.New("boom")
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		typeName(t, m, "named")
+		update(t, m, pressEnter)
+		update(t, m, windowSize)
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "error: boom")
+		require.Contains(t, view, "esc cancel")
+		require.NotContains(t, view, "enter save", "the failure takes the place of the hints")
+	})
+}

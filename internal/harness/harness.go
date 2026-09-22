@@ -134,6 +134,15 @@ func (s *Session) SetTag(id, tag string) error {
 	return nil
 }
 
+// SetTitle names the session, an empty title removing the name it carries and
+// leaving the one derived from its first user message in its place.
+func (s *Session) SetTitle(title string) error {
+	if err := s.store.SetTitle(title); err != nil {
+		return fmt.Errorf("harness: %w", err)
+	}
+	return nil
+}
+
 // Prepare resolves the options and opens a session: the one identified by
 // Options.SessionID when it is set, or a new one owned by Options.AgentID.
 func Prepare(ctx context.Context, opts Options) (*Session, error) {

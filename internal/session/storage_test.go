@@ -27,6 +27,12 @@ func tagMarkerLine(id, tag string) string {
 	return `{"kind":"tag","targetId":"` + id + `","createdAt":"2026-09-16T10:15:33Z","tag":"` + tag + `"}`
 }
 
+// titleMarkerLine builds a title marker line naming the session, or removing
+// its name when title is empty.
+func titleMarkerLine(title string) string {
+	return `{"kind":"title","createdAt":"2026-09-16T10:15:33Z","title":"` + title + `"}`
+}
+
 // compactionLine builds a compaction line replacing everything before keptID.
 func compactionLine(id, parentID, keptID, summary string) string {
 	return `{"kind":"compaction","id":"` + id + `","parentId":"` + parentID + `",` +
@@ -114,7 +120,7 @@ func TestDecode(t *testing.T) {
 	t.Run("parses a session with messages", func(t *testing.T) {
 		data := validHeaderLine + "\n" + userMessageLine + "\n" + assistantMessageLine + "\n"
 
-		header, entries, leaf, err := decode([]byte(data))
+		header, entries, leaf, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Equal(t, "s1", header.ID)
@@ -132,7 +138,7 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("accepts a header without messages", func(t *testing.T) {
-		header, entries, leaf, err := decode([]byte(validHeaderLine + "\n"))
+		header, entries, leaf, _, err := decode([]byte(validHeaderLine + "\n"))
 		require.NoError(t, err)
 
 		require.Equal(t, "s1", header.ID)
@@ -146,7 +152,7 @@ func TestDecode(t *testing.T) {
 			`{"kind":"custom","id":"c1","data":true}` + "\n" +
 			assistantMessageLine + "\n"
 
-		_, entries, leaf, err := decode([]byte(data))
+		_, entries, leaf, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Len(t, entries, 2)
@@ -156,7 +162,7 @@ func TestDecode(t *testing.T) {
 	t.Run("skips blank lines", func(t *testing.T) {
 		data := validHeaderLine + "\n\n" + userMessageLine + "\n\n"
 
-		_, entries, _, err := decode([]byte(data))
+		_, entries, _, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Len(t, entries, 1)
@@ -166,7 +172,7 @@ func TestDecode(t *testing.T) {
 		data := validHeaderLine + "\n" + userMessageLine + "\n" +
 			assistantMessageLine + "\n" + leafMarkerLine("m1") + "\n"
 
-		_, entries, leaf, err := decode([]byte(data))
+		_, entries, leaf, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Len(t, entries, 2)
@@ -177,7 +183,7 @@ func TestDecode(t *testing.T) {
 		data := validHeaderLine + "\n" + userMessageLine + "\n" + leafMarkerLine("m1") + "\n" +
 			assistantMessageLine + "\n"
 
-		_, _, leaf, err := decode([]byte(data))
+		_, _, leaf, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Equal(t, "m2", leaf)
@@ -187,7 +193,7 @@ func TestDecode(t *testing.T) {
 		data := validHeaderLine + "\n" + userMessageLine + "\n" +
 			assistantMessageLine + "\n" + leafMarkerLine("") + "\n"
 
-		_, entries, leaf, err := decode([]byte(data))
+		_, entries, leaf, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Len(t, entries, 2)
@@ -200,7 +206,7 @@ func TestDecode(t *testing.T) {
 			tagMarkerLine("m1", "bug") + "\n" +
 			tagMarkerLine("m2", "review") + "\n"
 
-		_, entries, leaf, err := decode([]byte(data))
+		_, entries, leaf, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Equal(t, "bug", entries[0].Tag)
@@ -213,7 +219,7 @@ func TestDecode(t *testing.T) {
 			tagMarkerLine("m1", "bug") + "\n" +
 			tagMarkerLine("m1", "") + "\n"
 
-		_, entries, _, err := decode([]byte(data))
+		_, entries, _, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Empty(t, entries[0].Tag)
@@ -224,17 +230,61 @@ func TestDecode(t *testing.T) {
 			assistantMessageLine + "\n" + leafMarkerLine("m1") + "\n" +
 			tagMarkerLine("m1", "bug") + "\n"
 
-		_, _, leaf, err := decode([]byte(data))
+		_, _, leaf, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Equal(t, "m1", leaf)
+	})
+
+	t.Run("names the session with the title marker", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" +
+			titleMarkerLine("Fix the parser") + "\n"
+
+		_, entries, leaf, title, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Equal(t, "Fix the parser", title)
+		require.Len(t, entries, 1, "the title names the session, it adds no entry")
+		require.Equal(t, "m1", leaf, "the title leaves the leaf where it found it")
+	})
+
+	t.Run("keeps the last title of a session", func(t *testing.T) {
+		data := validHeaderLine + "\n" + titleMarkerLine("first") + "\n" +
+			titleMarkerLine("second") + "\n"
+
+		_, _, _, title, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Equal(t, "second", title)
+	})
+
+	t.Run("removes the title of a session with an empty marker", func(t *testing.T) {
+		data := validHeaderLine + "\n" + titleMarkerLine("first") + "\n" +
+			titleMarkerLine("") + "\n"
+
+		_, _, _, title, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Empty(t, title)
+	})
+
+	t.Run("keeps a leaf marker pending after a title", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" +
+			assistantMessageLine + "\n" + leafMarkerLine("m1") + "\n" +
+			titleMarkerLine("Fix the parser") + "\n"
+
+		_, _, leaf, title, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Equal(t, "m1", leaf, "renaming after a rewind never undoes the rewind")
+		require.Equal(t, "Fix the parser", title)
 	})
 
 	t.Run("decodes a compaction with its model and usage", func(t *testing.T) {
 		data := validHeaderLine + "\n" + userMessageLine + "\n" + assistantMessageLine + "\n" +
 			compactionLine("c1", "m2", "m1", "the summary") + "\n"
 
-		_, entries, leaf, err := decode([]byte(data))
+		_, entries, leaf, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Len(t, entries, 3)
@@ -253,7 +303,7 @@ func TestDecode(t *testing.T) {
 	t.Run("loads a file written before the kind existed", func(t *testing.T) {
 		data := validHeaderLine + "\n" + userMessageLine + "\n" + assistantMessageLine + "\n"
 
-		_, entries, leaf, err := decode([]byte(data))
+		_, entries, leaf, _, err := decode([]byte(data))
 		require.NoError(t, err)
 
 		require.Len(t, entries, 2)
@@ -400,7 +450,7 @@ func TestDecode(t *testing.T) {
 
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				_, _, _, err := decode([]byte(test.data))
+				_, _, _, _, err := decode([]byte(test.data))
 
 				require.ErrorContains(t, err, test.wantErr)
 			})

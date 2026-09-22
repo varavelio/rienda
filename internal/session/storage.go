@@ -61,6 +61,17 @@ type storedTag struct {
 	Tag       string    `json:"tag,omitempty"`
 }
 
+// storedTitle is a title marker line of a session file. An empty title removes
+// the name of the session, because a marker always describes the whole name.
+// The marker targets the session itself, not an entry, so it carries no
+// identifier: the name belongs to the whole conversation, whatever branch it
+// was written from.
+type storedTitle struct {
+	Kind      Kind      `json:"kind"`
+	CreatedAt time.Time `json:"createdAt"`
+	Title     string    `json:"title,omitempty"`
+}
+
 // storedCompaction is a compaction line of a session file. It reuses the
 // response fields of a message line for the summarization call, so the stored
 // usage of a session stays complete without a second concept.
@@ -267,23 +278,23 @@ func fromStoredBlock(block storedBlock) (llm.Block, error) {
 }
 
 // decode parses the contents of a session file.
-func decode(data []byte) (storedHeader, []Entry, string, error) {
+func decode(data []byte) (storedHeader, []Entry, string, string, error) {
 	lines := bytes.Split(data, []byte("\n"))
 	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
 		lines = lines[:len(lines)-1]
 	}
 	if len(lines) == 0 {
-		return storedHeader{}, nil, "", errors.New("the file is empty")
+		return storedHeader{}, nil, "", "", errors.New("the file is empty")
 	}
 
 	header, err := decodeHeader(lines[0])
 	if err != nil {
-		return storedHeader{}, nil, "", err
+		return storedHeader{}, nil, "", "", err
 	}
 
 	entries := make([]Entry, 0, len(lines)-1)
 	known := make(map[string]int, len(lines)-1)
-	leaf, pendingLeaf := "", ""
+	leaf, title, pendingLeaf := "", "", ""
 	lastWasLeaf := false
 
 	for i, line := range lines[1:] {
@@ -294,14 +305,14 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 
 		var envelope lineEnvelope
 		if err := json.Unmarshal(line, &envelope); err != nil {
-			return storedHeader{}, nil, "", fmt.Errorf("line %d: %w", lineNumber, err)
+			return storedHeader{}, nil, "", "", fmt.Errorf("line %d: %w", lineNumber, err)
 		}
 
 		switch envelope.Kind {
 		case KindMessage:
 			entry, err := decodeMessage(lineNumber, line, known)
 			if err != nil {
-				return storedHeader{}, nil, "", err
+				return storedHeader{}, nil, "", "", err
 			}
 			known[entry.ID] = len(entries)
 			entries = append(entries, entry)
@@ -311,7 +322,7 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 		case KindLeaf:
 			var marker storedLeaf
 			if err := json.Unmarshal(line, &marker); err != nil {
-				return storedHeader{}, nil, "", fmt.Errorf("line %d: %w", lineNumber, err)
+				return storedHeader{}, nil, "", "", fmt.Errorf("line %d: %w", lineNumber, err)
 			}
 			pendingLeaf = marker.TargetID
 			lastWasLeaf = true
@@ -319,11 +330,11 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 		case KindTag:
 			var marker storedTag
 			if err := json.Unmarshal(line, &marker); err != nil {
-				return storedHeader{}, nil, "", fmt.Errorf("line %d: %w", lineNumber, err)
+				return storedHeader{}, nil, "", "", fmt.Errorf("line %d: %w", lineNumber, err)
 			}
 			index, found := known[marker.TargetID]
 			if !found {
-				return storedHeader{}, nil, "", fmt.Errorf(
+				return storedHeader{}, nil, "", "", fmt.Errorf(
 					"line %d: the tag references unknown entry %q",
 					lineNumber,
 					marker.TargetID,
@@ -333,10 +344,21 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 			// leaves the leaf of the session where it found it.
 			entries[index].Tag = marker.Tag
 
+		case KindTitle:
+			var marker storedTitle
+			if err := json.Unmarshal(line, &marker); err != nil {
+				return storedHeader{}, nil, "", "", fmt.Errorf("line %d: %w", lineNumber, err)
+			}
+			// A title names the session without moving the conversation, so it
+			// leaves both the leaf and a leaf marker still pending in the file
+			// exactly where it found them: renaming after a rewind never undoes
+			// the rewind.
+			title = marker.Title
+
 		case KindCompaction:
 			entry, err := decodeCompaction(lineNumber, line, known)
 			if err != nil {
-				return storedHeader{}, nil, "", err
+				return storedHeader{}, nil, "", "", err
 			}
 			known[entry.ID] = len(entries)
 			entries = append(entries, entry)
@@ -355,7 +377,7 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 		// its very beginning.
 		if pendingLeaf != "" {
 			if _, found := known[pendingLeaf]; !found {
-				return storedHeader{}, nil, "", fmt.Errorf(
+				return storedHeader{}, nil, "", "", fmt.Errorf(
 					"the leaf marker references unknown entry %q",
 					pendingLeaf,
 				)
@@ -363,7 +385,7 @@ func decode(data []byte) (storedHeader, []Entry, string, error) {
 		}
 		leaf = pendingLeaf
 	}
-	return header, entries, leaf, nil
+	return header, entries, leaf, title, nil
 }
 
 // decodeHeader decodes and validates the header line.

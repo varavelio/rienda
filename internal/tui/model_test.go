@@ -34,8 +34,10 @@ type fakeSession struct {
 	prompts      []string
 	leaves       []string
 	tags         map[string]string
+	titles       []string
 	leafErr      error
 	tagErr       error
+	titleErr     error
 	context      tokens.Report
 	contextErr   error
 	refusal      compaction.Refusal
@@ -108,6 +110,17 @@ func (s *fakeSession) SetTag(id, tag string) error {
 	return nil
 }
 
+// SetTitle records the name given to the session.
+func (s *fakeSession) SetTitle(title string) error {
+	if s.titleErr != nil {
+		return s.titleErr
+	}
+	s.titles = append(s.titles, title)
+	s.info.Title = title
+	s.info.Named = title != ""
+	return nil
+}
+
 // Run records the prompt and returns the scripted event channel.
 func (s *fakeSession) Run(ctx context.Context, prompt string) <-chan engine.Event {
 	s.prompts = append(s.prompts, prompt)
@@ -152,6 +165,7 @@ var (
 // it.
 type storeSession struct {
 	t       *testing.T
+	dir     string
 	store   *session.Store
 	events  chan engine.Event
 	prompts []string
@@ -162,7 +176,8 @@ type storeSession struct {
 func newStoreSession(t *testing.T, messages ...llm.Message) *storeSession {
 	t.Helper()
 
-	store, err := session.Create(t.Context(), t.TempDir(), session.Header{
+	dir := t.TempDir()
+	store, err := session.Create(t.Context(), dir, session.Header{
 		Agent: "coder",
 		Model: "fake/test-model",
 	}, id.NewIDGenerator())
@@ -173,7 +188,7 @@ func newStoreSession(t *testing.T, messages ...llm.Message) *storeSession {
 		_, err := store.Append(t.Context(), session.Entry{Message: message})
 		require.NoError(t, err)
 	}
-	return &storeSession{t: t, store: store, events: make(chan engine.Event, 16)}
+	return &storeSession{t: t, dir: dir, store: store, events: make(chan engine.Event, 16)}
 }
 
 // Info returns the session metadata.
@@ -219,6 +234,11 @@ func (s *storeSession) SetLeaf(id string) error { return s.store.SetLeaf(id) }
 //
 //nolint:wrapcheck // the session reports the failure of the store as it is.
 func (s *storeSession) SetTag(id, tag string) error { return s.store.SetTag(id, tag) }
+
+// SetTitle names the session in the store.
+//
+//nolint:wrapcheck // the session reports the failure of the store as it is.
+func (s *storeSession) SetTitle(title string) error { return s.store.SetTitle(title) }
 
 // Run records the prompt, appends it to the store the way a run does, so the
 // tests see the branch a run opens, and returns the scripted event channel.
@@ -301,6 +321,26 @@ func typeTag(t *testing.T, m *model, tag string) {
 // eraseTag removes the trailing characters of the tag input of the tree, the
 // way the keyboard delivers a backspace.
 func eraseTag(t *testing.T, m *model, count int) {
+	t.Helper()
+
+	for range count {
+		update(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+}
+
+// typeName pushes text into the rename input of the command center, one
+// keystroke at a time.
+func typeName(t *testing.T, m *model, name string) {
+	t.Helper()
+
+	for _, glyph := range name {
+		update(t, m, tea.KeyPressMsg{Code: glyph, Text: string(glyph)})
+	}
+}
+
+// eraseName removes the trailing characters of the rename input, the way the
+// keyboard delivers a backspace.
+func eraseName(t *testing.T, m *model, count int) {
 	t.Helper()
 
 	for range count {
@@ -897,7 +937,8 @@ func TestModel(t *testing.T) {
 		update(t, m, pressDown)
 		update(t, m, pressDown)
 		update(t, m, pressDown)
-		require.Equal(t, 4, m.commands.cursor, "the options follow the commands")
+		update(t, m, pressDown)
+		require.Equal(t, 5, m.commands.cursor, "the options follow the commands")
 		update(t, m, pressEnter)
 		require.True(t, m.preferences.ExpandToolOutput)
 
@@ -912,7 +953,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressEnter)
 		require.False(t, m.preferences.RenderMarkdown)
 
-		require.Equal(t, 6, m.commands.cursor)
+		require.Equal(t, 7, m.commands.cursor)
 
 		update(t, m, pressDown)
 		require.Equal(
@@ -925,7 +966,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressUp)
 		require.Equal(
 			t,
-			6,
+			7,
 			m.commands.cursor,
 			"stepping up from the first command wraps to the last",
 		)
@@ -2497,6 +2538,203 @@ func TestCompactNote(t *testing.T) {
 			t,
 			plain(m.render()),
 			"summarize the oldest turns into a checkpoint",
+		)
+	})
+}
+
+// TestRenameSession verifies naming the session from the command center, which
+// is what lets the user find it again in the list of stored sessions.
+func TestRenameSession(t *testing.T) {
+	t.Run("names the session and offers the name it carries", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.info.Title = "named"
+		scripted.info.Named = true
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+
+		require.True(t, m.renaming)
+		require.Equal(t, "named", m.rename.Value(), "the input opens with the name it carries")
+		require.Contains(t, plain(m.render()), "name: named")
+		require.Contains(t, plain(m.render()), "type a name · enter save · esc cancel")
+
+		eraseName(t, m, len("named"))
+		typeName(t, m, "Fix the parser")
+		update(t, m, pressEnter)
+
+		require.False(t, m.renaming, "enter leaves the input")
+		require.Equal(t, []string{"Fix the parser"}, scripted.titles)
+		require.Equal(t, "Fix the parser", m.session.Info().Title)
+	})
+
+	t.Run("opens an empty input for a session the user never named", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.info.Title = "hello"
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+
+		require.Empty(t, m.rename.Value(), "the derived title is not offered as a name")
+	})
+
+	t.Run("removes the name with an empty input", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.info.Title = "named"
+		scripted.info.Named = true
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		eraseName(t, m, len("named"))
+		update(t, m, pressEnter)
+
+		require.Equal(t, []string{""}, scripted.titles)
+		require.Empty(t, m.session.Info().Title)
+	})
+
+	t.Run("leaves the name as it was on escape", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.info.Title = "named"
+		scripted.info.Named = true
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		typeName(t, m, " other")
+		update(t, m, pressEscape)
+
+		require.False(t, m.renaming)
+		require.Empty(t, scripted.titles, "escape stores nothing")
+		require.Equal(t, "named", m.session.Info().Title)
+		require.Contains(t, plain(m.render()), "Command center", "escape returns to the commands")
+	})
+
+	t.Run("reports the failure of the session", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.titleErr = errors.New("boom")
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		typeName(t, m, "named")
+		update(t, m, pressEnter)
+
+		require.True(t, m.renaming, "the input stays open so the name is not lost")
+		require.Contains(t, plain(m.render()), "error: boom")
+		require.Contains(t, plain(m.render()), "esc cancel")
+	})
+
+	t.Run("drops the rename when the command center closes", func(t *testing.T) {
+		m, _ := chatModel(t)
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		require.True(t, m.renaming)
+
+		update(t, m, pressEscape)
+		require.False(t, m.renaming)
+
+		update(t, m, pressCtrlP)
+		require.False(t, m.renaming, "the command center opens clean")
+		require.NotContains(t, plain(m.render()), "type a name")
+	})
+
+	t.Run("drops the rename when another screen opens", func(t *testing.T) {
+		m, _ := storeChat(t, textMessage(llm.RoleUser, "hello"))
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		require.True(t, m.renaming)
+
+		update(t, m, pressCtrlT)
+		require.Equal(t, phaseTree, m.phase)
+		require.False(t, m.renaming, "the tree opens clean")
+
+		update(t, m, pressEscape)
+		update(t, m, pressCtrlP)
+		require.NotContains(t, plain(m.render()), "type a name")
+	})
+
+	t.Run("stays away while the agent works", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		m.input.SetValue("hello")
+		require.NotNil(t, update(t, m, pressEnter))
+
+		require.False(t, m.renameReady())
+		require.Equal(t, "a run is in flight", m.renameNote())
+
+		update(t, m, pressCtrlP)
+		require.Contains(t, plain(m.render()), "Rename session  a run is in flight")
+
+		update(t, m, pressEnter)
+		require.False(t, m.renaming, "the command cannot open the input")
+		require.Empty(t, scripted.titles)
+	})
+
+	t.Run("stays away without a session", func(t *testing.T) {
+		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, 0, nil)
+		update(t, m, windowMsg(80, 24))
+
+		require.False(t, m.renameReady())
+		require.Equal(t, "open a session first", m.renameNote())
+	})
+
+	t.Run("names the session of the store and lists it under its name", func(t *testing.T) {
+		m, stored := storeChat(t, textMessage(llm.RoleUser, "hello"))
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		typeName(t, m, "Fix the parser")
+		update(t, m, pressEnter)
+
+		infos, err := session.List(stored.dir)
+		require.NoError(t, err)
+		require.Len(t, infos, 1)
+		require.Equal(t, "Fix the parser", infos[0].Title)
+		require.True(t, infos[0].Named)
+	})
+
+	t.Run("shows the name in the identity of the session", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		require.NotContains(t, plain(m.render()), "Fix the parser")
+
+		scripted.info.Title = "Fix the parser"
+		scripted.info.Named = true
+
+		require.Contains(t, plain(m.render()), "session-1 · Fix the parser")
+	})
+
+	t.Run("names the session of the store from an empty input", func(t *testing.T) {
+		m, stored := storeChat(t, textMessage(llm.RoleUser, "hello"))
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		require.Empty(t, m.rename.Value())
+
+		typeName(t, m, "Fix the parser")
+		update(t, m, pressEnter)
+
+		infos, err := session.List(stored.dir)
+		require.NoError(t, err)
+		require.Equal(t, "Fix the parser", infos[0].Title)
+	})
+
+	t.Run("hides the derived title from the identity of the session", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.info.Title = "hello"
+		scripted.info.Named = false
+
+		require.NotContains(
+			t,
+			plain(m.render()),
+			"hello",
+			"a session the user did not name shows no name",
 		)
 	})
 }

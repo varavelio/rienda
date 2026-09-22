@@ -486,6 +486,18 @@ func TestSession(t *testing.T) {
 		require.Empty(t, prepared.Tree()[0].Tag)
 	})
 
+	t.Run("names the session", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("hello"))
+		prepared := env.prepare(t)
+		collectEvents(prepared.Run(t.Context(), "say hello"))
+
+		require.NoError(t, prepared.SetTitle("Fix the parser"))
+		require.Equal(t, "Fix the parser", prepared.Info().Title)
+
+		require.NoError(t, prepared.SetTitle(""))
+		require.Equal(t, "say hello", prepared.Info().Title, "the derived title comes back")
+	})
+
 	t.Run("reports the turns it does not hold", func(t *testing.T) {
 		env := newTestEnvironment(t)
 		prepared := env.prepare(t)
