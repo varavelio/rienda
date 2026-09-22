@@ -1452,25 +1452,50 @@ func TestCompactionRendering(t *testing.T) {
 
 // TestCommandLine verifies the rendering of the command center entries.
 func TestCommandLine(t *testing.T) {
-	t.Run("renders a disabled command faint and explains why", func(t *testing.T) {
+	t.Run("keeps the cursor marker on a disabled command and explains why", func(t *testing.T) {
 		m, scripted := chatModel(t)
 		scripted.refused = true
 		scripted.refusal = compaction.Refusal{Kind: compaction.RefusalShort, Needed: 20000}
 		update(t, m, windowSize)
 
 		position := commandPosition(t, m, "Compact context")
+		m.commands.cursor = position
+
 		line := m.commandLine(position)
 
-		require.Contains(t, line, "Compact context")
 		require.Contains(t, plain(line), "needs 20k more tokens of history")
-		require.NotContains(t, line, "›", "a disabled command takes no highlight")
+		require.Contains(
+			t,
+			line,
+			cursorMark(true),
+			"the cursor stays visible on a command the user cannot run",
+		)
 		require.Contains(
 			t,
 			line,
 			m.styles.dim.Render("Compact context  needs 20k more tokens of history"),
 			"a disabled command stays faint",
 		)
+		require.NotContains(t, line, "› "+m.styles.selected.Render("Compact context"))
 	})
+
+	t.Run(
+		"leaves the cursor blank on a disabled command the selection is away from",
+		func(t *testing.T) {
+			m, scripted := chatModel(t)
+			scripted.refused = true
+			scripted.refusal = compaction.Refusal{Kind: compaction.RefusalShort, Needed: 20000}
+			update(t, m, windowSize)
+
+			position := commandPosition(t, m, "Compact context")
+			m.commands.cursor = 0
+
+			line := m.commandLine(position)
+
+			require.Contains(t, line, cursorMark(false))
+			require.NotContains(t, line, cursorMark(true))
+		},
+	)
 
 	t.Run("renders an enabled command with its own note", func(t *testing.T) {
 		m, _ := chatModel(t)
@@ -1483,6 +1508,19 @@ func TestCommandLine(t *testing.T) {
 			plain(m.commandLine(position)),
 			"summarize the oldest turns into a checkpoint",
 		)
+	})
+
+	t.Run("highlights the command the selection rests on", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowSize)
+
+		position := commandPosition(t, m, "New session")
+		m.commands.cursor = position
+
+		line := m.commandLine(position)
+
+		require.Contains(t, line, cursorMark(true))
+		require.Contains(t, line, m.styles.selected.Render("New session"))
 	})
 }
 

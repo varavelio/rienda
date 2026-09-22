@@ -204,12 +204,24 @@ func (m *model) emptyLine(text string) string {
 	return m.clip("  " + m.styles.dim.Render(text))
 }
 
+// cursorMark returns the gutter that opens a list row: the arrow that marks
+// the row the selection rests on, or a blank of the same width. It is defined
+// once so every list keeps its rows aligned, and it stays visible on a row the
+// user cannot activate, because the reader must always see where the selection
+// is.
+func cursorMark(selected bool) string {
+	if selected {
+		return "› "
+	}
+	return "  "
+}
+
 // row renders one list row, highlighted when it holds the cursor.
 func (m *model) row(highlighted bool, label string) string {
 	if highlighted {
-		return m.clip("› " + m.styles.selected.Render(label))
+		return m.clip(cursorMark(true) + m.styles.selected.Render(label))
 	}
-	return m.clip("  " + label)
+	return m.clip(cursorMark(false) + label)
 }
 
 // listRows returns the list rows that fit on screen outside the fixed lines of
@@ -318,9 +330,10 @@ func (m *model) settingsIdentity() string {
 // commandLine renders one entry of the command center. The commands that open
 // a screen carry no state, so they only show what they do; the options of the
 // harness also show whether they are on. A command the interface cannot run
-// right now stays faint and takes no highlight, so the list never promises a
-// screen it cannot open, and its note says why it cannot run so the reader is
-// never left guessing.
+// right now stays faint and never takes the highlight, so the list never
+// promises a screen it cannot open, and its note says why it cannot run so the
+// reader is never left guessing. It keeps the cursor marker, because the reader
+// must always see where the selection is.
 func (m *model) commandLine(position int) string {
 	entry := commandList[m.commands.shown[position]]
 	if entry.Enabled != nil && !entry.Enabled(m) {
@@ -330,7 +343,8 @@ func (m *model) commandLine(position int) string {
 				note = reason
 			}
 		}
-		return m.clip("  " + m.styles.dim.Render(entry.Label+"  "+note))
+		return m.clip(cursorMark(position == m.commands.cursor) +
+			m.styles.dim.Render(entry.Label+"  "+note))
 	}
 
 	label := m.row(position == m.commands.cursor, entry.Label)
@@ -411,11 +425,9 @@ func (m *model) treeLine(position int) string {
 	node := m.tree.nodes[m.tree.filter.shown[position]]
 	highlighted := position == m.tree.filter.cursor
 
-	cursor := "  "
-	if highlighted {
-		cursor = "› "
-	}
-	return m.clip(cursor + m.treeGutter(node) + " " + m.treeTurn(node, highlighted))
+	return m.clip(
+		cursorMark(highlighted) + m.treeGutter(node) + " " + m.treeTurn(node, highlighted),
+	)
 }
 
 // treeTurn renders the content of one turn of the tree, without the cursor and
