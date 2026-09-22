@@ -66,7 +66,7 @@ func (anthropicStream) payloads(turn Turn, sequence int, model string) ([]string
 
 	if turn.Text != "" {
 		current := index
-		start(&anthropicBlock{Type: "text", Text: ""})
+		start(&anthropicBlock{Type: wireText, Text: ""})
 		for _, fragment := range chunkText(turn.Text, turn.Chunks) {
 			delta(current, anthropicBlockDelta{Type: "text_delta", Text: fragment})
 		}
@@ -81,7 +81,7 @@ func (anthropicStream) payloads(turn Turn, sequence int, model string) ([]string
 
 		current := index
 		start(&anthropicBlock{
-			Type:  "tool_use",
+			Type:  wireToolUse,
 			ID:    callID(call, sequence, callIndex),
 			Name:  call.Name,
 			Input: json.RawMessage("{}"),
@@ -95,7 +95,7 @@ func (anthropicStream) payloads(turn Turn, sequence int, model string) ([]string
 	if !turn.Truncate {
 		stopReason := "end_turn"
 		if len(turn.Calls) > 0 {
-			stopReason = "tool_use"
+			stopReason = wireToolUse
 		}
 		builder.add(anthropicEnvelope{
 			Type:  "message_delta",
@@ -112,6 +112,57 @@ func (anthropicStream) payloads(turn Turn, sequence int, model string) ([]string
 	return payloads, nil
 }
 
+// complete returns the complete JSON body of one message, which a
+// non-streamed call receives.
+func (anthropicStream) complete(turn Turn, sequence int, model string) (string, error) {
+	content := make([]anthropicBlock, 0, 3)
+	if turn.Thinking != "" {
+		content = append(content, anthropicBlock{Type: "thinking", Thinking: turn.Thinking})
+	}
+	if turn.Text != "" {
+		content = append(content, anthropicBlock{Type: wireText, Text: turn.Text})
+	}
+	for index, call := range turn.Calls {
+		arguments, err := argumentsOf(call)
+		if err != nil {
+			return "", err
+		}
+		content = append(content, anthropicBlock{
+			Type:  wireToolUse,
+			ID:    callID(call, sequence, index),
+			Name:  call.Name,
+			Input: json.RawMessage(arguments),
+		})
+	}
+
+	stopReason := "end_turn"
+	if len(turn.Calls) > 0 {
+		stopReason = wireToolUse
+	}
+
+	response := anthropicMessagePayload{
+		ID:         responseID("msg", sequence),
+		Type:       wireMessage,
+		Role:       wireAssistant,
+		Model:      model,
+		Content:    content,
+		StopReason: stopReason,
+	}
+	if turn.Usage != nil {
+		response.Usage = &anthropicUsage{
+			InputTokens:          turn.Usage.InputTokens,
+			OutputTokens:         turn.Usage.OutputTokens,
+			CacheReadInputTokens: turn.Usage.CacheReadTokens,
+		}
+	}
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return "", fmt.Errorf("anthropic complete response: %w", err)
+	}
+	return string(encoded), nil
+}
+
 // anthropicEnvelope is one streamed event of the Messages protocol.
 type anthropicEnvelope struct {
 	Type         string                   `json:"type"`
@@ -122,11 +173,16 @@ type anthropicEnvelope struct {
 	Usage        *anthropicUsage          `json:"usage,omitempty"`
 }
 
-// anthropicMessagePayload is the message of a message_start event.
+// anthropicMessagePayload is the message of a message_start event and the
+// complete body of a non-streamed message.
 type anthropicMessagePayload struct {
-	ID    string          `json:"id"`
-	Model string          `json:"model"`
-	Usage *anthropicUsage `json:"usage,omitempty"`
+	ID         string           `json:"id"`
+	Type       string           `json:"type,omitempty"`
+	Role       string           `json:"role,omitempty"`
+	Model      string           `json:"model"`
+	Content    []anthropicBlock `json:"content,omitempty"`
+	StopReason string           `json:"stop_reason,omitempty"`
+	Usage      *anthropicUsage  `json:"usage,omitempty"`
 }
 
 // anthropicBlock is one streamed content block. Only the fields valid for its
@@ -332,7 +388,7 @@ func (b AnthropicBlock) ContentText() string {
 func textOfBlocks(blocks []AnthropicBlock) string {
 	var text strings.Builder
 	for _, block := range blocks {
-		if block.Type == "text" {
+		if block.Type == wireText {
 			text.WriteString(block.Text)
 		}
 	}

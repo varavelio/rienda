@@ -45,6 +45,26 @@ const FakeModelRef = FakeProviderName + "/" + DefaultModelAlias
 type Config struct {
 	// Providers lists the provider connections available to the agents.
 	Providers []Provider
+
+	// Compaction overrides the compaction block of the configuration. A nil
+	// value leaves the block absent, which the binary fills with its defaults.
+	Compaction *Compaction
+}
+
+// Compaction describes the compaction block of a configuration, written in the
+// exact YAML format the binary reads.
+type Compaction struct {
+	// Enabled switches the automatic compaction on and off.
+	Enabled *bool
+
+	// ReserveTokens is the room the threshold leaves in the window.
+	ReserveTokens int
+
+	// KeepRecentTokens is the budget of the conversation tail kept verbatim.
+	KeepRecentTokens int
+
+	// Model is the summarization model reference.
+	Model string
 }
 
 // Provider declares one entry of the providers map of the configuration.
@@ -145,7 +165,10 @@ func (h *Harness) WriteConfig(t *testing.T, dir string, cfg Config) string {
 func (c Config) write(t *testing.T, path, fakeBaseURL string) {
 	t.Helper()
 
-	document := configDocument{Providers: make(map[string]providerDocument, len(c.Providers))}
+	document := configDocument{
+		Providers:  make(map[string]providerDocument, len(c.Providers)),
+		Compaction: c.Compaction.document(),
+	}
 	for _, provider := range c.Providers {
 		if provider.Name == "" {
 			t.Fatal("harness: every provider declaration needs a name")
@@ -200,7 +223,30 @@ func (p Provider) document(t *testing.T, fakeBaseURL string) providerDocument {
 
 // configDocument mirrors the YAML document of a configuration file.
 type configDocument struct {
-	Providers map[string]providerDocument `yaml:"providers"`
+	Providers  map[string]providerDocument `yaml:"providers"`
+	Compaction *compactionDocument         `yaml:"compaction,omitempty"`
+}
+
+// document converts a compaction block into its YAML form, nil when the test
+// declares none.
+func (c *Compaction) document() *compactionDocument {
+	if c == nil {
+		return nil
+	}
+	return &compactionDocument{
+		Enabled:          c.Enabled,
+		ReserveTokens:    c.ReserveTokens,
+		KeepRecentTokens: c.KeepRecentTokens,
+		Model:            c.Model,
+	}
+}
+
+// compactionDocument mirrors the YAML form of the compaction block.
+type compactionDocument struct {
+	Enabled          *bool  `yaml:"enabled,omitempty"`
+	ReserveTokens    int    `yaml:"reserve_tokens,omitempty"`
+	KeepRecentTokens int    `yaml:"keep_recent_tokens,omitempty"`
+	Model            string `yaml:"model,omitempty"`
 }
 
 // providerDocument mirrors one entry of the providers map.

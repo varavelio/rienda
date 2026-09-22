@@ -33,7 +33,9 @@ func TestChatPersistsReasoning(t *testing.T) {
 }
 
 // TestChatAccountsUsage verifies that every token count the provider reports is
-// stored with the assistant message.
+// stored with the assistant message, normalized so the input never includes the
+// cached tokens: the context the model read is the input plus the cached reads
+// and writes, and summing the stored figures never double counts.
 func TestChatAccountsUsage(t *testing.T) {
 	turn := harness.Text("accounted")
 	turn.Usage = &harness.Usage{
@@ -48,7 +50,8 @@ func TestChatAccountsUsage(t *testing.T) {
 
 	result.RequireSuccess(t)
 	require.Equal(t, &harness.SessionUsage{
-		InputTokens:     120,
+		// The wire prompt_tokens included the 80 cached tokens.
+		InputTokens:     40,
 		OutputTokens:    30,
 		ReasoningTokens: 12,
 		CacheReadTokens: 80,

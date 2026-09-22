@@ -59,7 +59,9 @@ func TestRunUsage(t *testing.T) {
 
 	require.Equal(t, 0, result.Code)
 	require.Contains(t, result.Stderr, "rienda run -a <agent> -p <prompt>")
+	require.Contains(t, result.Stderr, "rienda run -s <session> -p <prompt>")
 	require.Contains(t, result.Stderr, "--prompt")
+	require.Contains(t, result.Stderr, "--session")
 }
 
 // TestRunRequiresItsOptions verifies that the run command rejects the
@@ -69,7 +71,14 @@ func TestRunRequiresItsOptions(t *testing.T) {
 		result := harness.Run(t, nil, "run")
 
 		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, "an agent is required")
+		require.Contains(t, result.Stderr, "an agent or a session is required")
+	})
+
+	t.Run("with an agent and a session together", func(t *testing.T) {
+		result := harness.Run(t, nil, "run", "-a", "coder", "-s", "session-1", "-p", "hi")
+
+		require.Equal(t, 1, result.Code)
+		require.Contains(t, result.Stderr, "mutually exclusive")
 	})
 
 	t.Run("without a prompt", func(t *testing.T) {

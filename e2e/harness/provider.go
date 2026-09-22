@@ -28,8 +28,27 @@ const (
 	DefaultOutputTokens = 7
 )
 
-// wireAssistant is the assistant role shared by the codecs of the protocols.
-const wireAssistant = "assistant"
+// Wire values shared by the codecs of the protocols.
+const (
+	// wireAssistant is the assistant role.
+	wireAssistant = "assistant"
+	// wireMessage is the message item type of the Responses protocol and the
+	// role-bearing object of a complete chat completion.
+	wireMessage = "message"
+	// wireText is the text block type of the Anthropic protocol.
+	wireText = "text"
+	// wireToolUse is the tool use block type and the tool_use stop reason of
+	// the Anthropic protocol.
+	wireToolUse = "tool_use"
+	// wireFunction is the function type of a tool declaration and invocation
+	// in the OpenAI protocols.
+	wireFunction = "function"
+	// wireReasoning is the reasoning item type of the Responses protocol.
+	wireReasoning = "reasoning"
+	// wireFunctionCall is the function call item type of the Responses
+	// protocol.
+	wireFunctionCall = "function_call"
+)
 
 // Turn describes one model response of a script: the reasoning and the text
 // the model produces, the tool calls it requests, and the token consumption it
@@ -146,7 +165,9 @@ type Request struct {
 //
 // A FakeProvider is an http.Handler: it routes each request to the codec of the
 // protocol its path belongs to, which lets a single server answer any of the
-// supported protocols.
+// supported protocols. A streamed request is answered with server-sent events
+// and a non-streamed one, which the summarization issues, with the complete
+// JSON response of the same turn.
 type FakeProvider struct {
 	script []Turn
 	server *httptest.Server
@@ -199,6 +220,21 @@ func (p *FakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(turn.Status)
 		_, _ = io.WriteString(w, `{"error":{"message":"`+http.StatusText(turn.Status)+`"}}`)
+		return
+	}
+
+	if !streamOf(body) {
+		payload, err := codec.complete(turn, sequence, modelOf(body))
+		if err != nil {
+			http.Error(
+				w,
+				"fake provider: encode response: "+err.Error(),
+				http.StatusInternalServerError,
+			)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, payload)
 		return
 	}
 
@@ -292,11 +328,16 @@ func (p *FakeProvider) WaitRequest(t *testing.T) {
 }
 
 // codec is the codec of one wire protocol: it turns a scripted turn into the
-// server-sent event payloads of a streamed response.
+// server-sent event payloads of a streamed response and into the complete JSON
+// body of a non-streamed one.
 type codec interface {
 	// payloads returns the payloads of one response, in order, ending with the
 	// sentinel that closes the stream of the protocol.
 	payloads(turn Turn, sequence int, model string) ([]string, error)
+
+	// complete returns the complete JSON body of one response, which a
+	// non-streamed call receives.
+	complete(turn Turn, sequence int, model string) (string, error)
 }
 
 // codecForPath returns the codec of the protocol a provider path belongs to.
@@ -323,6 +364,19 @@ func modelOf(body []byte) string {
 	// the assertions of the suite surface as a failed expectation.
 	_ = json.Unmarshal(body, &envelope)
 	return envelope.Model
+}
+
+// streamOf reports whether a request body asks for a streamed response. A body
+// the provider cannot decode is answered as a stream, which is the shape most
+// calls use.
+func streamOf(body []byte) bool {
+	var envelope struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return true
+	}
+	return envelope.Stream
 }
 
 // chunkText splits text into at most parts fragments of similar length, so a

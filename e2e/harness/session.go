@@ -21,6 +21,9 @@ const (
 	entryKindHeader = "header"
 	// entryKindMessage carries a conversation turn.
 	entryKindMessage = "message"
+	// entryKindCompaction replaces every entry before its kept one with a
+	// summary.
+	entryKindCompaction = "compaction"
 )
 
 // Session is one session file of an instance, decoded without the help of the
@@ -35,6 +38,9 @@ type Session struct {
 
 	// Entries lists the conversation turns in append order.
 	Entries []SessionEntry
+
+	// Compactions lists the compaction entries in append order.
+	Compactions []SessionCompaction
 }
 
 // SessionHeader is the decoded header line of a session file.
@@ -104,6 +110,28 @@ type SessionBlock struct {
 	ToolResult []SessionBlock `json:"toolResult"`
 	// ToolResultIsError marks a failed invocation.
 	ToolResultIsError bool `json:"toolResultIsError"`
+}
+
+// SessionCompaction is one decoded compaction entry of a session file.
+type SessionCompaction struct {
+	// Kind is the line discriminator, always "compaction".
+	Kind string `json:"kind"`
+	// ID is the identifier of the entry.
+	ID string `json:"id"`
+	// ParentID links the entry to the one it follows.
+	ParentID string `json:"parentId"`
+	// CreatedAt is the moment the entry was appended.
+	CreatedAt time.Time `json:"createdAt"`
+	// Summary is the checkpoint text.
+	Summary string `json:"summary"`
+	// KeptID identifies the first entry kept verbatim after the compaction.
+	KeptID string `json:"keptId"`
+	// TokensBefore is what the summarized range measured.
+	TokensBefore int `json:"tokensBefore"`
+	// ResponseModel names the model that produced the summary.
+	ResponseModel string `json:"responseModel"`
+	// ResponseUsage reports the token consumption of the summarization call.
+	ResponseUsage *SessionUsage `json:"responseUsage"`
 }
 
 // SessionUsage is the token consumption persisted with an assistant entry.
@@ -233,15 +261,20 @@ func readSession(t *testing.T, path string) Session {
 		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
 			t.Fatalf("harness: decode line %d of %s: %v", number+2, path, err)
 		}
-		if envelope.Kind != entryKindMessage {
-			continue
+		switch envelope.Kind {
+		case entryKindMessage:
+			var entry SessionEntry
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Fatalf("harness: decode line %d of %s: %v", number+2, path, err)
+			}
+			session.Entries = append(session.Entries, entry)
+		case entryKindCompaction:
+			var compaction SessionCompaction
+			if err := json.Unmarshal([]byte(line), &compaction); err != nil {
+				t.Fatalf("harness: decode line %d of %s: %v", number+2, path, err)
+			}
+			session.Compactions = append(session.Compactions, compaction)
 		}
-
-		var entry SessionEntry
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			t.Fatalf("harness: decode line %d of %s: %v", number+2, path, err)
-		}
-		session.Entries = append(session.Entries, entry)
 	}
 
 	return session

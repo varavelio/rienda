@@ -58,7 +58,7 @@ func (chatStream) payloads(turn Turn, sequence int, model string) ([]string, err
 		delta(chatDelta{ToolCalls: []chatToolCallDelta{{
 			Index:    index,
 			ID:       callID(call, sequence, index),
-			Type:     "function",
+			Type:     wireFunction,
 			Function: chatFunctionFragment{Name: call.Name},
 		}}})
 		for _, fragment := range fragmentArguments(arguments, turn.Chunks) {
@@ -99,6 +99,72 @@ func (chatStream) payloads(turn Turn, sequence int, model string) ([]string, err
 		return nil, fmt.Errorf("chat completions payload: %w", err)
 	}
 	return payloads, nil
+}
+
+// complete returns the complete JSON body of one chat completion, which a
+// non-streamed call receives. It carries the same answer and usage as the
+// streamed form.
+func (chatStream) complete(turn Turn, sequence int, model string) (string, error) {
+	message := map[string]any{"role": wireAssistant}
+	if turn.Text != "" {
+		message["content"] = turn.Text
+	} else {
+		message["content"] = nil
+	}
+	if turn.Thinking != "" {
+		message["reasoning_content"] = turn.Thinking
+	}
+	if len(turn.Calls) > 0 {
+		calls := make([]map[string]any, 0, len(turn.Calls))
+		for index, call := range turn.Calls {
+			arguments, err := argumentsOf(call)
+			if err != nil {
+				return "", err
+			}
+			calls = append(calls, map[string]any{
+				"id":   callID(call, sequence, index),
+				"type": wireFunction,
+				"function": map[string]any{
+					"name":      call.Name,
+					"arguments": arguments,
+				},
+			})
+		}
+		message["tool_calls"] = calls
+	}
+
+	response := map[string]any{
+		"id":    responseID("chatcmpl", sequence),
+		"model": model,
+		"choices": []any{map[string]any{
+			"index":         0,
+			wireMessage:     message,
+			"finish_reason": chatFinishReason(turn),
+		}},
+	}
+	if turn.Usage != nil {
+		usage := map[string]any{
+			"prompt_tokens":     turn.Usage.InputTokens,
+			"completion_tokens": turn.Usage.OutputTokens,
+		}
+		if turn.Usage.CacheReadTokens > 0 {
+			usage["prompt_tokens_details"] = map[string]any{
+				"cached_tokens": turn.Usage.CacheReadTokens,
+			}
+		}
+		if turn.Usage.ReasoningTokens > 0 {
+			usage["completion_tokens_details"] = map[string]any{
+				"reasoning_tokens": turn.Usage.ReasoningTokens,
+			}
+		}
+		response["usage"] = usage
+	}
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return "", fmt.Errorf("chat completions complete response: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // chatCompletionChunk is one streamed chunk of a completion.

@@ -55,7 +55,7 @@ func (responsesStream) payloads(turn Turn, sequence int, model string) ([]string
 		outputIndex++
 
 		builder.add(responsesItemEvent("response.output_item.added", index, responsesItem{
-			Type: "reasoning",
+			Type: wireReasoning,
 			ID:   itemID,
 		}))
 		for _, fragment := range chunkText(turn.Thinking, turn.Chunks) {
@@ -68,7 +68,7 @@ func (responsesStream) payloads(turn Turn, sequence int, model string) ([]string
 		}
 
 		item := responsesItem{
-			Type:             "reasoning",
+			Type:             wireReasoning,
 			ID:               itemID,
 			Status:           responsesCompleted,
 			Summary:          []responsesSummaryPart{{Type: "summary_text", Text: turn.Thinking}},
@@ -119,7 +119,7 @@ func (responsesStream) payloads(turn Turn, sequence int, model string) ([]string
 		outputIndex++
 
 		builder.add(responsesItemEvent("response.output_item.added", index, responsesItem{
-			Type:   "function_call",
+			Type:   wireFunctionCall,
 			ID:     itemID,
 			CallID: callID(call, sequence, callIndex),
 			Name:   call.Name,
@@ -134,7 +134,7 @@ func (responsesStream) payloads(turn Turn, sequence int, model string) ([]string
 		}
 
 		item := responsesItem{
-			Type:      "function_call",
+			Type:      wireFunctionCall,
 			ID:        itemID,
 			CallID:    callID(call, sequence, callIndex),
 			Name:      call.Name,
@@ -166,6 +166,63 @@ func (responsesStream) payloads(turn Turn, sequence int, model string) ([]string
 		return nil, fmt.Errorf("responses payload: %w", err)
 	}
 	return payloads, nil
+}
+
+// complete returns the complete JSON body of one response, which a
+// non-streamed call receives.
+func (responsesStream) complete(turn Turn, sequence int, model string) (string, error) {
+	output := make([]responsesItem, 0, 3)
+	if turn.Thinking != "" {
+		output = append(output, responsesItem{
+			Type:             wireReasoning,
+			ID:               responseID(responsesReasoningPrefix, sequence),
+			Status:           responsesCompleted,
+			Summary:          []responsesSummaryPart{{Type: "summary_text", Text: turn.Thinking}},
+			EncryptedContent: responseID(responsesEncryptedPrefix, sequence),
+		})
+	}
+	if turn.Text != "" {
+		output = append(output, responsesItem{
+			Type:    responsesMessageItem,
+			ID:      responseID(responsesMessagePrefix, sequence),
+			Role:    wireAssistant,
+			Status:  responsesCompleted,
+			Content: []responsesContentPart{{Type: "output_text", Text: turn.Text}},
+		})
+	}
+	for index, call := range turn.Calls {
+		arguments, err := argumentsOf(call)
+		if err != nil {
+			return "", err
+		}
+		output = append(output, responsesItem{
+			Type:      wireFunctionCall,
+			ID:        fmt.Sprintf("%s_%d_%d", responsesCallPrefix, sequence, index+1),
+			CallID:    callID(call, sequence, index),
+			Name:      call.Name,
+			Arguments: arguments,
+			Status:    responsesCompleted,
+		})
+	}
+
+	response := responsesPayload{
+		ID:     responseID("resp", sequence),
+		Model:  model,
+		Status: responsesCompleted,
+		Output: output,
+	}
+	if turn.Usage != nil {
+		response.Usage = &responsesUsage{
+			InputTokens:  turn.Usage.InputTokens,
+			OutputTokens: turn.Usage.OutputTokens,
+		}
+	}
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return "", fmt.Errorf("responses complete response: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // responsesEnvelope is one streamed event of the Responses protocol.
