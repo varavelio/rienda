@@ -26,11 +26,6 @@ func TestRun(t *testing.T) {
 				wantErr: "an agent or a session is required",
 			},
 			{
-				name:    "agent and session together",
-				args:    []string{"-a", "coder", "-s", "session-1"},
-				wantErr: "mutually exclusive",
-			},
-			{
 				name:    "missing prompt",
 				args:    []string{"-a", "coder"},
 				wantErr: "a prompt is required",

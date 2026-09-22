@@ -67,6 +67,11 @@ type entry struct {
 	// elapsed is how long the turn took, recorded on the entry that closes it.
 	elapsed time.Duration
 
+	// agent names the agent that wrote the entry, empty for the entries that
+	// belong to no agent, such as a notice. It labels the answers of the
+	// conversation, so a session that switched agent shows who wrote what.
+	agent string
+
 	// Tool fields are only meaningful for entryTool entries.
 	toolCallID    string
 	toolName      string
@@ -99,6 +104,11 @@ func (e *entry) append(fragment string) {
 // first entry whose rendering is stale, so the interface can render only the
 // blocks that changed.
 type transcript struct {
+	// agent names the agent the session runs, which labels the answers that
+	// stream from now on. It is set whenever the branch changes, so a session
+	// that switched agent labels every answer with the agent that wrote it.
+	agent string
+
 	entries []entry
 
 	// dirty is the index of the first entry that must be rendered again, or
@@ -170,10 +180,18 @@ func (t *transcript) finishTurn(elapsed time.Duration) {
 // that started it, and the moment it closed, the assistant message that
 // answered it, so a slow provider that takes minutes to answer is reported
 // like any other turn.
-func (t *transcript) load(entries []session.Entry) {
+func (t *transcript) load(entries []session.Entry, agent string) {
+	t.agent = agent
 	var opened time.Time
 	for _, entry := range entries {
-		t.fold(entry)
+		// The branch is linear, so the agent of every turn is the one the
+		// entries before it selected: a selection changes the label of the
+		// turns that follow it and leaves the earlier ones untouched.
+		if entry.Kind == session.KindAgent {
+			agent = entry.AgentID
+			continue
+		}
+		t.fold(entry, agent)
 		switch {
 		case opensTurn(entry):
 			opened = entry.CreatedAt
@@ -184,10 +202,15 @@ func (t *transcript) load(entries []session.Entry) {
 	}
 }
 
-// fold appends the content of one stored entry to the transcript.
-func (t *transcript) fold(entry session.Entry) {
+// fold appends the content of one stored entry to the transcript, written by
+// the agent the branch runs at that point. A selection entry carries no content
+// of its own, so it is skipped: it only changes the label of what follows.
+func (t *transcript) fold(entry session.Entry, agent string) {
 	if entry.Kind == session.KindCompaction {
 		t.addCompaction()
+		return
+	}
+	if entry.Kind == session.KindAgent {
 		return
 	}
 
@@ -199,9 +222,9 @@ func (t *transcript) fold(entry session.Entry) {
 	for _, block := range entry.Message.Blocks {
 		switch block.Type {
 		case llm.BlockText:
-			t.appendText(textKind, block.Text)
+			t.appendText(textKind, agent, block.Text)
 		case llm.BlockThinking:
-			t.appendText(entryThinking, block.Thinking)
+			t.appendText(entryThinking, agent, block.Thinking)
 		case llm.BlockToolCall:
 			t.addTool(block.ToolCallID, block.ToolCallName, string(block.ToolCallArguments))
 		case llm.BlockToolResult:
@@ -271,9 +294,9 @@ func textOf(blocks []llm.Block) string {
 func (t *transcript) apply(event engine.Event) {
 	switch event.Type {
 	case engine.EventTextDelta:
-		t.appendText(entryAssistant, event.Text)
+		t.appendText(entryAssistant, t.agent, event.Text)
 	case engine.EventThinkingDelta:
-		t.appendText(entryThinking, event.Text)
+		t.appendText(entryThinking, t.agent, event.Text)
 	case engine.EventToolCall:
 		t.addTool(event.ToolCallID, event.ToolName, string(event.Arguments))
 	case engine.EventToolOutput:
@@ -331,16 +354,17 @@ func (t *transcript) discard() {
 
 // appendText extends the last entry of the given kind, starting a new one when
 // the last entry belongs to another kind.
-func (t *transcript) appendText(kind entryKind, text string) {
+func (t *transcript) appendText(kind entryKind, agent, text string) {
 	if text == "" {
 		return
 	}
-	if n := len(t.entries); n > 0 && t.entries[n-1].kind == kind {
+	if n := len(t.entries); n > 0 && t.entries[n-1].kind == kind &&
+		t.entries[n-1].agent == agent {
 		t.entries[n-1].append(text)
 		t.touch(n - 1)
 		return
 	}
-	t.push(entry{kind: kind, fragments: []string{text}})
+	t.push(entry{kind: kind, agent: agent, fragments: []string{text}})
 }
 
 // toolIndex returns the index of the tool entry of the call, or -1 when it is

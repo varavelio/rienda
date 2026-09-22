@@ -61,20 +61,23 @@ func requireCaseSensitive(t *testing.T, dir string) {
 // definition and the instructions of the project the session runs in.
 func TestSystemPrompt(t *testing.T) {
 	t.Run("returns the agent prompt when the session runs in no directory", func(t *testing.T) {
-		engine, _ := newTestEngine(t, Config{Agent: agent.Agent{SystemPrompt: "be nice"}})
+		engine, _ := newTestEngine(
+			t,
+			Config{Agents: []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}}},
+		)
 
-		system, err := engine.systemPrompt()
+		system, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Equal(t, "be nice", system)
 	})
 
 	t.Run("returns the agent prompt when the project has no instructions", func(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{
-			Agent:   agent.Agent{SystemPrompt: "be nice"},
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
 			Workdir: t.TempDir(),
 		})
 
-		system, err := engine.systemPrompt()
+		system, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Equal(t, "be nice", system)
 	})
@@ -83,11 +86,11 @@ func TestSystemPrompt(t *testing.T) {
 		dir := t.TempDir()
 		writeProjectInstructions(t, dir, "Use tabs for indentation.")
 		engine, _ := newTestEngine(t, Config{
-			Agent:   agent.Agent{SystemPrompt: "be nice"},
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
 			Workdir: dir,
 		})
 
-		system, err := engine.systemPrompt()
+		system, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Equal(t,
 			"be nice\n\n---\n\n"+wantSection("AGENTS.md", "Use tabs for indentation."),
@@ -102,7 +105,7 @@ func TestSystemPrompt(t *testing.T) {
 			writeProjectInstructions(t, dir, "Use tabs.")
 			engine, _ := newTestEngine(t, Config{Workdir: dir})
 
-			system, err := engine.systemPrompt()
+			system, err := engine.systemPrompt(engine.agents["coder"])
 			require.NoError(t, err)
 			require.Equal(t, wantSection("AGENTS.md", "Use tabs."), system)
 		},
@@ -112,11 +115,11 @@ func TestSystemPrompt(t *testing.T) {
 		dir := t.TempDir()
 		writeProjectInstructions(t, dir, "Use tabs.")
 		engine, _ := newTestEngine(t, Config{
-			Agent:   agent.Agent{SystemPrompt: "  \n be nice \n "},
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "  \n be nice \n "}},
 			Workdir: dir,
 		})
 
-		system, err := engine.systemPrompt()
+		system, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Equal(t, "be nice\n\n---\n\n"+wantSection("AGENTS.md", "Use tabs."), system)
 	})
@@ -125,11 +128,11 @@ func TestSystemPrompt(t *testing.T) {
 		dir := t.TempDir()
 		writeProjectInstructions(t, dir, "  \n")
 		engine, _ := newTestEngine(t, Config{
-			Agent:   agent.Agent{SystemPrompt: "be nice"},
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
 			Workdir: dir,
 		})
 
-		system, err := engine.systemPrompt()
+		system, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Equal(t, "be nice", system)
 	})
@@ -138,17 +141,17 @@ func TestSystemPrompt(t *testing.T) {
 		dir := t.TempDir()
 		writeProjectInstructions(t, dir, "First rule.")
 		engine, _ := newTestEngine(t, Config{
-			Agent:   agent.Agent{SystemPrompt: "be nice"},
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
 			Workdir: dir,
 		})
 
-		before, err := engine.systemPrompt()
+		before, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Contains(t, before, "First rule.")
 
 		writeProjectInstructions(t, dir, "Second rule.")
 
-		after, err := engine.systemPrompt()
+		after, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Contains(t, after, "Second rule.")
 		require.NotContains(t, after, "First rule.")
@@ -158,11 +161,11 @@ func TestSystemPrompt(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(dir, projectInstructionsFiles[0]), 0o750))
 		engine, _ := newTestEngine(t, Config{
-			Agent:   agent.Agent{SystemPrompt: "be nice"},
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
 			Workdir: dir,
 		})
 
-		_, err := engine.systemPrompt()
+		_, err := engine.systemPrompt(engine.agents["coder"])
 		require.ErrorContains(t, err, "read project instructions")
 	})
 }
@@ -177,7 +180,7 @@ func TestProjectInstructionsLookup(t *testing.T) {
 		}
 		engine, _ := newTestEngine(t, Config{Workdir: dir})
 
-		system, err := engine.systemPrompt()
+		system, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Contains(t, system, `source="`+projectInstructionsFiles[0]+`"`)
 		require.Contains(t, system, "from "+projectInstructionsFiles[0])
@@ -188,7 +191,7 @@ func TestProjectInstructionsLookup(t *testing.T) {
 		writeInstructions(t, dir, "CLAUDE.md", "claude rules")
 		engine, _ := newTestEngine(t, Config{Workdir: dir})
 
-		system, err := engine.systemPrompt()
+		system, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Contains(t, system, `source="CLAUDE.md"`)
 		require.Contains(t, system, "claude rules")
@@ -199,7 +202,7 @@ func TestProjectInstructionsLookup(t *testing.T) {
 		writeInstructions(t, dir, "claude.md", "claude rules")
 		engine, _ := newTestEngine(t, Config{Workdir: dir})
 
-		system, err := engine.systemPrompt()
+		system, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Contains(t, system, `source="claude.md"`)
 	})
@@ -211,7 +214,7 @@ func TestProjectInstructionsLookup(t *testing.T) {
 		writeInstructions(t, dir, "CLAUDE.md", "claude rules")
 		engine, _ := newTestEngine(t, Config{Workdir: dir})
 
-		system, err := engine.systemPrompt()
+		system, err := engine.systemPrompt(engine.agents["coder"])
 		require.NoError(t, err)
 		require.Contains(t, system, "lowercase rules")
 		require.NotContains(t, system, "claude rules")

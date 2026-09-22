@@ -76,7 +76,7 @@ func newCompactionEngine(
 	client := &fakeClient{scripts: scripts}
 	engine, store := newTestEngine(t, Config{
 		Client:     client,
-		Agent:      agent.Agent{ID: "coder", SystemPrompt: "be brief"},
+		Agents:     []agent.Agent{{ID: "coder", SystemPrompt: "be brief"}},
 		Model:      Model{ID: "test-model", ContextWindow: window},
 		Compactor:  compactor,
 		Compaction: compactionCfg,

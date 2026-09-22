@@ -50,11 +50,12 @@ type Config struct {
 	// open for the lifetime of the engine.
 	Store *session.Store
 
-	// Agent is the definition the engine runs: its system prompt and its tool
-	// selection.
-	Agent agent.Agent
+	// Agents lists the definitions the engine may run, one of which is the
+	// agent the session starts on. It is required, and every entry needs a
+	// non-empty ID.
+	Agents []agent.Agent
 
-	// Model is the resolved model the agent runs on. Its ID is required.
+	// Model is the resolved model the engine runs on. Its ID is required.
 	Model Model
 
 	// Registry holds the tools the agent may use. It is required when the
@@ -73,16 +74,18 @@ type Config struct {
 	Workdir string
 }
 
-// Engine runs one agent over one session.
+// Engine runs one agent over one session. The agent is resolved on every turn
+// from the session, so a branch can change the agent it runs without a new
+// engine: the definitions the engine was given are the ones it may select.
 //
 // An Engine is not safe for concurrent use: runs append to a session store,
 // which callers serialize.
 type Engine struct {
 	client     llm.Client
 	store      *session.Store
-	agent      agent.Agent
+	agents     map[string]agent.Agent
 	model      Model
-	tools      toolset
+	registry   *tool.Registry
 	workdir    string
 	compactor  Compactor
 	compaction Compaction
@@ -101,25 +104,62 @@ func New(cfg Config) (*Engine, error) {
 		return nil, errors.New("engine: a session store is required")
 	case cfg.Model.ID == "":
 		return nil, errors.New("engine: the model id is required")
+	case len(cfg.Agents) == 0:
+		return nil, errors.New("engine: at least one agent is required")
 	case cfg.Workdir != "" && !filepath.IsAbs(cfg.Workdir):
 		return nil, errors.New("engine: workdir must be an absolute path")
 	}
 
-	tools, err := resolveTools(cfg.Registry, cfg.Agent.Tools)
-	if err != nil {
+	agents := make(map[string]agent.Agent, len(cfg.Agents))
+	for _, definition := range cfg.Agents {
+		if definition.ID == "" {
+			return nil, errors.New("engine: every agent needs an id")
+		}
+		agents[definition.ID] = definition
+	}
+
+	// The tools of the agent the session starts on are resolved eagerly, so a
+	// definition that declares a tool the harness does not provide fails the
+	// session instead of the run that first selects it.
+	initial, found := agents[cfg.Store.ActiveAgent()]
+	if !found {
+		return nil, fmt.Errorf("engine: unknown agent %q", cfg.Store.ActiveAgent())
+	}
+	if _, err := resolveTools(cfg.Registry, initial.Tools); err != nil {
 		return nil, err
 	}
 
 	return &Engine{
 		client:     cfg.Client,
 		store:      cfg.Store,
-		agent:      cfg.Agent,
+		agents:     agents,
 		model:      cfg.Model,
-		tools:      tools,
+		registry:   cfg.Registry,
 		workdir:    cfg.Workdir,
 		compactor:  cfg.Compactor,
 		compaction: cfg.Compaction,
 	}, nil
+}
+
+// agentOf returns the definition of the agent the session runs at its active
+// leaf. The store resolves the selection from the branch, so a session that
+// switched agent runs on the definition the branch selected. An agent the
+// engine was not given is an error, which leaves the branch with nothing to
+// run until another selection, or the header, names an agent that exists.
+func (e *Engine) agentOf() (agent.Agent, error) {
+	id := e.store.ActiveAgent()
+	definition, found := e.agents[id]
+	if !found {
+		return agent.Agent{}, fmt.Errorf("engine: unknown agent %q", id)
+	}
+	return definition, nil
+}
+
+// KnowsAgent reports whether the engine may run the given agent, which is what
+// lets a caller offer only the selections the session can honor.
+func (e *Engine) KnowsAgent(id string) bool {
+	_, found := e.agents[id]
+	return found
 }
 
 // enter claims the engine for one run or compaction. It returns false when
@@ -137,22 +177,32 @@ func (e *Engine) leave() {
 // request builds the provider request of the next turn from the stored
 // history. The system prompt is rebuilt on every turn so the instructions of
 // the project the session runs in stay current.
-func (e *Engine) request() (*llm.Request, error) {
-	system, err := e.systemPrompt()
+func (e *Engine) request() (*llm.Request, turnTools, error) {
+	definition, err := e.agentOf()
 	if err != nil {
-		return nil, err
+		return nil, turnTools{}, err
+	}
+
+	system, err := e.systemPrompt(definition)
+	if err != nil {
+		return nil, turnTools{}, err
+	}
+
+	tools, err := resolveTools(e.registry, definition.Tools)
+	if err != nil {
+		return nil, turnTools{}, err
 	}
 
 	return &llm.Request{
 		Model:       e.model.ID,
 		System:      system,
 		Messages:    e.store.History(),
-		Tools:       e.tools.definitions,
+		Tools:       tools.definitions,
 		MaxTokens:   e.model.MaxTokens,
 		Temperature: e.model.Temperature,
 		TopP:        e.model.TopP,
 		Thinking:    e.thinking(),
-	}, nil
+	}, tools, nil
 }
 
 // Context reports the estimated context of the request the next turn would
@@ -160,7 +210,7 @@ func (e *Engine) request() (*llm.Request, error) {
 // prompt, the history of the active branch and the tool definitions, exactly
 // the request the automatic compaction measures against its threshold.
 func (e *Engine) Context() (tokens.Report, error) {
-	request, err := e.request()
+	request, _, err := e.request()
 	if err != nil {
 		return tokens.Report{}, err
 	}
@@ -176,9 +226,11 @@ func (e *Engine) thinking() *llm.ThinkingConfig {
 	return &e.model.Thinking
 }
 
-// toolset pairs the tool definitions sent to the provider with the tools that
-// execute the calls the model requests.
-type toolset struct {
+// turnTools pairs the tool definitions sent to the provider with the tools
+// that execute the calls the model requests. It is rebuilt on every turn from
+// the agent the branch selected, so a session that switched agent sends the
+// tools of the agent that runs the turn.
+type turnTools struct {
 	// definitions describes the tools to the model.
 	definitions []llm.Tool
 
@@ -187,24 +239,24 @@ type toolset struct {
 }
 
 // resolveTools resolves the tools declared by an agent against a registry.
-func resolveTools(registry *tool.Registry, names []string) (toolset, error) {
+func resolveTools(registry *tool.Registry, names []string) (turnTools, error) {
 	if len(names) == 0 {
-		return toolset{}, nil
+		return turnTools{}, nil
 	}
 	if registry == nil {
-		return toolset{}, errors.New(
+		return turnTools{}, errors.New(
 			"engine: the agent declares tools but no registry was provided",
 		)
 	}
 
 	definitions, err := registry.Definitions(names)
 	if err != nil {
-		return toolset{}, fmt.Errorf("engine: %w", err)
+		return turnTools{}, fmt.Errorf("engine: %w", err)
 	}
 
 	executors := make(map[string]tool.Tool, len(definitions))
 	for _, definition := range definitions {
 		executors[definition.Name], _ = registry.Lookup(definition.Name)
 	}
-	return toolset{definitions: definitions, executors: executors}, nil
+	return turnTools{definitions: definitions, executors: executors}, nil
 }

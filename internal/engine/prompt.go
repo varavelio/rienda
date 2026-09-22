@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/varavelio/rienda/internal/agent"
 )
 
 // projectInstructionsFiles lists the names of the files that may hold the
@@ -50,12 +52,12 @@ type projectInstructions struct {
 }
 
 // systemPrompt builds the system instruction of the next turn: the system
-// prompt of the agent followed by the instructions of the project the session
-// runs in. The instructions are read from disk on every turn, so an edit to
-// the project instruction file applies to the next request even when earlier
-// turns sent different content.
-func (e *Engine) systemPrompt() (string, error) {
-	systemPrompt := strings.TrimSpace(e.agent.SystemPrompt)
+// prompt of the agent the branch runs followed by the instructions of the
+// project the session runs in. The instructions are read from disk on every
+// turn, so an edit to the project instruction file applies to the next request
+// even when earlier turns sent different content.
+func (e *Engine) systemPrompt(definition agent.Agent) (string, error) {
+	systemPrompt := strings.TrimSpace(definition.SystemPrompt)
 
 	instructions, err := e.loadProjectInstructions()
 	if err != nil {

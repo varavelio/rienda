@@ -77,6 +77,10 @@ type tree struct {
 	// marks.
 	branch []session.Entry
 
+	// owner is the agent the session was created with, which labels the turns
+	// written before the first agent selection of the branch.
+	owner string
+
 	// folded names the turns whose children the user hid, by entry identifier.
 	// It is what the reader decided, not what the session stores, so it lives
 	// with the screen and is gone once the tree closes. The empty set shows
@@ -113,6 +117,11 @@ type treeNode struct {
 	// text is the message of the turn on a single line, which the tree shows
 	// and the query is matched against.
 	text string
+
+	// agent names the agent that wrote the turn, which labels it. A
+	// conversation that switched agent shows in the tree which agent wrote
+	// what.
+	agent string
 
 	// parent is the index of the turn the node follows, or -1 when the node
 	// opens a branch.
@@ -183,7 +192,7 @@ func newTreeScreen(text func(int) string, base styles, isDark bool) tree {
 // of a subtree stay together under the turn they follow however late they were
 // written: a branch opened from a turn of the past lands beside it, not at the
 // end of the tree.
-func treeNodes(entries, branch []session.Entry, folded map[string]bool) []treeNode {
+func treeNodes(entries, branch []session.Entry, folded map[string]bool, owner string) []treeNode {
 	active := make(map[string]bool, len(branch))
 	for _, entry := range branch {
 		active[entry.ID] = true
@@ -194,11 +203,23 @@ func treeNodes(entries, branch []session.Entry, folded map[string]bool) []treeNo
 	// the turns by the turn they follow, in the order they were written. An
 	// activity hangs from the turn it belongs to, so it never breaks the chain
 	// between two turns.
+	//
+	// effective carries, for every entry, the agent the branch runs after it,
+	// so a turn is labeled with the agent that wrote it: a selection sets it
+	// and the entries that follow inherit it, which is what keeps the tree
+	// honest about a conversation that changed agent.
 	above := map[string]string{"": ""}
+	effective := map[string]string{"": owner}
 	children := map[string][]string{}
 	turns := make(map[string]session.Entry, len(entries))
 	for _, entry := range entries {
 		parent := above[entry.ParentID]
+		if entry.Kind == session.KindAgent {
+			effective[entry.ID] = entry.AgentID
+		} else {
+			effective[entry.ID] = effective[entry.ParentID]
+		}
+
 		if !isTurnEntry(entry) {
 			above[entry.ID] = parent
 			continue
@@ -221,6 +242,7 @@ func treeNodes(entries, branch []session.Entry, folded map[string]bool) []treeNo
 		node := treeNode{
 			entry:    entry,
 			text:     turnText(entry),
+			agent:    effective[entry.ParentID],
 			parent:   parent,
 			guides:   guides,
 			last:     id == siblings[len(siblings)-1],
@@ -297,7 +319,7 @@ func turnText(entry session.Entry) string {
 func (t *tree) fold(folded map[string]bool) {
 	held := t.entryID(t.filter.selected())
 	t.folded = folded
-	t.nodes = treeNodes(t.entries, t.branch, t.folded)
+	t.nodes = treeNodes(t.entries, t.branch, t.folded, t.owner)
 	t.filter.setCount(len(t.nodes))
 	t.filter.cursor = t.focusOn(held)
 }
@@ -378,7 +400,7 @@ func (t *tree) toggleAll() {
 	}
 
 	folded := make(map[string]bool)
-	for _, node := range treeNodes(t.entries, t.branch, nil) {
+	for _, node := range treeNodes(t.entries, t.branch, nil, t.owner) {
 		if node.children > 0 {
 			folded[node.entry.ID] = true
 		}
@@ -392,7 +414,7 @@ func (t *tree) toggleAll() {
 // branch keeps it as it is, which makes the fold safe to repeat.
 func (t *tree) foldOthers() {
 	folded := make(map[string]bool)
-	for _, node := range treeNodes(t.entries, t.branch, nil) {
+	for _, node := range treeNodes(t.entries, t.branch, nil, t.owner) {
 		if node.children > 0 && !node.active {
 			folded[node.entry.ID] = true
 		}

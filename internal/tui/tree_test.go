@@ -68,7 +68,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("shows one node per turn", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, nil)
+		nodes := treeNodes(entries, branch, nil, "coder")
 
 		require.Len(t, nodes, 5, "the tool results of a turn are an activity, not a turn")
 		require.Equal(
@@ -81,7 +81,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("places every turn in the tree", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, nil)
+		nodes := treeNodes(entries, branch, nil, "coder")
 
 		require.Equal(
 			t,
@@ -111,7 +111,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("marks the branch the session leaves open", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, nil)
+		nodes := treeNodes(entries, branch, nil, "coder")
 
 		require.Equal(
 			t,
@@ -132,7 +132,7 @@ func TestTreeNodes(t *testing.T) {
 			turnEntry("m2", "", llm.RoleUser, "again"),
 		}
 
-		nodes := treeNodes(entries, entries[1:], nil)
+		nodes := treeNodes(entries, entries[1:], nil, "coder")
 
 		require.Equal(
 			t,
@@ -151,7 +151,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("shows the message of a turn on a single line", func(t *testing.T) {
 		entries := []session.Entry{turnEntry("m1", "", llm.RoleUser, "  fix\n\n the  bug ")}
 
-		nodes := treeNodes(entries, entries, nil)
+		nodes := treeNodes(entries, entries, nil, "coder")
 
 		require.Equal(t, "fix the bug", nodes[0].text)
 	})
@@ -165,7 +165,7 @@ func TestTreeNodes(t *testing.T) {
 			},
 		}}
 
-		nodes := treeNodes(entries, entries, nil)
+		nodes := treeNodes(entries, entries, nil, "coder")
 
 		require.Equal(t, "(no message)", nodes[0].text)
 	})
@@ -174,7 +174,7 @@ func TestTreeNodes(t *testing.T) {
 		entries := []session.Entry{turnEntry("m1", "", llm.RoleUser, "fix the bug")}
 		entries[0].Tag = "parser"
 
-		nodes := treeNodes(entries, entries, nil)
+		nodes := treeNodes(entries, entries, nil, "coder")
 
 		require.Equal(t, "fix the bug parser", nodes[0].search())
 	})
@@ -190,7 +190,7 @@ func TestTreeNodes(t *testing.T) {
 			turnEntry("m5", "m2", llm.RoleAssistant, "other"),
 		}
 
-		nodes := treeNodes(entries, entries, nil)
+		nodes := treeNodes(entries, entries, nil, "coder")
 
 		require.Equal(
 			t,
@@ -208,7 +208,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("draws the lines that connect a subtree to its turn", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, nil)
+		nodes := treeNodes(entries, branch, nil, "coder")
 
 		require.Equal(
 			t,
@@ -235,7 +235,7 @@ func TestTreeNodes(t *testing.T) {
 			turnEntry("m5", "m2", llm.RoleAssistant, "other"),
 		}
 
-		nodes := treeNodes(entries, entries, nil)
+		nodes := treeNodes(entries, entries, nil, "coder")
 
 		require.Equal(
 			t,
@@ -248,7 +248,7 @@ func TestTreeNodes(t *testing.T) {
 	})
 
 	t.Run("shows nothing for a session without turns", func(t *testing.T) {
-		require.Empty(t, treeNodes(nil, nil, nil))
+		require.Empty(t, treeNodes(nil, nil, nil, "coder"))
 	})
 }
 
@@ -273,7 +273,7 @@ func TestTreeFolding(t *testing.T) {
 	t.Run("keeps the turns inside a folded subtree out of the nodes", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, map[string]bool{"m2": true})
+		nodes := treeNodes(entries, branch, map[string]bool{"m2": true}, "coder")
 
 		require.Equal(
 			t,
@@ -479,7 +479,7 @@ func TestTreeWideFolding(t *testing.T) {
 // TestTreeForks verifies whether writing after a turn opens a branch.
 func TestTreeForks(t *testing.T) {
 	entries, branch := branchedDialogue()
-	nodes := treeNodes(entries, branch, nil)
+	nodes := treeNodes(entries, branch, nil, "coder")
 	tree := tree{nodes: nodes}
 
 	t.Run("opens a branch after an answer that has turns after it", func(t *testing.T) {
@@ -508,7 +508,7 @@ func TestTreeCompaction(t *testing.T) {
 
 		require.True(t, isTurnEntry(entry))
 		require.Equal(t, compactionBody, turnText(entry))
-		require.Equal(t, "Compaction:", treeName(entry, "coder"))
+		require.Equal(t, "Compaction:", treeName(treeNode{entry: entry}))
 	})
 
 	t.Run("renders the checkpoint with its color in the tree", func(t *testing.T) {

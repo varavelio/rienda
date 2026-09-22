@@ -27,9 +27,10 @@ const configEnvVar = "RIENDA_CONFIG"
 
 // Options configures the preparation of a session.
 type Options struct {
-	// AgentID is the identifier of the agent definition to run. It is
-	// required to create a session and must be empty when SessionID resumes
-	// one.
+	// AgentID is the identifier of the agent definition to run. It is required
+	// to create a session. Together with SessionID it selects the agent the
+	// resumed session runs from now on, without touching the turns it already
+	// holds.
 	AgentID string
 
 	// SessionID resumes the session with this identifier instead of creating
@@ -107,6 +108,13 @@ func (s *Session) Compact(ctx context.Context) <-chan engine.Event {
 	return s.engine.Compact(ctx)
 }
 
+// ActiveAgent returns the identifier of the agent the branch of the session
+// runs now, which is the newest selection of the branch or the agent the
+// session was created with.
+func (s *Session) ActiveAgent() string {
+	return s.store.ActiveAgent()
+}
+
 // Tree returns every entry of the session in append order, the branches it
 // leaves behind included, which is what lets a front end show the whole
 // conversation and return to an earlier turn of it.
@@ -120,6 +128,21 @@ func (s *Session) Tree() []session.Entry {
 // them, while writing after a leaf continues the branch.
 func (s *Session) SetLeaf(id string) error {
 	if err := s.store.SetLeaf(id); err != nil {
+		return fmt.Errorf("harness: %w", err)
+	}
+	return nil
+}
+
+// SetAgent selects the agent the branch of the session runs from now on. The
+// selection is appended to the session and belongs to the branch that wrote
+// it, so returning to an earlier turn runs on the agent that was in effect
+// there. An agent the harness does not know is refused before anything is
+// written, so a session never ends up pointing at an agent no run can honor.
+func (s *Session) SetAgent(ctx context.Context, id string) error {
+	if !s.engine.KnowsAgent(id) {
+		return fmt.Errorf("harness: unknown agent %q", id)
+	}
+	if err := s.store.SetAgent(ctx, id); err != nil {
 		return fmt.Errorf("harness: %w", err)
 	}
 	return nil
@@ -173,15 +196,28 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
-	store, definition, err := openSession(ctx, opts, projectDir, workdir, agentsDir)
+	// Every definition is loaded eagerly, so a broken file is reported before
+	// a session is opened and the roster the engine may select from is
+	// complete: a session can run on any agent of the roster, not only on the
+	// one it was created with.
+	definitions, err := agent.LoadAll(agentsDir)
+	if err != nil {
+		return nil, fmt.Errorf("harness: load agents: %w", err)
+	}
+
+	store, err := openSession(ctx, opts, projectDir, workdir, agentsDir, definitions)
 	if err != nil {
 		return nil, err
 	}
 
-	resolved, err := cfg.Resolve(definition.Model)
+	// The model comes from the header on both sides, so reopening a session
+	// talks to the provider it was created on. The agent the branch runs is
+	// resolved by the engine from the session, which is what lets a
+	// conversation switch agent without touching its model.
+	resolved, err := cfg.Resolve(store.Info().Model)
 	if err != nil {
 		closeStore(store)
-		return nil, fmt.Errorf("harness: agent %q: %w", definition.ID, err)
+		return nil, fmt.Errorf("harness: model %q: %w", store.Info().Model, err)
 	}
 	client, err := provider.New(resolved.Protocol, resolved.ProviderConfig)
 	if err != nil {
@@ -207,7 +243,7 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 	runner, err := engine.New(engine.Config{
 		Client:    client,
 		Store:     store,
-		Agent:     definition,
+		Agents:    definitions,
 		Model:     model,
 		Registry:  registry,
 		Workdir:   workdir,
@@ -225,42 +261,47 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 	return &Session{store: store, engine: runner}, nil
 }
 
-// openSession returns the store of the session to run and the agent definition
-// that owns it. It resumes the session identified by opts.SessionID, or creates
-// a new session owned by opts.AgentID in dir.
+// openSession returns the store of the session to run: the one identified by
+// opts.SessionID, or a new one created for the agent identified by
+// opts.AgentID. Every agent the session may run comes from the roster the
+// caller loaded, and an agent named by the options must be one of them, so a
+// mistyped identifier fails with the path of the definition it expected.
 func openSession(
 	ctx context.Context,
 	opts Options,
 	dir, workdir, agentsDir string,
-) (*session.Store, agent.Agent, error) {
+	definitions []agent.Agent,
+) (*session.Store, error) {
 	sessionID := strings.TrimSpace(opts.SessionID)
 	agentID := strings.TrimSpace(opts.AgentID)
-	switch {
-	case sessionID != "" && agentID != "":
-		return nil, agent.Agent{}, errors.New(
-			"harness: an agent id and a session id are mutually exclusive",
-		)
-	case sessionID == "" && agentID == "":
-		return nil, agent.Agent{}, errors.New("harness: an agent id is required")
+	if sessionID == "" && agentID == "" {
+		return nil, errors.New("harness: an agent id is required")
 	}
 
 	if sessionID != "" {
 		store, err := session.Open(dir, sessionID, id.NewIDGenerator())
 		if err != nil {
-			return nil, agent.Agent{}, fmt.Errorf("harness: open session %q: %w", sessionID, err)
+			return nil, fmt.Errorf("harness: open session %q: %w", sessionID, err)
 		}
-		owner := store.Info().Agent
-		definition, err := agent.Load(agentsDir, owner)
-		if err != nil {
-			closeStore(store)
-			return nil, agent.Agent{}, fmt.Errorf("harness: load agent %q: %w", owner, err)
+		// Resuming with an agent selects it on the branch that continues the
+		// conversation, which is the same change SetAgent makes and the reason
+		// the two options are not exclusive.
+		if agentID != "" {
+			if _, found := findAgent(definitions, agentID); !found {
+				closeStore(store)
+				return nil, undefinedAgent(agentsDir, agentID)
+			}
+			if err := store.SetAgent(ctx, agentID); err != nil {
+				closeStore(store)
+				return nil, fmt.Errorf("harness: %w", err)
+			}
 		}
-		return store, definition, nil
+		return store, nil
 	}
 
-	definition, err := agent.Load(agentsDir, agentID)
-	if err != nil {
-		return nil, agent.Agent{}, fmt.Errorf("harness: load agent %q: %w", agentID, err)
+	definition, found := findAgent(definitions, agentID)
+	if !found {
+		return nil, undefinedAgent(agentsDir, agentID)
 	}
 	store, err := session.Create(ctx, dir, session.Header{
 		Agent:   definition.ID,
@@ -268,9 +309,31 @@ func openSession(
 		Workdir: workdir,
 	}, id.NewIDGenerator())
 	if err != nil {
-		return nil, agent.Agent{}, fmt.Errorf("harness: create session: %w", err)
+		return nil, fmt.Errorf("harness: create session: %w", err)
 	}
-	return store, definition, nil
+	return store, nil
+}
+
+// undefinedAgent reports an agent identifier the roster does not hold, naming
+// the definition file the session expected so a typo points at its own path.
+func undefinedAgent(agentsDir, id string) error {
+	path := filepath.Join(agentsDir, id+agent.Extension)
+	return fmt.Errorf(
+		"harness: agent %q is not defined in the agent directory, which holds no %s",
+		id,
+		path,
+	)
+}
+
+// findAgent returns the definition of the agent identified by id and whether
+// the roster holds one.
+func findAgent(definitions []agent.Agent, id string) (agent.Agent, bool) {
+	for _, definition := range definitions {
+		if definition.ID == id {
+			return definition, true
+		}
+	}
+	return agent.Agent{}, false
 }
 
 // Sessions returns the sessions stored for the workspace of the options, most

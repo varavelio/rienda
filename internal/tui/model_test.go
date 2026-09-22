@@ -35,6 +35,9 @@ type fakeSession struct {
 	leaves       []string
 	tags         map[string]string
 	titles       []string
+	agents       []string
+	activeAgent  string
+	agentErr     error
 	leafErr      error
 	tagErr       error
 	titleErr     error
@@ -57,8 +60,9 @@ func newFakeSession() *fakeSession {
 			Agent: "coder",
 			Model: "fake/test-model",
 		},
-		events:   make(chan engine.Event, 16),
-		canceled: make(chan struct{}),
+		activeAgent: "coder",
+		events:      make(chan engine.Event, 16),
+		canceled:    make(chan struct{}),
 	}
 }
 
@@ -121,6 +125,19 @@ func (s *fakeSession) SetTitle(title string) error {
 	return nil
 }
 
+// ActiveAgent returns the scripted agent the session runs.
+func (s *fakeSession) ActiveAgent() string { return s.activeAgent }
+
+// SetAgent records the agent the session is moved to.
+func (s *fakeSession) SetAgent(_ context.Context, id string) error {
+	if s.agentErr != nil {
+		return s.agentErr
+	}
+	s.agents = append(s.agents, id)
+	s.activeAgent = id
+	return nil
+}
+
 // Run records the prompt and returns the scripted event channel.
 func (s *fakeSession) Run(ctx context.Context, prompt string) <-chan engine.Event {
 	s.prompts = append(s.prompts, prompt)
@@ -152,6 +169,8 @@ var (
 	pressCtrlF  = tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl}
 	pressCtrlA  = tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}
 	pressCtrlO  = tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl}
+	pressCtrlX  = tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}
+	pressA      = tea.KeyPressMsg{Code: 'a'}
 	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
 	pressPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
 	wheelUp     = tea.MouseWheelMsg{Button: tea.MouseWheelUp}
@@ -239,6 +258,15 @@ func (s *storeSession) SetTag(id, tag string) error { return s.store.SetTag(id, 
 //
 //nolint:wrapcheck // the session reports the failure of the store as it is.
 func (s *storeSession) SetTitle(title string) error { return s.store.SetTitle(title) }
+
+// ActiveAgent reports the agent the active branch of the store runs.
+func (s *storeSession) ActiveAgent() string { return s.store.ActiveAgent() }
+
+// SetAgent selects the agent of the active branch of the store.
+func (s *storeSession) SetAgent(ctx context.Context, id string) error {
+	//nolint:wrapcheck // the session reports the failure of the store as it is.
+	return s.store.SetAgent(ctx, id)
+}
 
 // Run records the prompt, appends it to the store the way a run does, so the
 // tests see the branch a run opens, and returns the scripted event channel.
@@ -938,7 +966,8 @@ func TestModel(t *testing.T) {
 		update(t, m, pressDown)
 		update(t, m, pressDown)
 		update(t, m, pressDown)
-		require.Equal(t, 5, m.commands.cursor, "the options follow the commands")
+		update(t, m, pressDown)
+		require.Equal(t, 6, m.commands.cursor, "the options follow the commands")
 		update(t, m, pressEnter)
 		require.True(t, m.preferences.ExpandToolOutput)
 
@@ -953,7 +982,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressEnter)
 		require.False(t, m.preferences.RenderMarkdown)
 
-		require.Equal(t, 7, m.commands.cursor)
+		require.Equal(t, 8, m.commands.cursor)
 
 		update(t, m, pressDown)
 		require.Equal(
@@ -966,7 +995,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressUp)
 		require.Equal(
 			t,
-			7,
+			8,
 			m.commands.cursor,
 			"stepping up from the first command wraps to the last",
 		)
@@ -2736,5 +2765,174 @@ func TestRenameSession(t *testing.T) {
 			"hello",
 			"a session the user did not name shows no name",
 		)
+	})
+}
+
+// TestSwitchAgent verifies the agent selection of an open conversation: the
+// leader chord, the picker it opens and the command center entry that reaches
+// the same place.
+func TestSwitchAgent(t *testing.T) {
+	t.Run("opens the picker with the leader chord", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+
+		require.Nil(t, update(t, m, pressCtrlX), "the leader only arms the chord")
+		require.Equal(t, phaseChat, m.phase)
+
+		update(t, m, pressA)
+
+		require.Equal(t, phasePicker, m.phase)
+		require.True(t, m.switching)
+		require.Contains(t, plain(m.render()), "Switch the agent of the conversation")
+		require.Contains(t, plain(m.render()), "current", "the running agent is marked")
+		require.Empty(t, stored.store.Branch()[0].AgentID, "nothing is selected yet")
+	})
+
+	t.Run("opens the picker from the command center", func(t *testing.T) {
+		m, _ := storeChat(t, textMessage(llm.RoleUser, "first"))
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Switch agent")
+		update(t, m, pressEnter)
+
+		require.Equal(t, phasePicker, m.phase)
+		require.True(t, m.switching)
+	})
+
+	t.Run("selects the agent the conversation runs onward", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		m.agents = append(m.agents, agent.Agent{ID: "reviewer", Description: "Another agent"})
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressA)
+		typeFilter(t, m, "reviewer")
+		update(t, m, pressEnter)
+
+		require.Equal(t, phaseChat, m.phase)
+		require.False(t, m.switching)
+		require.Equal(t, "reviewer", stored.store.ActiveAgent())
+		require.Contains(t, plain(m.render()), "reviewer", "the identity follows the agent")
+	})
+
+	t.Run("returns to the conversation on escape", func(t *testing.T) {
+		m, stored := storeChat(t, textMessage(llm.RoleUser, "first"))
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressA)
+		update(t, m, pressEscape)
+
+		require.Equal(t, phaseChat, m.phase)
+		require.False(t, m.switching)
+		require.Equal(t, "coder", stored.store.ActiveAgent(), "escape selects nothing")
+	})
+
+	t.Run("clears the query before leaving the picker", func(t *testing.T) {
+		m, _ := storeChat(t, textMessage(llm.RoleUser, "first"))
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressA)
+		typeFilter(t, m, "coder")
+		update(t, m, pressEscape)
+
+		require.Equal(t, phasePicker, m.phase, "escape clears the query first")
+		update(t, m, pressEscape)
+		require.Equal(t, phaseChat, m.phase)
+	})
+
+	t.Run("stays away while the agent works", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("hello")
+		require.NotNil(t, update(t, m, pressEnter))
+
+		// The leader chord is spent on its second key, so the run guard is
+		// reached from a conversation that is not waiting for a chord.
+		require.Nil(t, update(t, m, pressCtrlX))
+		update(t, m, pressA)
+		require.Equal(t, phaseChat, m.phase)
+
+		require.False(t, m.switchReady())
+		require.Equal(t, "a run is in flight", m.switchNote())
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Switch agent")
+		require.Contains(t, plain(m.render()), "a run is in flight")
+		update(t, m, pressEnter)
+		require.Equal(t, phaseSettings, m.phase, "the command cannot open the picker")
+	})
+
+	t.Run("stays away without a session", func(t *testing.T) {
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+
+		require.False(t, m.switchReady())
+		require.Equal(t, "open a session first", m.switchNote())
+	})
+
+	t.Run("ignores a key that completes no chord", func(t *testing.T) {
+		m, _ := storeChat(t, textMessage(llm.RoleUser, "first"))
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressDown)
+
+		require.Equal(t, phaseChat, m.phase)
+		require.False(t, m.leader, "the chord is spent")
+	})
+
+	t.Run("labels the answers with the agent that wrote them", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		m.agents = append(m.agents, agent.Agent{ID: "reviewer"})
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Switch agent")
+		update(t, m, pressEnter)
+		typeFilter(t, m, "reviewer")
+		update(t, m, pressEnter)
+
+		// The answer written before the selection keeps its author, and the
+		// one written after carries the agent that wrote it.
+		_, err := stored.store.Append(t.Context(), session.Entry{
+			Message: textMessage(llm.RoleAssistant, "two"),
+		})
+		require.NoError(t, err)
+		m.reloadTranscript()
+
+		view := plain(m.render())
+		require.Contains(t, view, "Agent: coder", "the turn before the switch keeps its agent")
+		require.Contains(t, view, "Agent: reviewer", "the turn after carries the new agent")
+	})
+
+	t.Run("draws the tree turn by turn with its author", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		m.agents = append(m.agents, agent.Agent{ID: "reviewer"})
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Switch agent")
+		update(t, m, pressEnter)
+		typeFilter(t, m, "reviewer")
+		update(t, m, pressEnter)
+		_, err := stored.store.Append(t.Context(), session.Entry{
+			Message: textMessage(llm.RoleAssistant, "two"),
+		})
+		require.NoError(t, err)
+
+		update(t, m, pressCtrlT)
+
+		view := plain(m.render())
+		require.Contains(t, view, "Agent (coder): one")
+		require.Contains(t, view, "Agent (reviewer): two")
 	})
 }

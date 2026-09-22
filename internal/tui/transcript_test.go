@@ -132,7 +132,7 @@ func TestTranscript(t *testing.T) {
 			// reader, and the stored timestamps carry the whole wait.
 			messageEntryAt(base.Add(5*time.Minute), llm.RoleAssistant,
 				llm.Block{Type: llm.BlockText, Text: "finally"}),
-		})
+		}, "coder")
 
 		require.Len(t, conversation.entries, 2)
 		require.Equal(t, 5*time.Minute, conversation.entries[1].elapsed)
@@ -150,7 +150,7 @@ func TestTranscript(t *testing.T) {
 				llm.Block{Type: llm.BlockToolResult, ToolResultCallID: "c1"}),
 			messageEntryAt(base.Add(30*time.Second), llm.RoleAssistant,
 				llm.Block{Type: llm.BlockText, Text: "done"}),
-		})
+		}, "coder")
 
 		last := conversation.entries[len(conversation.entries)-1]
 		require.Equal(t, 30*time.Second, last.elapsed, "the whole turn counts")
@@ -163,7 +163,7 @@ func TestTranscript(t *testing.T) {
 		conversation.load([]session.Entry{
 			messageEntryAt(base, llm.RoleUser,
 				llm.Block{Type: llm.BlockText, Text: "never answered"}),
-		})
+		}, "coder")
 
 		require.Len(t, conversation.entries, 1)
 		require.Zero(t, conversation.entries[0].elapsed)
@@ -317,7 +317,7 @@ func TestTranscript(t *testing.T) {
 					{Type: llm.BlockText, Text: "a.txt"},
 				},
 			}),
-		})
+		}, "coder")
 
 		require.Len(t, conversation.entries, 4)
 		require.Equal(t, entryUser, conversation.entries[0].kind)
@@ -349,7 +349,7 @@ func TestTranscript(t *testing.T) {
 					{Type: llm.BlockText, Text: "boom"},
 				},
 			}),
-		})
+		}, "coder")
 
 		require.Len(t, conversation.entries, 1)
 		require.True(t, conversation.entries[0].toolDone)
@@ -447,7 +447,7 @@ func TestTranscriptCompaction(t *testing.T) {
 				CompactionSummary: "the summary",
 				CompactionKeptID:  "u1",
 			},
-		})
+		}, "coder")
 
 		require.Len(t, folded.entries, 2)
 		require.Equal(t, entryUser, folded.entries[0].kind)

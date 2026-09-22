@@ -1292,7 +1292,7 @@ func BenchmarkStreamBurst(b *testing.B) {
 	for i := 0; b.Loop(); i++ {
 		if i%benchResetEvery == 0 {
 			m.transcript = transcript{}
-			m.transcript.load(history)
+			m.transcript.load(history, "coder")
 		}
 		m.Update(burst)
 	}

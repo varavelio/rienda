@@ -92,7 +92,7 @@ func TestRun(t *testing.T) {
 		}}}}
 		engine, store := newTestEngine(t, Config{
 			Client: client,
-			Agent:  agent.Agent{ID: "coder", SystemPrompt: "be brief"},
+			Agents: []agent.Agent{{ID: "coder", SystemPrompt: "be brief"}},
 		})
 
 		events := collect(engine.Run(t.Context(), "hello"))
@@ -128,6 +128,65 @@ func TestRun(t *testing.T) {
 		require.Equal(t, llm.Usage{InputTokens: 3, OutputTokens: 2}, entries[1].ResponseUsage)
 	})
 
+	t.Run("runs the agent the branch selected", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{endTurn("one"), endTurn("two")}}
+		planner := agent.Agent{ID: "coder", SystemPrompt: "plan", Tools: []string{"echo"}}
+		implementer := agent.Agent{ID: "implementer", SystemPrompt: "build"}
+		engine, store := newTestEngine(t, Config{
+			Client:   client,
+			Registry: newTestRegistry(t, &fakeTool{name: "echo"}),
+			Agents:   []agent.Agent{planner, implementer},
+		})
+
+		collect(engine.Run(t.Context(), "first"))
+		require.NoError(t, store.SetAgent(t.Context(), "implementer"))
+		collect(engine.Run(t.Context(), "second"))
+
+		require.Len(t, client.requests, 2)
+		require.Equal(t, "plan", client.requests[0].System)
+		require.Len(t, client.requests[0].Tools, 1, "the planner declares a tool")
+		require.Equal(t, "build", client.requests[1].System)
+		require.Empty(t, client.requests[1].Tools, "the implementer declares none")
+	})
+
+	t.Run("reports the agent of the run that started", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{endTurn("one"), endTurn("two")}}
+		engine, store := newTestEngine(t, Config{
+			Client: client,
+			Agents: []agent.Agent{{ID: "coder"}, {ID: "reviewer"}},
+		})
+
+		collect(engine.Run(t.Context(), "first"))
+		before := collect(engine.Run(t.Context(), "second"))
+		require.NoError(t, store.SetAgent(t.Context(), "reviewer"))
+		after := collect(engine.Run(t.Context(), "third"))
+
+		require.Equal(t, "coder", before[0].AgentID)
+		require.Equal(t, "reviewer", after[0].AgentID, "the branch selected another agent")
+	})
+
+	t.Run("fails before writing when the branch names a missing agent", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{endTurn("one")}}
+		engine, store := newTestEngine(t, Config{
+			Client: client,
+			Agents: []agent.Agent{{ID: "coder"}},
+		})
+		collect(engine.Run(t.Context(), "first"))
+		requests, entries := len(client.requests), len(store.Entries())
+
+		// The store accepts a selection Rienda cannot run: an agent whose
+		// definition is gone. The run fails before anything is written, so the
+		// conversation stays as it was.
+		require.NoError(t, store.SetAgent(t.Context(), "ghost"))
+
+		events := collect(engine.Run(t.Context(), "second"))
+
+		require.Equal(t, []EventType{EventError, EventRunEnd}, eventTypes(events))
+		require.Contains(t, events[0].Error, `unknown agent "ghost"`)
+		require.Len(t, client.requests, requests, "no request reached the provider")
+		require.Len(t, store.Entries(), entries+1, "only the selection was written")
+	})
+
 	t.Run("runs tools and continues the conversation", func(t *testing.T) {
 		shellTool := &fakeTool{name: "shell", output: "file.txt", emitted: []string{"file", ".txt"}}
 		client := &fakeClient{scripts: []script{
@@ -148,7 +207,7 @@ func TestRun(t *testing.T) {
 		engine, store := newTestEngine(t, Config{
 			Client:   client,
 			Registry: newTestRegistry(t, shellTool),
-			Agent:    agent.Agent{ID: "coder", Tools: []string{"shell"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"shell"}}},
 		})
 
 		events := collect(engine.Run(t.Context(), "list files"))
@@ -195,7 +254,7 @@ func TestRun(t *testing.T) {
 		engine, store := newTestEngine(t, Config{
 			Client:   client,
 			Registry: newTestRegistry(t, echoTool),
-			Agent:    agent.Agent{Tools: []string{"echo"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"echo"}}},
 		})
 
 		collect(engine.Run(t.Context(), "go"))
@@ -228,7 +287,7 @@ func TestRun(t *testing.T) {
 		engine, store := newTestEngine(t, Config{
 			Client:   client,
 			Registry: newTestRegistry(t, echoTool),
-			Agent:    agent.Agent{Tools: []string{"echo"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"echo"}}},
 		})
 
 		collect(engine.Run(t.Context(), "go"))
@@ -279,7 +338,7 @@ func TestRun(t *testing.T) {
 		engine, store := newTestEngine(t, Config{
 			Client:   client,
 			Registry: newTestRegistry(t, brokenTool, failedTool),
-			Agent:    agent.Agent{Tools: []string{"broken", "nonzero"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"broken", "nonzero"}}},
 		})
 
 		collect(engine.Run(t.Context(), "go"))
@@ -311,7 +370,7 @@ func TestRun(t *testing.T) {
 		engine, store := newTestEngine(t, Config{
 			Client:   client,
 			Registry: newTestRegistry(t, shellTool),
-			Agent:    agent.Agent{Tools: []string{"shell"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"shell"}}},
 		})
 
 		collect(engine.Run(t.Context(), "go"))
@@ -360,7 +419,7 @@ func TestRun(t *testing.T) {
 		engine, store := newTestEngine(t, Config{
 			Client:   client,
 			Registry: newTestRegistry(t, firstTool, secondTool),
-			Agent:    agent.Agent{Tools: []string{"first", "second"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"first", "second"}}},
 		})
 
 		ctx, cancel := context.WithCancel(t.Context())
@@ -463,7 +522,7 @@ func TestRun(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{
 			Client:   client,
 			Registry: newTestRegistry(t, echoTool),
-			Agent:    agent.Agent{Tools: []string{"echo"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"echo"}}},
 			Workdir:  workdir,
 		})
 
@@ -481,7 +540,7 @@ func TestRun(t *testing.T) {
 		engine, store := newTestEngine(t, Config{
 			Client:   client,
 			Registry: newTestRegistry(t, silentTool),
-			Agent:    agent.Agent{Tools: []string{"silent"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"silent"}}},
 		})
 
 		collect(engine.Run(t.Context(), "go"))
@@ -508,7 +567,12 @@ func TestRun(t *testing.T) {
 			scripts: []script{endTurn("hi")},
 			store:   store,
 		}
-		engine, err := New(Config{Client: client, Store: store, Model: Model{ID: "test-model"}})
+		engine, err := New(Config{
+			Client: client,
+			Store:  store,
+			Model:  Model{ID: "test-model"},
+			Agents: []agent.Agent{{ID: "coder"}},
+		})
 		require.NoError(t, err)
 
 		events := collect(engine.Run(t.Context(), "hello"))
@@ -531,7 +595,7 @@ func TestRun(t *testing.T) {
 		engine, store := newTestEngine(t, Config{
 			Client:   client,
 			Registry: newTestRegistry(t, echoTool),
-			Agent:    agent.Agent{Tools: []string{"echo"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"echo"}}},
 		})
 		echoTool.before = func(context.Context) { require.NoError(t, store.Close()) }
 

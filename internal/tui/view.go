@@ -272,10 +272,12 @@ func formatElapsed(d time.Duration) string {
 }
 
 // viewPicker renders the list of agents to choose from, narrowed by the query
-// typed into it.
+// typed into it. The list serves two purposes, and it says which one it is
+// serving: choosing the agent of a new session, or changing the agent the
+// conversation runs.
 func (m *model) viewPicker() string {
 	rows := m.headerRows(m.brandIdentity())
-	rows = append(rows, "Select an agent", "")
+	rows = append(rows, m.pickerTitle(), "")
 	rows = append(rows, m.filterRow(&m.picker), "")
 
 	first, last := m.picker.window(m.listRows())
@@ -287,19 +289,37 @@ func (m *model) viewPicker() string {
 	}
 
 	// The picker only returns to the start list when it was opened from it,
-	// which is the case whenever the workspace holds a previous session.
+	// which is the case whenever the workspace holds a previous session and
+	// the list is not changing the agent of the open conversation.
 	hint := "type to filter · ↑/↓ move · enter select"
-	if len(m.starts) > 1 {
+	if !m.switching && len(m.starts) > 1 {
 		hint += " · esc back"
 	}
 	rows = append(rows, m.footerRows(hint+" · ctrl+p settings · ctrl+c quit")...)
 	return strings.Join(rows, "\n")
 }
 
-// pickerLine renders one agent row of the picker.
+// pickerTitle names what the picker is asking for, so the reader never doubts
+// whether choosing an entry starts a conversation or changes the one in front
+// of them.
+func (m *model) pickerTitle() string {
+	if m.switching {
+		return "Switch the agent of the conversation"
+	}
+	return "Select an agent"
+}
+
+// pickerLine renders one agent row of the picker. The agent the conversation
+// already runs is marked, so changing agent shows where the session stands
+// before the user moves the highlight.
 func (m *model) pickerLine(position int) string {
-	definition := m.agents[m.picker.shown[position]]
+	index := m.picker.shown[position]
+	definition := m.agents[index]
+
 	line := m.row(position == m.picker.cursor, definition.ID)
+	if m.switching && m.session != nil && definition.ID == m.session.ActiveAgent() {
+		line += "  " + m.styles.on.Render("current")
+	}
 	if definition.Description == "" {
 		return line
 	}
@@ -466,7 +486,7 @@ func (m *model) treeTurn(node treeNode, highlighted bool) string {
 	if node.entry.Tag != "" {
 		line += m.styles.tag.Render("#"+node.entry.Tag) + " "
 	}
-	line += m.treeNameStyle(node.entry).Render(treeName(node.entry, m.session.Info().Agent))
+	line += m.treeNameStyle(node.entry).Render(treeName(node))
 	line += " " + m.treeMessage(node, highlighted)
 	return line
 }
@@ -539,16 +559,18 @@ func treeConnector(node treeNode) string {
 }
 
 // treeName returns the author of a turn, which the tree shows before the
-// message so the reader always knows who wrote it. A checkpoint carries its
-// own label instead of an author.
-func treeName(entry session.Entry, agent string) string {
+// message so the reader always knows who wrote it. An answer names the agent
+// that wrote it, which is the agent the branch ran at that turn, so a
+// conversation that changed agent shows who wrote what. A checkpoint carries
+// its own label instead of an author.
+func treeName(node treeNode) string {
 	switch {
-	case entry.Kind == session.KindCompaction:
+	case node.entry.Kind == session.KindCompaction:
 		return "Compaction:"
-	case entry.Message.Role == llm.RoleUser:
+	case node.entry.Message.Role == llm.RoleUser:
 		return "You:"
 	default:
-		return "Agent (" + agent + "):"
+		return "Agent (" + node.agent + "):"
 	}
 }
 
@@ -695,7 +717,7 @@ func (m *model) mentionList(rows int) string {
 // in the list.
 func (m *model) chatIdentity() string {
 	info := m.session.Info()
-	parts := []string{info.Agent, info.Model}
+	parts := []string{m.session.ActiveAgent(), info.Model}
 	if info.ID != "" {
 		parts = append(parts, info.ID)
 	}
@@ -723,7 +745,10 @@ func (m *model) chatFooter() string {
 	}
 	// The keys lead with the ones a session uses all the time, so a narrow
 	// terminal cuts the rare ones instead of the ones the reader needs.
-	parts = append(parts, "@ files · enter send · ctrl+t tree · ctrl+p settings · ctrl+c quit")
+	parts = append(
+		parts,
+		"@ files · enter send · ctrl+x a agent · ctrl+t tree · ctrl+p · ctrl+c quit",
+	)
 
 	return m.footerHints(strings.Join(parts, " · "))
 }
@@ -850,11 +875,11 @@ func (m *model) renderBlockBody(current *entry, width int) string {
 // them.
 func (m *model) renderAssistantBlock(current *entry, width int) string {
 	if !m.preferences.RenderMarkdown {
-		return m.styles.assistant.block(width, m.assistantName(), current.text())
+		return m.styles.assistant.block(width, m.assistantName(current.agent), current.text())
 	}
 
 	body := m.markdown.render(current.text(), width, m.hasDarkBG)
-	label := m.styles.assistant.title.Render(m.assistantName())
+	label := m.styles.assistant.title.Render(m.assistantName(current.agent))
 	return m.styles.assistant.rendered(width, label, body)
 }
 
@@ -870,10 +895,10 @@ func (m *model) divider() string {
 	return strings.Join([]string{"", m.ruleLine(m.styles.divider), ""}, "\n")
 }
 
-// assistantName returns the label shown for the answers of the agent, naming
-// the agent they belong to.
-func (m *model) assistantName() string {
-	return "Agent: " + m.session.Info().Agent
+// assistantName returns the label shown for the answers of an agent, naming
+// the agent that wrote them.
+func (m *model) assistantName(agent string) string {
+	return "Agent: " + agent
 }
 
 // renderThinkingEntry renders a reasoning block: the whole text when the

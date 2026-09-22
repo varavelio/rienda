@@ -74,13 +74,6 @@ func TestRunRequiresItsOptions(t *testing.T) {
 		require.Contains(t, result.Stderr, "an agent or a session is required")
 	})
 
-	t.Run("with an agent and a session together", func(t *testing.T) {
-		result := harness.Run(t, nil, "run", "-a", "coder", "-s", "session-1", "-p", "hi")
-
-		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, "mutually exclusive")
-	})
-
 	t.Run("without a prompt", func(t *testing.T) {
 		result := harness.Run(t, nil, "run", "-a", "coder")
 

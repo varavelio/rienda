@@ -133,6 +133,9 @@ func newTestEngine(t *testing.T, cfg Config) (*Engine, *session.Store) {
 	if cfg.Model.ID == "" {
 		cfg.Model.ID = "test-model"
 	}
+	if len(cfg.Agents) == 0 {
+		cfg.Agents = []agent.Agent{{ID: "coder"}}
+	}
 
 	engine, err := New(cfg)
 	require.NoError(t, err)
@@ -170,7 +173,12 @@ func eventTypes(events []Event) []EventType {
 func TestNew(t *testing.T) {
 	store := newTestStore(t)
 	base := func() Config {
-		return Config{Client: &fakeClient{}, Store: store, Model: Model{ID: "test-model"}}
+		return Config{
+			Client: &fakeClient{},
+			Store:  store,
+			Model:  Model{ID: "test-model"},
+			Agents: []agent.Agent{{ID: "coder"}},
+		}
 	}
 
 	t.Run("rejects invalid configurations", func(t *testing.T) {
@@ -200,14 +208,31 @@ func TestNew(t *testing.T) {
 				wantErr: "workdir must be an absolute path",
 			},
 			{
-				name:    "declared tools without a registry",
-				mutate:  func(cfg *Config) { cfg.Agent.Tools = []string{"shell"} },
+				name:    "no agents",
+				mutate:  func(cfg *Config) { cfg.Agents = nil },
+				wantErr: "at least one agent is required",
+			},
+			{
+				name:    "an agent without an id",
+				mutate:  func(cfg *Config) { cfg.Agents = []agent.Agent{{}} },
+				wantErr: "every agent needs an id",
+			},
+			{
+				name:    "an agent the session does not run",
+				mutate:  func(cfg *Config) { cfg.Agents = []agent.Agent{{ID: "ghost"}} },
+				wantErr: `unknown agent "coder"`,
+			},
+			{
+				name: "declared tools without a registry",
+				mutate: func(cfg *Config) {
+					cfg.Agents = []agent.Agent{{ID: "coder", Tools: []string{"shell"}}}
+				},
 				wantErr: "the agent declares tools but no registry was provided",
 			},
 			{
 				name: "unknown declared tool",
 				mutate: func(cfg *Config) {
-					cfg.Agent.Tools = []string{"ghost"}
+					cfg.Agents = []agent.Agent{{ID: "coder", Tools: []string{"ghost"}}}
 					cfg.Registry = newTestRegistry(t, &fakeTool{name: "shell"})
 				},
 				wantErr: `unknown tool "ghost"`,
@@ -226,22 +251,25 @@ func TestNew(t *testing.T) {
 		}
 	})
 
-	t.Run("applies defaults", func(t *testing.T) {
+	t.Run("resolves the agent the session runs", func(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{})
 
-		require.Empty(t, engine.tools.definitions)
-		require.Nil(t, engine.tools.executors)
+		require.Contains(t, engine.agents, "coder")
+		require.True(t, engine.KnowsAgent("coder"))
+		require.False(t, engine.KnowsAgent("ghost"))
 	})
 
-	t.Run("resolves the declared tools", func(t *testing.T) {
+	t.Run("resolves the tools of the agent", func(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{
 			Registry: newTestRegistry(t, &fakeTool{name: "shell"}),
-			Agent:    agent.Agent{ID: "coder", Tools: []string{"shell", "shell"}},
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"shell", "shell"}}},
 		})
 
-		require.Len(t, engine.tools.definitions, 1)
-		require.Equal(t, "shell", engine.tools.definitions[0].Name)
-		require.Contains(t, engine.tools.executors, "shell")
+		request, tools, err := engine.request()
+		require.NoError(t, err)
+		require.Len(t, request.Tools, 1)
+		require.Equal(t, "shell", request.Tools[0].Name)
+		require.Contains(t, tools.executors, "shell")
 	})
 }
 
@@ -251,7 +279,7 @@ func TestRequest(t *testing.T) {
 
 	t.Run("sends the generation settings of the model", func(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{
-			Agent: agent.Agent{SystemPrompt: "be nice"},
+			Agents: []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
 			Model: Model{
 				ID:          "wire-model",
 				MaxTokens:   100,
@@ -261,7 +289,7 @@ func TestRequest(t *testing.T) {
 			},
 		})
 
-		request, err := engine.request()
+		request, _, err := engine.request()
 		require.NoError(t, err)
 
 		require.Equal(t, "wire-model", request.Model)
@@ -275,7 +303,7 @@ func TestRequest(t *testing.T) {
 	t.Run("leaves unset generation settings untouched", func(t *testing.T) {
 		engine, _ := newTestEngine(t, Config{Model: Model{ID: "wire-model"}})
 
-		request, err := engine.request()
+		request, _, err := engine.request()
 		require.NoError(t, err)
 
 		require.Zero(t, request.MaxTokens)
@@ -292,7 +320,7 @@ func TestRequest(t *testing.T) {
 		}})
 		require.NoError(t, err)
 
-		request, err := engine.request()
+		request, _, err := engine.request()
 		require.NoError(t, err)
 		require.Equal(t, store.History(), request.Messages)
 	})
@@ -301,11 +329,11 @@ func TestRequest(t *testing.T) {
 		dir := t.TempDir()
 		writeProjectInstructions(t, dir, "Use tabs.")
 		engine, _ := newTestEngine(t, Config{
-			Agent:   agent.Agent{SystemPrompt: "be nice"},
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
 			Workdir: dir,
 		})
 
-		request, err := engine.request()
+		request, _, err := engine.request()
 		require.NoError(t, err)
 		require.Contains(t, request.System, "be nice")
 		require.Contains(t, request.System, "Use tabs.")
@@ -316,7 +344,9 @@ func TestRequest(t *testing.T) {
 func TestContext(t *testing.T) {
 	t.Run("measures the system prompt, the tools and the history", func(t *testing.T) {
 		engine, store := newTestEngine(t, Config{
-			Agent:    agent.Agent{SystemPrompt: "be brief", Tools: []string{"shell"}},
+			Agents: []agent.Agent{
+				{ID: "coder", SystemPrompt: "be brief", Tools: []string{"shell"}},
+			},
 			Model:    Model{ID: "test-model", ContextWindow: 200},
 			Registry: newTestRegistry(t, &fakeTool{name: "shell"}),
 		})
@@ -333,7 +363,7 @@ func TestContext(t *testing.T) {
 		require.NotZero(t, report.Used)
 		require.Greater(t, report.Percent, 0)
 
-		request, err := engine.request()
+		request, _, err := engine.request()
 		require.NoError(t, err)
 		require.Equal(t, tokens.OfRequest(request), report.Used)
 		require.NotEmpty(t, request.Tools, "the measured request declares the tools of the agent")

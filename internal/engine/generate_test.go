@@ -26,7 +26,7 @@ func newGenerateTest(t *testing.T, events []llm.StreamEvent) (*Engine, *fakeClie
 func generateTurn(t *testing.T, engine *Engine) (turn, []Event) {
 	t.Helper()
 
-	request, err := engine.request()
+	request, _, err := engine.request()
 	require.NoError(t, err)
 
 	events := make(chan Event, 128)
@@ -147,7 +147,7 @@ func TestGenerate(t *testing.T) {
 			{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
 		})
 
-		request, err := engine.request()
+		request, _, err := engine.request()
 		require.NoError(t, err)
 
 		events := make(chan Event, 8)
@@ -160,7 +160,7 @@ func TestGenerate(t *testing.T) {
 		client := &fakeClient{scripts: []script{{nextErr: errors.New("boom")}}}
 		engine, _ := newTestEngine(t, Config{Client: client})
 
-		request, err := engine.request()
+		request, _, err := engine.request()
 		require.NoError(t, err)
 
 		events := make(chan Event, 8)
@@ -173,7 +173,7 @@ func TestGenerate(t *testing.T) {
 		client := &fakeClient{scripts: []script{{openErr: errors.New("connect boom")}}}
 		engine, _ := newTestEngine(t, Config{Client: client})
 
-		request, err := engine.request()
+		request, _, err := engine.request()
 		require.NoError(t, err)
 
 		events := make(chan Event, 8)
@@ -287,7 +287,7 @@ func TestGenerate(t *testing.T) {
 		}}}
 		engine, _ := newTestEngine(t, Config{Client: client})
 
-		request, err := engine.request()
+		request, _, err := engine.request()
 		require.NoError(t, err)
 
 		events := make(chan Event, 8)

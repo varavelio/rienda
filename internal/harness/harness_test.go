@@ -232,13 +232,20 @@ func newTestEnvironment(t *testing.T, scripts ...[]string) *testEnvironment {
 // writeAgent writes an agent definition for model.
 func (e *testEnvironment) writeAgent(t *testing.T, id, model string) {
 	t.Helper()
+	e.writeAgentPrompt(t, id, model, "You answer briefly.")
+}
+
+// writeAgentPrompt writes an agent definition for model whose body is prompt,
+// so a test can tell the agents of a roster apart.
+func (e *testEnvironment) writeAgentPrompt(t *testing.T, id, model, prompt string) {
+	t.Helper()
 
 	definition := "---\n" +
 		"description: A test agent\n" +
 		"model: " + model + "\n" +
 		"tools: [shell]\n" +
 		"---\n" +
-		"You answer briefly.\n"
+		prompt + "\n"
 	require.NoError(t, os.WriteFile(e.agentPath(id), []byte(definition), 0o600))
 }
 
@@ -328,14 +335,7 @@ func TestPrepare(t *testing.T) {
 			{
 				name:    "unknown agent",
 				mutate:  func(options *Options) { options.AgentID = "ghost" },
-				wantErr: "ghost.md",
-			},
-			{
-				name: "agent id with session id",
-				mutate: func(options *Options) {
-					options.SessionID = "session_00000000000000000000000000"
-				},
-				wantErr: "mutually exclusive",
+				wantErr: `agent "ghost" is not defined`,
 			},
 		}
 
@@ -458,6 +458,9 @@ func TestPrepare(t *testing.T) {
 		env := newTestEnvironment(t)
 		stored := env.prepare(t)
 
+		// Another agent stays in the roster, so the failure is the missing
+		// agent of the session rather than an empty agent directory.
+		env.writeAgent(t, "reviewer", "fake/test-model")
 		require.NoError(t, os.Remove(env.agentPath("coder")))
 
 		options := env.options()
@@ -466,7 +469,59 @@ func TestPrepare(t *testing.T) {
 
 		_, err := Prepare(t.Context(), options)
 
-		require.ErrorContains(t, err, `load agent "coder"`)
+		require.ErrorContains(t, err, `unknown agent "coder"`)
+	})
+
+	t.Run("switches the agent of a resumed session", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"), textScript("two"))
+		env.writeAgentPrompt(t, "reviewer", "fake/test-model", "You review code.")
+		stored := env.prepare(t)
+		collectEvents(stored.Run(t.Context(), "first"))
+		require.Equal(t, "coder", stored.ActiveAgent())
+		require.NoError(t, stored.Close())
+
+		options := env.options()
+		options.AgentID = "reviewer"
+		options.SessionID = stored.ID()
+
+		prepared, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+
+		require.Equal(t, "reviewer", prepared.ActiveAgent())
+		collectEvents(prepared.Run(t.Context(), "second"))
+		require.Len(t, env.provider.requests, 2)
+		require.Equal(t, "You review code.", env.provider.requests[1].Messages[0].Content)
+	})
+
+	t.Run("refuses an agent a resumed session does not know", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		stored := env.prepare(t)
+		collectEvents(stored.Run(t.Context(), "first"))
+		require.NoError(t, stored.Close())
+
+		options := env.options()
+		options.AgentID = "ghost"
+		options.SessionID = stored.ID()
+
+		_, err := Prepare(t.Context(), options)
+
+		require.ErrorContains(t, err, `agent "ghost" is not defined`)
+		require.ErrorContains(t, err, filepath.Join(env.agentsDir, "ghost.md"))
+	})
+
+	t.Run("refuses a roster that does not parse", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		require.NoError(t, os.WriteFile(
+			env.agentPath("broken"),
+			[]byte("---\ndescription: A test agent\n---\nBody\n"),
+			0o600,
+		))
+
+		_, err := Prepare(t.Context(), env.options())
+
+		require.ErrorContains(t, err, "load agents")
+		require.ErrorContains(t, err, "model is required")
 	})
 }
 
@@ -504,6 +559,44 @@ func TestSession(t *testing.T) {
 
 		require.ErrorContains(t, prepared.SetLeaf("ghost"), `unknown entry "ghost"`)
 		require.ErrorContains(t, prepared.SetTag("ghost", "bug"), `unknown entry "ghost"`)
+	})
+
+	t.Run("switches the agent of the branch", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"), textScript("two"))
+		env.writeAgentPrompt(t, "reviewer", "fake/test-model", "You review code.")
+		prepared := env.prepare(t)
+
+		require.Equal(t, "coder", prepared.ActiveAgent())
+
+		collectEvents(prepared.Run(t.Context(), "first"))
+		require.NoError(t, prepared.SetAgent(t.Context(), "reviewer"))
+
+		require.Equal(t, "reviewer", prepared.ActiveAgent())
+
+		collectEvents(prepared.Run(t.Context(), "second"))
+		require.Len(t, env.provider.requests, 2)
+		require.Equal(t, "You review code.", env.provider.requests[1].Messages[0].Content,
+			"the second request carries the definition of the new agent")
+
+		// The selection is bound to the branch: reopening the session resolves
+		// it from the file.
+		reopened, err := session.Open(
+			filepath.Dir(env.sessionPath(t, prepared.ID())),
+			prepared.ID(),
+			id.NewIDGenerator(),
+		)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+		require.Equal(t, "reviewer", reopened.ActiveAgent())
+	})
+
+	t.Run("refuses an agent the roster does not hold", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		prepared := env.prepare(t)
+		before := len(prepared.Tree())
+
+		require.ErrorContains(t, prepared.SetAgent(t.Context(), "ghost"), `unknown agent "ghost"`)
+		require.Len(t, prepared.Tree(), before, "nothing was written")
 	})
 }
 

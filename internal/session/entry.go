@@ -29,6 +29,12 @@ const (
 	// model. The checkpoint hangs from the active leaf, so it belongs to the
 	// branch that produced it and to no other.
 	KindCompaction Kind = "compaction"
+	// KindAgent selects the agent the branch runs from this entry onward, so
+	// one conversation can plan with one agent and implement with another.
+	// Like a compaction, it hangs from the active leaf and belongs to the
+	// branch that wrote it, and it describes the whole selection, so the
+	// newest one of a branch wins.
+	KindAgent Kind = "agent"
 )
 
 // Entry is a single node of the session tree. Only the fields valid for the
@@ -82,4 +88,9 @@ type Entry struct {
 	// CompactionTokensBefore is what the summarized range measured before it
 	// was compacted.
 	CompactionTokensBefore int
+
+	// AgentID is the identifier of the agent a KindAgent entry selects, empty
+	// when it selects none. The entry carries no message: it only moves the
+	// branch it hangs from onto another agent.
+	AgentID string
 }

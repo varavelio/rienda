@@ -33,6 +33,13 @@ func titleMarkerLine(title string) string {
 	return `{"kind":"title","createdAt":"2026-09-16T10:15:33Z","title":"` + title + `"}`
 }
 
+// agentLine builds an agent selection line selecting the agent with the id,
+// hanging from parentID.
+func agentLine(id, parentID, agentID string) string {
+	return `{"kind":"agent","id":"` + id + `","parentId":"` + parentID + `",` +
+		`"createdAt":"2026-09-16T10:15:35Z","agentId":"` + agentID + `"}`
+}
+
 // compactionLine builds a compaction line replacing everything before keptID.
 func compactionLine(id, parentID, keptID, summary string) string {
 	return `{"kind":"compaction","id":"` + id + `","parentId":"` + parentID + `",` +
@@ -144,6 +151,22 @@ func TestDecode(t *testing.T) {
 		require.Equal(t, "s1", header.ID)
 		require.Empty(t, entries)
 		require.Empty(t, leaf)
+	})
+
+	t.Run("decodes an agent selection and advances the leaf", func(t *testing.T) {
+		data := validHeaderLine + "\n" + userMessageLine + "\n" +
+			agentLine("a1", "m1", "reviewer") + "\n"
+
+		_, entries, leaf, _, err := decode([]byte(data))
+		require.NoError(t, err)
+
+		require.Len(t, entries, 2)
+		selection := entries[1]
+		require.Equal(t, KindAgent, selection.Kind)
+		require.Equal(t, "a1", selection.ID)
+		require.Equal(t, "m1", selection.ParentID)
+		require.Equal(t, "reviewer", selection.AgentID)
+		require.Equal(t, "a1", leaf)
 	})
 
 	t.Run("ignores unknown entry kinds", func(t *testing.T) {
@@ -437,6 +460,23 @@ func TestDecode(t *testing.T) {
 				name: "compaction with a missing parent",
 				data: validHeaderLine + "\n" + userMessageLine + "\n" +
 					compactionLine("c1", "nope", "m1", "the summary") + "\n",
+				wantErr: `parent "nope" is not an earlier entry`,
+			},
+			{
+				name:    "corrupt agent selection",
+				data:    validHeaderLine + "\n" + `{"kind":"agent",` + "\n",
+				wantErr: "line 2",
+			},
+			{
+				name: "agent selection without an agent",
+				data: validHeaderLine + "\n" + userMessageLine + "\n" +
+					agentLine("a1", "m1", "") + "\n",
+				wantErr: "agent id is required",
+			},
+			{
+				name: "agent selection with a missing parent",
+				data: validHeaderLine + "\n" + userMessageLine + "\n" +
+					agentLine("a1", "nope", "reviewer") + "\n",
 				wantErr: `parent "nope" is not an earlier entry`,
 			},
 			{

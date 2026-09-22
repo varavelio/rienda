@@ -261,6 +261,21 @@ func (s *Store) Leaf() string {
 	return s.leaf
 }
 
+// ActiveAgent returns the identifier of the agent the session runs at its
+// active leaf: the agent the newest KindAgent entry of the branch selects, or
+// the agent the session was created with when the branch selects none. The
+// selection belongs to the branch, so one session can plan with one agent and
+// implement with another, and returning to a turn before a selection runs on
+// the agent that was in effect there.
+func (s *Store) ActiveAgent() string {
+	for _, entry := range slices.Backward(s.Branch()) {
+		if entry.Kind == KindAgent {
+			return entry.AgentID
+		}
+	}
+	return s.info.Agent
+}
+
 // Path returns the entries from the root of the tree down to the entry
 // identified by id.
 func (s *Store) Path(id string) ([]Entry, error) {
@@ -565,6 +580,68 @@ func (s *Store) SetLeaf(id string) error {
 	}
 
 	s.leaf = id
+	return nil
+}
+
+// SetAgent appends an agent selection after the active leaf, so the branch
+// that follows it runs on another agent. Like a message, the selection
+// advances the active leaf, which binds it to the branch that wrote it: a
+// branch that returns to a turn before the selection runs on the agent that
+// was in effect there, and another branch keeps its own. The newest selection
+// of a branch wins, because a selection describes the whole choice.
+//
+// Selecting the agent the branch already runs changes nothing, which keeps a
+// session that stays on its agent from writing markers it does not need. The
+// entry stores the identifier as it was given: whether an agent with that
+// identifier exists is for the caller to know, and an agent that is missing
+// simply leaves the branch with nothing to run.
+func (s *Store) SetAgent(ctx context.Context, id string) error {
+	if s.file == nil {
+		return errors.New("session: the store is closed")
+	}
+
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("session: the agent id must not be empty")
+	}
+	if s.ActiveAgent() == id {
+		return nil
+	}
+
+	entryID := s.generator.NewID(ctx)
+	switch {
+	case entryID == "":
+		return errors.New("session: the id generator returned an empty entry id")
+	case s.known(entryID):
+		return fmt.Errorf("session: the id generator returned duplicate entry id %q", entryID)
+	}
+
+	now := time.Now().UTC()
+	entry := Entry{
+		ID:        entryID,
+		ParentID:  s.leaf,
+		CreatedAt: now,
+		Kind:      KindAgent,
+		AgentID:   id,
+	}
+	line, err := encodeLine(storedAgent{
+		Kind:      KindAgent,
+		ID:        entryID,
+		ParentID:  s.leaf,
+		CreatedAt: now,
+		AgentID:   id,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := s.file.Write(line); err != nil {
+		return fmt.Errorf("session: write %s: %w", s.path, err)
+	}
+
+	s.entries = append(s.entries, entry)
+	s.index[entryID] = len(s.entries) - 1
+	s.leaf = entryID
+	s.info.UpdatedAt = now
 	return nil
 }
 

@@ -21,6 +21,15 @@ import (
 	"github.com/varavelio/rienda/internal/tokens"
 )
 
+// Reasons a command of the command center cannot run, shared by the commands
+// that need an open session whose run is not in flight.
+const (
+	// noteNoSession explains that a command needs an open session.
+	noteNoSession = "open a session first"
+	// noteRunInFlight explains that the run in flight holds the session.
+	noteRunInFlight = "a run is in flight"
+)
+
 // renamePrompt opens the input that names the session, which reads as the
 // label of the session it is about to name.
 const renamePrompt = "name: "
@@ -110,6 +119,15 @@ const confirmWindow = 3 * time.Second
 // defaultDarkBackground is the terminal background assumed until the terminal
 // reports the real one.
 const defaultDarkBackground = true
+
+// keyLeader opens the leader key that prefixes the commands of a session. It
+// starts a two-key sequence, so a command never collides with a key the prompt
+// or a phase already uses, and every command added to it keeps the same shape.
+const keyLeader = "ctrl+x"
+
+// keyLeaderAgent is the leader chord that opens the agent selection of the
+// session, which changes the agent the branch runs.
+const keyLeaderAgent = "a"
 
 // Key names the interface handles, shared by the phase handlers.
 const (
@@ -272,6 +290,13 @@ var commandList = []command{
 		Enabled: (*model).treeReady,
 	},
 	{
+		Label:   "Switch agent",
+		Note:    "run the conversation onwards with another agent",
+		NoteOff: (*model).switchNote,
+		Open:    (*model).openAgentPicker,
+		Enabled: (*model).switchReady,
+	},
+	{
 		Label:   "Compact context",
 		Note:    "summarize the oldest turns into a checkpoint",
 		NoteOff: (*model).compactNote,
@@ -342,6 +367,16 @@ type Session interface {
 	// SetTitle names the session, an empty title removing the name it carries
 	// and leaving the one derived from its first user message in its place.
 	SetTitle(title string) error
+
+	// ActiveAgent returns the identifier of the agent the branch of the
+	// session runs now, which is the newest selection of the branch or the
+	// agent the session was created with.
+	ActiveAgent() string
+
+	// SetAgent selects the agent the branch of the session runs from now on.
+	// The selection belongs to the branch, so returning to an earlier turn
+	// runs on the agent that was in effect there.
+	SetAgent(ctx context.Context, id string) error
 
 	// Run starts a run and returns the channel carrying its events.
 	Run(ctx context.Context, prompt string) <-chan engine.Event
@@ -546,6 +581,14 @@ type model struct {
 	// confirm is the action waiting for the second press of the key that armed
 	// it, such as interrupting the run in flight or leaving the interface.
 	confirm confirmation
+
+	// leader reports that the leader key was pressed and the interface waits
+	// for the key that completes the chord.
+	leader bool
+
+	// switching reports that the agent picker was opened to change the agent
+	// of the open session rather than to choose the agent of a new one.
+	switching bool
 
 	// rewound reports that the session was moved back to an earlier turn, which
 	// the block above the prompt announces until the next message is sent.
@@ -843,8 +886,14 @@ func (m *model) applyBackground(isDark bool) {
 	m.refreshTranscript()
 }
 
-// handleKey dispatches a key press to the current phase.
+// handleKey dispatches a key press to the current phase. The leader key is
+// read first, because its chord belongs to the interface rather than to the
+// phase that holds the keys.
 func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
+	if cmd, handled := m.handleLeaderKey(key); handled {
+		return cmd
+	}
+
 	switch key.String() {
 	case "ctrl+c":
 		return m.requestConfirm(confirmQuit, key.String())
@@ -876,6 +925,68 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		return m.handleTreeKey(key)
 	default:
 		return m.handleChatKey(key)
+	}
+}
+
+// handleLeaderKey reads the leader sequence: the leader key arms it and the
+// key that follows completes a chord. It reports whether it consumed the key,
+// which is true for the leader itself and for every chord, so a chord never
+// reaches the prompt as text. A key that completes no chord leaves the
+// interface as it was, so a mistyped chord is harmless.
+func (m *model) handleLeaderKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
+	if !m.leader {
+		if key.String() != keyLeader {
+			return nil, false
+		}
+		m.leader = true
+		return nil, true
+	}
+
+	m.leader = false
+	if key.String() == keyLeaderAgent {
+		return m.openAgentPicker(), true
+	}
+	return nil, true
+}
+
+// openAgentPicker opens the agent picker to change the agent the session runs
+// from the active leaf onward. It needs an open session whose run is not in
+// flight, because a store is not safe for concurrent use.
+func (m *model) openAgentPicker() tea.Cmd {
+	if m.session == nil || m.running {
+		return nil
+	}
+
+	m.switching = true
+	m.picker.setCount(len(m.agents))
+	m.picker.reset()
+	if index := m.agentIndex(m.session.ActiveAgent()); index >= 0 {
+		m.selectPickerEntry(index)
+	}
+	m.phase = phasePicker
+	m.input.Blur()
+	return nil
+}
+
+// agentIndex returns the index of the agent with the given identifier, or -1
+// when the roster holds none.
+func (m *model) agentIndex(id string) int {
+	for index, definition := range m.agents {
+		if definition.ID == id {
+			return index
+		}
+	}
+	return -1
+}
+
+// selectPickerEntry puts the highlight of the picker on the agent at an index,
+// which is where the picker opens when the session already runs on it.
+func (m *model) selectPickerEntry(index int) {
+	for position, shown := range m.picker.shown {
+		if shown == index {
+			m.picker.cursor = position
+			return
+		}
 	}
 }
 
@@ -1007,12 +1118,19 @@ func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 		if index < 0 {
 			return nil
 		}
+		if m.switching {
+			return m.switchAgent(m.agents[index].ID)
+		}
 		m.selected = index
 		m.phase = phasePreparing
 		return m.prepareNewSession()
 	case keyEscape:
 		if m.picker.clear() {
 			return nil
+		}
+		if m.switching {
+			m.switching = false
+			return m.showChat()
 		}
 		if m.session != nil {
 			return m.showChat()
@@ -1025,6 +1143,27 @@ func (m *model) handlePickerKey(key tea.KeyPressMsg) tea.Cmd {
 		return m.picker.update(key)
 	}
 	return nil
+}
+
+// switchAgent changes the agent the session runs from the active leaf onward
+// and shows the conversation again, which is where the change is read: the
+// identity names the new agent and every turn keeps the one that wrote it. The
+// selection is appended to the branch, so the turns written before it stay on
+// the agent that wrote them and another branch of the session keeps its own. A
+// selection the session cannot honor is reported by the conversation, which
+// refuses to send until another agent is selected.
+func (m *model) switchAgent(id string) tea.Cmd {
+	m.switching = false
+	if err := m.session.SetAgent(context.Background(), id); err != nil {
+		m.fatal = err
+		return tea.Quit
+	}
+
+	// The conversation keeps its turns and changes who wrote them from here
+	// on, so the transcript is rebuilt to label every answer with its author.
+	m.reloadTranscript()
+	m.refreshContext()
+	return m.showChat()
 }
 
 // toggleSettings opens the command center, or closes it when it is already
@@ -1083,9 +1222,9 @@ func (m *model) compactReady() bool {
 func (m *model) compactNote() string {
 	switch {
 	case m.session == nil:
-		return "open a session first"
+		return noteNoSession
 	case m.running:
-		return "a run is in flight"
+		return noteRunInFlight
 	}
 
 	refusal, refused := m.session.CompactRefusal()
@@ -1151,9 +1290,32 @@ func (m *model) renameReady() bool {
 func (m *model) renameNote() string {
 	switch {
 	case m.session == nil:
-		return "open a session first"
+		return noteNoSession
 	case m.running:
-		return "a run is in flight"
+		return noteRunInFlight
+	default:
+		return ""
+	}
+}
+
+// switchReady reports whether the agent of the session can be changed: it
+// needs an open session whose run is not in flight, because a store is not
+// safe for concurrent use.
+func (m *model) switchReady() bool {
+	return m.session != nil && !m.running
+}
+
+// switchNote explains why the agent of the session cannot be changed, ready to
+// be shown in place of the note of the command. It returns nothing when the
+// command can run, which lets the caller keep the default note. The reason
+// comes from the same check the command runs on, so the explanation can never
+// disagree with the availability of the command.
+func (m *model) switchNote() string {
+	switch {
+	case m.session == nil:
+		return noteNoSession
+	case m.running:
+		return noteRunInFlight
 	default:
 		return ""
 	}
@@ -1246,8 +1408,9 @@ func (m *model) closeTree() tea.Cmd {
 func (m *model) buildTree() {
 	m.tree.entries = m.session.Tree()
 	m.tree.branch = m.session.Branch()
+	m.tree.owner = m.session.Info().Agent
 	m.tree.folded = make(map[string]bool)
-	m.tree.nodes = treeNodes(m.tree.entries, m.tree.branch, m.tree.folded)
+	m.tree.nodes = treeNodes(m.tree.entries, m.tree.branch, m.tree.folded, m.session.Info().Agent)
 	m.tree.filter.setCount(len(m.tree.nodes))
 	m.tree.filter.reset()
 	m.tree.editing = false
@@ -1933,7 +2096,7 @@ func (m *model) refreshContext() {
 // was opened and a session the user returned to an earlier turn.
 func (m *model) reloadTranscript() {
 	m.transcript = transcript{}
-	m.transcript.load(m.session.DisplayedBranch())
+	m.transcript.load(m.session.DisplayedBranch(), m.session.Info().Agent)
 	m.invalidateTranscript()
 	m.refreshTranscript()
 }

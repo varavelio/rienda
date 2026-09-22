@@ -575,6 +575,156 @@ func TestSetLeaf(t *testing.T) {
 	})
 }
 
+// TestActiveAgent verifies resolving the agent a branch runs.
+func TestActiveAgent(t *testing.T) {
+	t.Run("reports the agent of the header when the branch selects none", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+
+		require.Equal(t, "coder", store.ActiveAgent())
+	})
+
+	t.Run("reports the selection of the branch", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+
+		require.NoError(t, store.SetAgent(t.Context(), "reviewer"))
+
+		require.Equal(t, "reviewer", store.ActiveAgent())
+	})
+
+	t.Run("reports the newest selection", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+		require.NoError(t, store.SetAgent(t.Context(), "reviewer"))
+		require.NoError(t, store.SetAgent(t.Context(), "writer"))
+
+		require.Equal(t, "writer", store.ActiveAgent())
+	})
+
+	t.Run("ignores a selection the branch left behind", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+		second := appendMessage(t, store, llm.RoleAssistant, "two")
+		require.NoError(t, store.SetAgent(t.Context(), "reviewer"))
+
+		// Returning to a turn before the selection leaves it on the branch
+		// that wrote it, so the conversation runs on the agent of the header.
+		require.NoError(t, store.SetLeaf(second.ID))
+
+		require.Equal(t, "coder", store.ActiveAgent())
+	})
+}
+
+// TestSetAgent verifies selecting the agent of a branch, which is what lets
+// one conversation change agent without losing its branches.
+func TestSetAgent(t *testing.T) {
+	t.Run("selects the agent of the branch and survives reopening", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent: "coder",
+			Model: "test/model",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+
+		first := appendMessage(t, store, llm.RoleUser, "one")
+		second := appendMessage(t, store, llm.RoleAssistant, "two")
+
+		require.NoError(t, store.SetAgent(t.Context(), "reviewer"))
+
+		branch := store.Branch()
+		require.Len(t, branch, 3)
+		selection := branch[2]
+		require.Equal(t, KindAgent, selection.Kind)
+		require.Equal(t, second.ID, selection.ParentID)
+		require.Equal(t, "reviewer", selection.AgentID)
+		require.Equal(t, selection.ID, store.Leaf())
+
+		// The selection is not a message, so it never reaches the provider.
+		require.Equal(t, []llm.Message{first.Message, second.Message}, store.History())
+
+		id := store.ID()
+		require.NoError(t, store.Close())
+
+		reloaded, err := Open(dir, id, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reloaded.Close()) })
+
+		require.Equal(t, "reviewer", reloaded.ActiveAgent())
+		require.Equal(t, selection.ID, reloaded.Leaf())
+		require.Equal(t, KindAgent, reloaded.Entries()[2].Kind)
+		require.Equal(t, "reviewer", reloaded.Entries()[2].AgentID)
+	})
+
+	t.Run("selects the agent before the first message", func(t *testing.T) {
+		store := newTestStore(t)
+
+		require.NoError(t, store.SetAgent(t.Context(), "reviewer"))
+
+		branch := store.Branch()
+		require.Len(t, branch, 1)
+		require.Empty(t, branch[0].ParentID)
+		require.Equal(t, "reviewer", store.ActiveAgent())
+
+		// The message that follows hangs from the selection, so the whole
+		// conversation runs on the agent it selected.
+		written := appendMessage(t, store, llm.RoleUser, "one")
+		require.Equal(t, branch[0].ID, written.ParentID)
+		require.Equal(t, "reviewer", store.ActiveAgent())
+	})
+
+	t.Run("binds the selection to the branch that wrote it", func(t *testing.T) {
+		store := newTestStore(t)
+		appendMessage(t, store, llm.RoleUser, "one")
+		second := appendMessage(t, store, llm.RoleAssistant, "two")
+		require.NoError(t, store.SetAgent(t.Context(), "reviewer"))
+
+		appendMessage(t, store, llm.RoleAssistant, "a")
+		require.Equal(t, "reviewer", store.ActiveAgent())
+
+		// The branch that returns to a turn before the selection runs on the
+		// agent that was in effect there.
+		require.NoError(t, store.SetLeaf(second.ID))
+		appendMessage(t, store, llm.RoleAssistant, "b")
+		require.Equal(t, "coder", store.ActiveAgent())
+
+		// The branch that holds the selection keeps it.
+		require.NoError(t, store.SetLeaf(store.Entries()[2].ID))
+		require.Equal(t, "reviewer", store.ActiveAgent())
+	})
+
+	t.Run("writes nothing when the agent does not change", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent: "coder",
+			Model: "test/model",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+		appendMessage(t, store, llm.RoleUser, "one")
+		before := readLines(t, store)
+
+		// The session already runs on the agent of its header.
+		require.NoError(t, store.SetAgent(t.Context(), "coder"))
+
+		require.Equal(t, before, readLines(t, store))
+	})
+
+	t.Run("rejects an empty agent", func(t *testing.T) {
+		store := newTestStore(t)
+
+		require.ErrorContains(t, store.SetAgent(t.Context(), "   "), "must not be empty")
+	})
+
+	t.Run("rejects a closed store", func(t *testing.T) {
+		store := newTestStore(t)
+		require.NoError(t, store.Close())
+
+		require.ErrorContains(t, store.SetAgent(t.Context(), "reviewer"), "store is closed")
+	})
+}
+
 // TestSetTag verifies labeling the entries of the tree, which is what lets
 // the user find a turn again.
 func TestSetTag(t *testing.T) {

@@ -87,6 +87,29 @@ type storedCompaction struct {
 	ResponseUsage *storedUsage `json:"responseUsage,omitempty"`
 }
 
+// storedAgent is an agent selection line of a session file. The selection
+// hangs from the active leaf and carries no content, so the next message
+// continues from it under another agent. It reuses no response field, because
+// it makes no model call.
+type storedAgent struct {
+	Kind      Kind      `json:"kind"`
+	ID        string    `json:"id"`
+	ParentID  string    `json:"parentId,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	AgentID   string    `json:"agentId"`
+}
+
+// entry converts a stored agent selection into its in-memory form.
+func (s storedAgent) entry() Entry {
+	return Entry{
+		ID:        s.ID,
+		ParentID:  s.ParentID,
+		CreatedAt: s.CreatedAt,
+		Kind:      KindAgent,
+		AgentID:   s.AgentID,
+	}
+}
+
 // entry converts a stored compaction into its in-memory form.
 func (s storedCompaction) entry() Entry {
 	return Entry{
@@ -365,6 +388,16 @@ func decode(data []byte) (storedHeader, []Entry, string, string, error) {
 			leaf = entry.ID
 			lastWasLeaf = false
 
+		case KindAgent:
+			entry, err := decodeAgent(lineNumber, line, known)
+			if err != nil {
+				return storedHeader{}, nil, "", "", err
+			}
+			known[entry.ID] = len(entries)
+			entries = append(entries, entry)
+			leaf = entry.ID
+			lastWasLeaf = false
+
 		default:
 			// Entries written by newer versions are ignored so that an old
 			// binary keeps loading the session.
@@ -482,6 +515,34 @@ func decodeCompaction(lineNumber int, line []byte, known map[string]int) (Entry,
 			lineNumber,
 			stored.KeptID,
 		)
+	}
+	return stored.entry(), nil
+}
+
+// decodeAgent decodes and validates an agent selection line, which must carry
+// an identifier of its own, name the agent it selects and follow an entry the
+// file already holds.
+func decodeAgent(lineNumber int, line []byte, known map[string]int) (Entry, error) {
+	var stored storedAgent
+	if err := json.Unmarshal(line, &stored); err != nil {
+		return Entry{}, fmt.Errorf("line %d: %w", lineNumber, err)
+	}
+
+	_, duplicate := known[stored.ID]
+	_, hasParent := known[stored.ParentID]
+	switch {
+	case stored.ID == "":
+		return Entry{}, fmt.Errorf("line %d: the entry id is required", lineNumber)
+	case duplicate:
+		return Entry{}, fmt.Errorf("line %d: duplicate entry id %q", lineNumber, stored.ID)
+	case stored.ParentID != "" && !hasParent:
+		return Entry{}, fmt.Errorf(
+			"line %d: parent %q is not an earlier entry",
+			lineNumber,
+			stored.ParentID,
+		)
+	case strings.TrimSpace(stored.AgentID) == "":
+		return Entry{}, fmt.Errorf("line %d: the agent id is required", lineNumber)
 	}
 	return stored.entry(), nil
 }

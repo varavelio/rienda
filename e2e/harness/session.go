@@ -24,6 +24,8 @@ const (
 	// entryKindCompaction replaces every entry before its kept one with a
 	// summary.
 	entryKindCompaction = "compaction"
+	// entryKindAgent selects the agent the branch runs from that entry onward.
+	entryKindAgent = "agent"
 )
 
 // Session is one session file of an instance, decoded without the help of the
@@ -41,6 +43,9 @@ type Session struct {
 
 	// Compactions lists the compaction entries in append order.
 	Compactions []SessionCompaction
+
+	// Agents lists the agent selection entries in append order.
+	Agents []SessionAgent
 }
 
 // SessionHeader is the decoded header line of a session file.
@@ -132,6 +137,20 @@ type SessionCompaction struct {
 	ResponseModel string `json:"responseModel"`
 	// ResponseUsage reports the token consumption of the summarization call.
 	ResponseUsage *SessionUsage `json:"responseUsage"`
+}
+
+// SessionAgent is one decoded agent selection entry of a session file.
+type SessionAgent struct {
+	// Kind is the line discriminator, always "agent".
+	Kind string `json:"kind"`
+	// ID is the identifier of the entry.
+	ID string `json:"id"`
+	// ParentID links the entry to the one it follows.
+	ParentID string `json:"parentId"`
+	// CreatedAt is the moment the entry was appended.
+	CreatedAt time.Time `json:"createdAt"`
+	// AgentID is the identifier of the selected agent.
+	AgentID string `json:"agentId"`
 }
 
 // SessionUsage is the token consumption persisted with an assistant entry.
@@ -274,6 +293,12 @@ func readSession(t *testing.T, path string) Session {
 				t.Fatalf("harness: decode line %d of %s: %v", number+2, path, err)
 			}
 			session.Compactions = append(session.Compactions, compaction)
+		case entryKindAgent:
+			var selection SessionAgent
+			if err := json.Unmarshal([]byte(line), &selection); err != nil {
+				t.Fatalf("harness: decode line %d of %s: %v", number+2, path, err)
+			}
+			session.Agents = append(session.Agents, selection)
 		}
 	}
 

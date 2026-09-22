@@ -25,14 +25,16 @@
 //	{"kind":"tag","targetId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"...","tag":"bug"}
 //	{"kind":"title","createdAt":"...","title":"Fix the parser"}
 //	{"kind":"compaction","id":"...","parentId":"...","createdAt":"...","summary":"...","keptId":"...","tokensBefore":184203,"responseModel":"...","responseUsage":{...}}
+//	{"kind":"agent","id":"...","parentId":"...","createdAt":"...","agentId":"reviewer"}
 //
 // Files are append-only: branching in place never rewrites them, so every
-// branch stays recoverable. Three marker kinds carry the state of the session
+// branch stays recoverable. Four marker kinds carry the state of the session
 // instead of the conversation, and they are the only lines a session writes
 // without a user or a model turn behind them: a leaf marker moves the active
 // leaf, which is what SetLeaf persists; a tag marker labels the entry it
-// targets, which is what SetTag persists; and a title marker names the
-// session, which is what SetTitle persists. A marker always describes the
+// targets, which is what SetTag persists; a title marker names the session,
+// which is what SetTitle persists; and an agent marker selects the agent of
+// the branch, which is what SetAgent persists. A marker always describes the
 // state in full, so the last one of each kind wins when the file is read
 // again. The title belongs to the whole conversation rather than to a branch,
 // so its marker carries no target, and the name of a session without one is
@@ -49,6 +51,16 @@
 // leading user message. A compaction whose kept entry does not resolve is a
 // decode error, so a file that was edited by hand never loses turns in
 // silence.
+//
+// A session runs on the agent its header names until a branch selects another
+// one, which ActiveAgent resolves from the newest agent marker of the branch.
+// The selection is a property of the branch, like a compaction: a branch that
+// returns to a turn before the selection runs on the agent that was in effect
+// there, so one conversation can plan with one agent and implement with
+// another. The identifier is stored as it was given, so a selection that names
+// a missing agent is not an error of the file: the branch simply has nothing
+// to run until another selection, or the header, points at an agent that
+// exists.
 //
 // Returning to a turn of the past and writing again is what creates a branch:
 // the new messages follow the turn the session returned to, beside the ones

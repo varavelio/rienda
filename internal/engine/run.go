@@ -51,10 +51,16 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 		ctx = tool.WithWorkdir(ctx, e.workdir)
 	}
 
+	definition, err := e.agentOf()
+	if err != nil {
+		fail(events, err)
+		return
+	}
+
 	start := Event{
 		Type:      EventRunStart,
 		SessionID: e.store.ID(),
-		AgentID:   e.agent.ID,
+		AgentID:   definition.ID,
 		ModelID:   e.model.ID,
 	}
 	switch {
@@ -87,7 +93,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			return
 		}
 
-		request, err := e.request()
+		request, tools, err := e.request()
 		if err != nil {
 			fail(events, err)
 			return
@@ -102,7 +108,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 				fail(events, err)
 				return
 			}
-			if request, err = e.request(); err != nil {
+			if request, tools, err = e.request(); err != nil {
 				fail(events, err)
 				return
 			}
@@ -147,7 +153,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			return
 		}
 
-		results := e.executeTools(ctx, response.argumentErrors, calls, events)
+		results := e.executeTools(ctx, tools, response.argumentErrors, calls, events)
 		if _, err := e.store.Append(context.WithoutCancel(ctx), session.Entry{
 			Message: llm.Message{Role: llm.RoleUser, Blocks: results},
 		}); err != nil {
@@ -161,13 +167,14 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 // the tool result blocks to persist.
 func (e *Engine) executeTools(
 	ctx context.Context,
+	tools turnTools,
 	argumentErrors map[string]error,
 	calls []llm.Block,
 	events chan<- Event,
 ) []llm.Block {
 	results := make([]llm.Block, 0, len(calls))
 	for _, call := range calls {
-		results = append(results, e.executeTool(ctx, argumentErrors, call, events))
+		results = append(results, e.executeTool(ctx, tools, argumentErrors, call, events))
 	}
 	return results
 }
@@ -177,6 +184,7 @@ func (e *Engine) executeTools(
 // conversation stays valid.
 func (e *Engine) executeTool(
 	ctx context.Context,
+	tools turnTools,
 	argumentErrors map[string]error,
 	call llm.Block,
 	events chan<- Event,
@@ -196,7 +204,7 @@ func (e *Engine) executeTool(
 		return reportResult(call, result, events)
 	}
 
-	executor, found := e.tools.executors[call.ToolCallName]
+	executor, found := tools.executors[call.ToolCallName]
 	if !found {
 		result := tool.ErrorResult("unknown tool " + strconv.Quote(call.ToolCallName))
 		return reportResult(call, result, events)

@@ -17,7 +17,9 @@ import (
 
 // Run executes the run command: it prepares one session, either a new one
 // owned by an agent or a stored one it continues, sends one prompt to the
-// agent and streams the result. Assistant text goes to stdout, tool activity
+// agent and streams the result. An agent named together with a stored session
+// selects the agent that session runs from now on, which is how a
+// non-interactive run changes the agent of a conversation. Assistant text goes to stdout, tool activity
 // and notices go to stderr.
 func Run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -46,9 +48,6 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	}
 	if strings.TrimSpace(agentID) == "" && strings.TrimSpace(sessionID) == "" {
 		return errors.New("an agent or a session is required: use --agent or --session")
-	}
-	if strings.TrimSpace(agentID) != "" && strings.TrimSpace(sessionID) != "" {
-		return errors.New("an agent and a session are mutually exclusive")
 	}
 	if strings.TrimSpace(prompt) == "" {
 		return errors.New("a prompt is required: use --prompt")
@@ -89,6 +88,7 @@ func runUsage(w io.Writer) {
 Flags:
   -a, --agent     Agent definition to run
   -s, --session   Session to continue, named by the identifier it reported
+                  Together with -a it switches the agent of that session
   -p, --prompt    Prompt to send to the agent (required)
       --config    Path of the configuration file
   -C, --workdir   Directory the session runs in
