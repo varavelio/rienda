@@ -92,15 +92,23 @@ type Catalog struct {
 	after    func(time.Duration) <-chan time.Time
 }
 
-// cache is the reduced content of the model database: the context window of
-// every model and the moment the cache was refreshed.
+// cache is the reduced content of the model database: the facts of every model
+// and the moment the cache was refreshed.
 type cache struct {
 	// RefreshedAt is the moment the cache was last written.
 	RefreshedAt time.Time `json:"refreshedAt"`
 
-	// Models maps the last segment of a model identifier to its context
-	// window, because the context is the only fact Rienda uses.
-	Models map[string]int `json:"models"`
+	// Models maps the normalized model identifier to its facts, because the
+	// facts of the model are the only thing Rienda uses.
+	Models map[string]model `json:"models"`
+}
+
+// model holds the facts Rienda keeps of one model. It is a struct rather than
+// the bare context window it carries today, so a future fact — a price, for
+// example — is added without breaking a cache written by an older version.
+type model struct {
+	// ContextWindow is the context window of the model in tokens.
+	ContextWindow int `json:"context_window"`
 }
 
 // New builds a catalog. It resolves the cache directory and the endpoint from
@@ -151,12 +159,13 @@ func New(opts Options) (*Catalog, error) {
 }
 
 // Resolve returns the context window of a model from the cache, and whether it
-// was found. Models are matched by the last segment of their identifier,
-// ignoring the provider, because the database names them in path style while a
-// configuration names them freely. A missing, corrupt or expired cache simply
-// resolves nothing: it is never an error.
+// was found. Models are matched by the normalized last segment of their
+// identifier, ignoring the provider, because the database names them in path
+// style while a configuration names them freely and neither is consistent
+// about case. A missing, corrupt or expired cache simply resolves nothing: it
+// is never an error.
 func (c *Catalog) Resolve(modelID string) (int, bool) {
-	key := lastSegment(modelID)
+	key := modelKey(modelID)
 	if key == "" {
 		return 0, false
 	}
@@ -165,11 +174,11 @@ func (c *Catalog) Resolve(modelID string) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	window, found := loaded.Models[key]
-	if !found || window <= 0 {
+	facts, found := loaded.Models[key]
+	if !found || facts.ContextWindow <= 0 {
 		return 0, false
 	}
-	return window, true
+	return facts.ContextWindow, true
 }
 
 // Window returns the context window of a model, resolved from three sources in
@@ -185,7 +194,9 @@ func (c *Catalog) Window(modelID string, declared int) int {
 	return FallbackWindow
 }
 
-// load reads the cache file.
+// load reads the cache file. The keys of the stored models are normalized on
+// read, so a cache written by an older version — whose keys kept the case of
+// the database — resolves exactly like a fresh one.
 func (c *Catalog) load() (cache, error) {
 	data, err := os.ReadFile(c.path)
 	if err != nil {
@@ -196,16 +207,30 @@ func (c *Catalog) load() (cache, error) {
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return cache{}, fmt.Errorf("catalog: decode cache %s: %w", c.path, err)
 	}
+	loaded.Models = normalize(loaded.Models)
 	return loaded, nil
 }
 
-// lastSegment returns the part of a model identifier that follows its last
-// slash, which is what makes a path-style database key and a freely named
-// configuration model match.
-func lastSegment(modelID string) string {
+// normalize keys the models of a cache by their normalized identifier, so a
+// lookup and a stored entry always meet whatever case either side uses.
+func normalize(models map[string]model) map[string]model {
+	normalized := make(map[string]model, len(models))
+	for id, facts := range models {
+		if key := modelKey(id); key != "" {
+			normalized[key] = facts
+		}
+	}
+	return normalized
+}
+
+// modelKey returns the cache key of a model identifier: the part that follows
+// its last slash, lowercased and trimmed. The key is what makes a path-style
+// database identifier and a freely named configuration model match, and it is
+// normalized so the two agree whatever case or padding either side uses.
+func modelKey(modelID string) string {
 	trimmed := strings.TrimSpace(modelID)
 	if index := strings.LastIndex(trimmed, "/"); index >= 0 {
 		trimmed = trimmed[index+1:]
 	}
-	return strings.TrimSpace(trimmed)
+	return strings.ToLower(strings.TrimSpace(trimmed))
 }

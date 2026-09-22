@@ -53,13 +53,15 @@ func (c *fakeCatalog) URL() string {
 }
 
 // writeCache stores the reduced cache the binary reads, fresh so its first run
-// resolves the window without waiting for the background refresh.
+// resolves the window without waiting for the background refresh. The keys are
+// normalized and the value of a model is a map of facts, exactly as the binary
+// writes them.
 func (c *fakeCatalog) writeCache(t *testing.T, home string, models map[string]int) {
 	t.Helper()
 
-	reduced := make(map[string]int, len(models))
+	reduced := make(map[string]any, len(models))
 	for id, context := range models {
-		reduced[lastSegment(id)] = context
+		reduced[modelKey(id)] = map[string]any{"context_window": context}
 	}
 
 	document := map[string]any{
@@ -99,12 +101,26 @@ func catalogPayload(models map[string]int) string {
 	return payload.String()
 }
 
-// lastSegment returns the part of a model identifier that follows its last
-// slash, which is the key the reduced cache uses. The suite reproduces the
-// contract as an external reader instead of importing the application package.
-func lastSegment(modelID string) string {
+// modelKey returns the cache key of a model identifier: the part that follows
+// its last slash, lowercased and trimmed. The suite reproduces the contract as
+// an external reader instead of importing the application package.
+func modelKey(modelID string) string {
 	if index := strings.LastIndex(modelID, "/"); index >= 0 {
-		return modelID[index+1:]
+		modelID = modelID[index+1:]
 	}
-	return modelID
+	return strings.ToLower(strings.TrimSpace(modelID))
+}
+
+// CatalogCache returns the contents of the cache file of the instance, so a
+// scenario can assert the shape the binary stores.
+func (h *Harness) CatalogCache(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(h.home, riendaDirName, "cache", "models.json")
+	//nolint:gosec // the path lives in a test temporary directory.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("harness: read catalog cache %s: %v", path, err)
+	}
+	return string(data)
 }

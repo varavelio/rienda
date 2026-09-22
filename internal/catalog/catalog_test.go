@@ -24,12 +24,27 @@ func testCatalog(t *testing.T, opts Options) (*Catalog, string) {
 	return built, filepath.Join(opts.Dir, cacheFileName)
 }
 
-// writeCache stores a reduced cache at path.
+// writeCache stores a reduced cache at path, mapping every identifier to the
+// context window it declares.
 func writeCache(t *testing.T, path string, refreshedAt time.Time, models map[string]int) {
 	t.Helper()
 
-	data, err := json.Marshal(cache{RefreshedAt: refreshedAt, Models: models})
+	reduced := make(map[string]model, len(models))
+	for id, window := range models {
+		reduced[id] = model{ContextWindow: window}
+	}
+
+	data, err := json.Marshal(cache{RefreshedAt: refreshedAt, Models: reduced})
 	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+}
+
+// writeRawCache stores data at path, so a test can assert the exact shape the
+// cache file holds.
+func writeRawCache(t *testing.T, path string, data []byte) {
+	t.Helper()
 
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, data, 0o600))
@@ -93,6 +108,26 @@ func TestResolve(t *testing.T) {
 		require.Equal(t, 262144, window)
 	})
 
+	t.Run("normalizes the case and the padding of both sides", func(t *testing.T) {
+		cat, path := testCatalog(t, Options{Now: func() time.Time { return base }})
+		// The database key is stored in the case it arrived in and the lookup
+		// is written in another, so the two only meet once both are
+		// normalized.
+		writeCache(t, path, base, map[string]int{"Kimi-K2.6": 262144})
+
+		for _, modelID := range []string{
+			"kimi-k2.6",
+			"KIMI-K2.6",
+			" MoonshotAI/Kimi-K2.6 ",
+			"moonshotai/kimi-k2.6",
+		} {
+			window, found := cat.Resolve(modelID)
+
+			require.True(t, found, "model %q", modelID)
+			require.Equal(t, 262144, window, "model %q", modelID)
+		}
+	})
+
 	t.Run("ignores unknown and empty model ids", func(t *testing.T) {
 		cat, path := testCatalog(t, Options{})
 		writeCache(t, path, base, map[string]int{"kimi-k2.6": 262144})
@@ -124,8 +159,33 @@ func TestResolve(t *testing.T) {
 
 	t.Run("ignores a corrupt cache", func(t *testing.T) {
 		cat, path := testCatalog(t, Options{})
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-		require.NoError(t, os.WriteFile(path, []byte("not json"), 0o600))
+		writeRawCache(t, path, []byte("not json"))
+
+		_, found := cat.Resolve("kimi-k2.6")
+
+		require.False(t, found)
+	})
+
+	t.Run("reads the shape the cache file holds", func(t *testing.T) {
+		cat, path := testCatalog(t, Options{Now: func() time.Time { return base }})
+		// The value of a model is a map of facts, not a bare figure, so a fact
+		// added later never breaks a cache an older version wrote.
+		writeRawCache(t, path, []byte(`{
+			"refreshedAt": "2026-09-22T03:00:00Z",
+			"models": {"kimi-k2.6": {"context_window": 262144}}
+		}`))
+
+		window, found := cat.Resolve("kimi-k2.6")
+
+		require.True(t, found)
+		require.Equal(t, 262144, window)
+	})
+
+	t.Run("ignores a value that carries no context window", func(t *testing.T) {
+		cat, path := testCatalog(t, Options{})
+		writeRawCache(t, path, []byte(
+			`{"refreshedAt":"2026-09-22T03:00:00Z","models":{"kimi-k2.6":{"other":1}}}`,
+		))
 
 		_, found := cat.Resolve("kimi-k2.6")
 

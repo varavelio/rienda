@@ -93,6 +93,11 @@ func TestCompactionDrivesTheWholeFeature(t *testing.T) {
 	require.Contains(t, replayed, "the checkpoint")
 	require.NotContains(t, replayed, "first prompt", "the summarized turns are gone")
 	require.Contains(t, replayed, "second prompt")
+
+	// The window the run resolved came from the catalog file, whose model
+	// value is a map of facts keyed by the normalized identifier.
+	require.Contains(t, app.CatalogCache(t), `"context_window":300`)
+	require.Contains(t, app.CatalogCache(t), `"gpt-test"`)
 }
 
 // compactionConfig returns the configuration of the scenario: the default

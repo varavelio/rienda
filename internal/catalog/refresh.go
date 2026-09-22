@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 )
 
-// facts is the subset of a model entry of the database Rienda needs.
-type facts struct {
+// entry is the subset of a model entry of the database Rienda reads.
+type entry struct {
 	Limit struct {
 		Context int `json:"context"`
 	} `json:"limit"`
@@ -74,7 +74,7 @@ func (c *Catalog) fresh() bool {
 }
 
 // fetch downloads the model database and reduces it to the map Rienda caches.
-func (c *Catalog) fetch(ctx context.Context) (map[string]int, error) {
+func (c *Catalog) fetch(ctx context.Context) (map[string]model, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
@@ -104,8 +104,9 @@ func (c *Catalog) fetch(ctx context.Context) (map[string]int, error) {
 }
 
 // reduce turns the model database into the reduced map Rienda caches: the
-// context window of every model, keyed by the last segment of its identifier.
-func reduce(data []byte) (map[string]int, error) {
+// facts of every model, keyed by the normalized last segment of its
+// identifier.
+func reduce(data []byte) (map[string]model, error) {
 	var document map[string]json.RawMessage
 	if err := json.Unmarshal(data, &document); err != nil {
 		return nil, fmt.Errorf("catalog: decode database: %w", err)
@@ -120,15 +121,17 @@ func reduce(data []byte) (map[string]int, error) {
 		}
 	}
 
-	models := make(map[string]int, len(document))
+	models := make(map[string]model, len(document))
 	for id, raw := range document {
-		var entry facts
-		if err := json.Unmarshal(raw, &entry); err != nil {
+		var declared entry
+		if err := json.Unmarshal(raw, &declared); err != nil {
 			continue
 		}
-		if segment := lastSegment(id); segment != "" && entry.Limit.Context > 0 {
-			models[segment] = entry.Limit.Context
+		key := modelKey(id)
+		if key == "" || declared.Limit.Context <= 0 {
+			continue
 		}
+		models[key] = model{ContextWindow: declared.Limit.Context}
 	}
 	return models, nil
 }

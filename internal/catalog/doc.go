@@ -16,6 +16,13 @@
 // left. The endpoint is a parameter with a default, which is what lets the
 // end-to-end suite point it at a local server instead of the real service.
 //
+// A model is keyed by the normalized last segment of its identifier — the part
+// after the last slash, lowercased and trimmed — so a path-style database key
+// matches a freely named configuration model whatever the case or the padding
+// of either side. The value of a model is a map of facts rather than a bare
+// figure, so a future fact is added without breaking a cache an older version
+// wrote.
+//
 // Everything here is best effort by design: Rienda works fully offline, with
 // the cache it has or with the fallback, and a refresh failure is never a
 // failure of a run.

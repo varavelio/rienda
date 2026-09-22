@@ -140,7 +140,10 @@ func TestRefresh(t *testing.T) {
 		var stored cache
 		require.NoError(t, json.Unmarshal(data, &stored))
 		require.Equal(t, base, stored.RefreshedAt)
-		require.Equal(t, map[string]int{"kimi-k2.6": 262144, "gpt-5": 400000}, stored.Models)
+		require.Equal(t, map[string]model{
+			"kimi-k2.6": {ContextWindow: 262144},
+			"gpt-5":     {ContextWindow: 400000},
+		}, stored.Models)
 	})
 
 	t.Run("keeps the previous cache when the endpoint fails", func(t *testing.T) {
@@ -197,7 +200,7 @@ func TestReduce(t *testing.T) {
 		models, err := reduce([]byte(`{"models":{"vendor/model":{"limit":{"context":12}}}}`))
 
 		require.NoError(t, err)
-		require.Equal(t, map[string]int{"model": 12}, models)
+		require.Equal(t, map[string]model{"model": {ContextWindow: 12}}, models)
 	})
 
 	t.Run("skips entries without a usable context", func(t *testing.T) {
@@ -206,7 +209,16 @@ func TestReduce(t *testing.T) {
 		)
 
 		require.NoError(t, err)
-		require.Equal(t, map[string]int{"c": 7}, models)
+		require.Equal(t, map[string]model{"c": {ContextWindow: 7}}, models)
+	})
+
+	t.Run("normalizes the keys it stores", func(t *testing.T) {
+		models, err := reduce(
+			[]byte(`{"MoonshotAI/Kimi-K2.6":{"limit":{"context":12}}}`),
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, map[string]model{"kimi-k2.6": {ContextWindow: 12}}, models)
 	})
 
 	t.Run("rejects a document that is not a map", func(t *testing.T) {
