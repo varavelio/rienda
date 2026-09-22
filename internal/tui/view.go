@@ -48,10 +48,13 @@ const (
 	tokensPerM = 1000 * tokensPerK
 )
 
-// View renders the interface in the alternate screen.
+// View renders the interface in the alternate screen. Mouse reporting is
+// enabled so the wheel scrolls the conversation instead of reaching the prompt
+// as arrow keys, which is all the interface does with the mouse.
 func (m *model) View() tea.View {
 	view := tea.NewView(m.render())
 	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
 	return view
 }
 

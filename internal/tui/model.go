@@ -46,6 +46,11 @@ const noticeRows = 3
 // input box.
 const chatFooterRows = 1
 
+// wheelRows is the number of rows one notch of the mouse wheel scrolls the
+// conversation, matching the step a common mouse sends per detent so the wheel
+// reads like the arrows do.
+const wheelRows = 3
+
 // listPromptRows is the number of rows a list phase spends on its question and
 // the blank row after it.
 const listPromptRows = 2
@@ -701,6 +706,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
+	case tea.MouseWheelMsg:
+		m.handleWheel(msg)
+		return m, nil
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg:
+		// The interface reports the mouse only for the wheel; every other
+		// event is ignored so a click never reaches a widget.
+		return m, nil
 	case tea.BackgroundColorMsg:
 		m.applyBackground(msg.IsDark())
 		return m, nil
@@ -1334,6 +1346,26 @@ func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 // key.
 func (m *model) scrollTranscript(key tea.KeyPressMsg) {
 	m.conversation.scroll(scrollDelta(key))
+}
+
+// handleWheel scrolls the conversation one notch of the mouse wheel. The wheel
+// only acts on the conversation, and only while it is shown, so a wheel over a
+// list neither scrolls the list nor moves the conversation the list hides.
+//
+// The wheel always scrolls the conversation, wherever the pointer rests: the
+// prompt keeps the arrows for its own cursor, so a long message is read while a
+// long prompt is written.
+func (m *model) handleWheel(wheel tea.MouseWheelMsg) {
+	if m.phase != phaseChat {
+		return
+	}
+
+	switch wheel.Button {
+	case tea.MouseWheelUp:
+		m.conversation.scroll(-wheelRows)
+	case tea.MouseWheelDown:
+		m.conversation.scroll(wheelRows)
+	}
 }
 
 // scrollDelta returns the rows an arrow key moves, negative towards the newest

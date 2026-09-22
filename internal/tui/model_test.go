@@ -141,6 +141,8 @@ var (
 	pressCtrlO  = tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl}
 	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
 	pressPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
+	wheelUp     = tea.MouseWheelMsg{Button: tea.MouseWheelUp}
+	wheelDown   = tea.MouseWheelMsg{Button: tea.MouseWheelDown}
 	pressHome   = tea.KeyPressMsg{Code: tea.KeyHome}
 	pressEnd    = tea.KeyPressMsg{Code: tea.KeyEnd}
 )
@@ -682,6 +684,71 @@ func TestModel(t *testing.T) {
 		update(t, m, pressUp)
 
 		require.Less(t, m.conversation.offsetRows(), before)
+	})
+
+	t.Run("scrolls the transcript with the mouse wheel", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 20))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		for range 30 {
+			sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "line\n\n"})
+		}
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+		require.True(t, m.conversation.atBottom())
+
+		update(t, m, wheelUp)
+
+		require.Less(t, m.conversation.offsetRows(), m.conversation.maxOffset())
+		before := m.conversation.offsetRows()
+		update(t, m, wheelDown)
+		require.Greater(t, m.conversation.offsetRows(), before)
+	})
+
+	t.Run(
+		"scrolls the transcript with the wheel even while a long prompt is written",
+		func(t *testing.T) {
+			m, _ := chatModel(t)
+			update(t, m, windowMsg(80, 20))
+			m.input.SetValue("go")
+			update(t, m, pressEnter)
+			for range 30 {
+				sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "line\n\n"})
+			}
+			sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+			// A multi-line prompt: the wheel must move the conversation and leave
+			// the prompt cursor where it is, which is the failure the wheel once
+			// had when the terminal reported it as arrow keys.
+			m.input.SetValue("first line\nsecond line\nthird line")
+			beforeLine := m.input.Line()
+			beforeOffset := m.conversation.offsetRows()
+
+			update(t, m, wheelUp)
+
+			require.Less(t, m.conversation.offsetRows(), beforeOffset)
+			require.Equal(t, beforeLine, m.input.Line(), "the prompt cursor does not move")
+			require.Equal(t, "first line\nsecond line\nthird line", m.input.Value())
+		},
+	)
+
+	t.Run("leaves the wheel alone outside the conversation", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 24))
+		m.input.SetValue("go")
+		update(t, m, pressEnter)
+		for range 30 {
+			sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "line\n\n"})
+		}
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+		before := m.conversation.offsetRows()
+
+		update(t, m, pressCtrlP)
+		require.Equal(t, phaseSettings, m.phase)
+		update(t, m, wheelUp)
+		update(t, m, wheelDown)
+
+		require.Equal(t, before, m.conversation.offsetRows(), "the hidden conversation stays put")
 	})
 
 	t.Run("keeps the scroll position while the run streams", func(t *testing.T) {

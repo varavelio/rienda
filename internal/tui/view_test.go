@@ -803,12 +803,16 @@ func TestView(t *testing.T) {
 		require.Contains(t, plain(menu.render()), varavelLogo+" \u00b7 varavel rienda")
 	})
 
-	t.Run("renders the alternate screen", func(t *testing.T) {
+	t.Run("renders the alternate screen and reports the wheel", func(t *testing.T) {
 		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, -1, nil)
 
 		view := m.View()
 
 		require.True(t, view.AltScreen)
+		// Reporting the mouse is what turns the wheel into a message of its
+		// own instead of the arrow keys a terminal translates it to when the
+		// mouse is not reported.
+		require.Equal(t, tea.MouseModeCellMotion, view.MouseMode)
 		require.Contains(t, plain(view.Content), "Select an agent")
 	})
 

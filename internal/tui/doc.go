@@ -23,11 +23,15 @@
 //
 // A run is followed through the conversation the model renders: the answers of
 // the agent, the reasoning of the model and the tool invocations with their
-// output. The conversation scrolls with the arrow keys, Page Up and Page Down
-// move from turn to turn, landing on the prompts and the answers and skipping
-// the reasoning and the tool invocations, and Home and End jump to either end;
-// the position is kept while a run streams, so reading back never fights the
-// incoming output. Every turn closes with how long the agent worked on it,
+// output. The conversation scrolls with the arrow keys or one notch of the
+// mouse wheel, Page Up and Page Down move from turn to turn, landing on the
+// prompts and the answers and skipping the reasoning and the tool invocations,
+// and Home and End jump to either end; the position is kept while a run
+// streams, so reading back never fights the incoming output. The wheel always
+// scrolls the conversation, wherever the pointer rests, and never the prompt:
+// the prompt keeps the arrows for its own cursor, so a long message is read
+// while a long prompt is written. The interface reports the mouse for the wheel
+// alone: a click or a drag is ignored. Every turn closes with how long the agent worked on it,
 // shown as a faint footnote under its last message and, while the run is in
 // flight, beside the status line. A turn of a resumed session keeps its time
 // too: the interface derives it from the moments the turn opened and closed,
