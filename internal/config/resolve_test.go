@@ -21,6 +21,7 @@ providers:
     models:
       kimi-k2:
         id: moonshotai/kimi-k2
+        context_window: 262144
         max_tokens: 8192
         temperature: 0.7
         top_p: 0.9
@@ -105,6 +106,7 @@ func TestResolve(t *testing.T) {
 			resolved.ProviderConfig.ExtraHeaders,
 		)
 		require.Equal(t, "moonshotai/kimi-k2", resolved.ModelID)
+		require.Equal(t, 262144, resolved.ContextWindow)
 		require.Equal(t, 8192, resolved.MaxTokens)
 		require.Equal(t, new(0.7), resolved.Temperature)
 		require.Equal(t, new(0.9), resolved.TopP)

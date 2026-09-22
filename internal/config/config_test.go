@@ -28,6 +28,7 @@ providers:
     models:
       kimi-k2:
         id: moonshotai/kimi-k2
+        context_window: 262144
         max_tokens: 8192
         temperature: 0.7
         top_p: 0.9
@@ -49,6 +50,7 @@ providers:
 				Models: map[string]Model{
 					"kimi-k2": {
 						ID:                "moonshotai/kimi-k2",
+						ContextWindow:     262144,
 						MaxTokens:         8192,
 						Temperature:       new(0.7),
 						TopP:              new(0.9),
@@ -73,6 +75,38 @@ providers:
 		)
 
 		require.Empty(t, cfg.Providers["local"].APIKey)
+	})
+
+	t.Run("defaults the compaction settings", func(t *testing.T) {
+		cfg := mustParse(t, "providers:\n  local:\n    preset: ollama\n")
+
+		require.Equal(t, Compaction{
+			Enabled:          true,
+			ReserveTokens:    16384,
+			KeepRecentTokens: 20000,
+		}, cfg.Compaction)
+	})
+
+	t.Run("reads an explicit compaction block", func(t *testing.T) {
+		cfg := mustParse(t, `
+providers:
+  openrouter:
+    preset: openrouter
+    models:
+      kimi-k2: {}
+compaction:
+  enabled: false
+  reserve_tokens: 4096
+  keep_recent_tokens: 1000
+  model: openrouter/kimi-k2
+`)
+
+		require.Equal(t, Compaction{
+			Enabled:          false,
+			ReserveTokens:    4096,
+			KeepRecentTokens: 1000,
+			Model:            "openrouter/kimi-k2",
+		}, cfg.Compaction)
 	})
 
 	t.Run("accepts a provider without models", func(t *testing.T) {
@@ -147,6 +181,11 @@ providers:
 				"model aliases must not be empty",
 			},
 			{
+				"negative context window",
+				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        context_window: -1\n",
+				"context_window must not be negative",
+			},
+			{
 				"negative max tokens",
 				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        max_tokens: -1\n",
 				"max_tokens must not be negative",
@@ -175,6 +214,31 @@ providers:
 				"negative thinking max tokens",
 				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        thinking_max_tokens: -1\n",
 				"thinking_max_tokens must not be negative",
+			},
+			{
+				"unknown compaction key",
+				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  other: true\n",
+				"invalid configuration",
+			},
+			{
+				"negative compaction reserve",
+				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  reserve_tokens: -1\n",
+				"reserve_tokens must not be negative",
+			},
+			{
+				"negative compaction tail",
+				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  keep_recent_tokens: -1\n",
+				"keep_recent_tokens must not be negative",
+			},
+			{
+				"unknown compaction model",
+				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  model: p/ghost\n",
+				`compaction: unknown model "ghost" in provider "p"`,
+			},
+			{
+				"malformed compaction model reference",
+				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  model: ghost\n",
+				"must have the form provider/model",
 			},
 		}
 

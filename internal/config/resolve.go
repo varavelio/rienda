@@ -27,6 +27,10 @@ type Resolved struct {
 	// ModelID is the provider model identifier to send on the wire.
 	ModelID string
 
+	// ContextWindow is the context window declared for the model, zero when
+	// the configuration declares none.
+	ContextWindow int
+
 	// MaxTokens caps the response token limit when greater than zero.
 	MaxTokens int
 
@@ -84,6 +88,7 @@ func (c *Config) Resolve(ref string) (Resolved, error) {
 			SessionHeaderName: sessionHeader,
 		},
 		ModelID:           modelID,
+		ContextWindow:     model.ContextWindow,
 		MaxTokens:         model.MaxTokens,
 		Temperature:       model.Temperature,
 		TopP:              model.TopP,
