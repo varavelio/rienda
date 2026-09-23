@@ -10,6 +10,9 @@
 // is resolved from the branch on every turn, and the model is resolved through
 // the modelResolver this package injects into the engine, which turns a
 // provider/model reference into a model and one cached client per reference.
+// Every client it hands out carries the identity of the session, so every call
+// identifies itself with it, a summarization as much as a conversation turn,
+// and a provider that routes by session never refuses one of them.
 // That is what lets a conversation switch agent through SetAgent, or model
 // through SetModel, without a new session, a new engine or a rewritten file:
 // the selection is appended to the branch that wrote it, so another branch of

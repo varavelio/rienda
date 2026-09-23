@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/varavelio/rienda/internal/compaction"
-	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
@@ -108,13 +107,6 @@ func (e *Engine) compactBranch(ctx context.Context, events chan<- Event) error {
 	if e.compactor == nil {
 		return nil
 	}
-
-	// The session identifier travels with the summarization exactly like with
-	// an ordinary turn, so a provider that routes a call by session accepts the
-	// summary the same way it accepts the conversation. Attaching it here, in
-	// the single path of the automatic and the manual compaction, is what keeps
-	// both in agreement.
-	ctx = llm.WithSessionID(ctx, e.store.ID())
 
 	branch := e.store.Branch()
 	if _, refused := e.compactor.Refusal(branch); refused {

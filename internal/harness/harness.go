@@ -251,8 +251,10 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 
 	// Every model the configuration holds is resolvable by the engine, and the
 	// resolver caches one client per reference, so a session that switches
-	// model reuses the connections of the models it already talked to.
-	resolver := newModelResolver(cfg)
+	// model reuses the connections of the models it already talked to. The
+	// resolver stamps every client with the identity of the session, so every
+	// call identifies itself with it, the summarizations included.
+	resolver := newModelResolver(cfg, store.ID())
 
 	registry, err := newTools()
 	if err != nil {

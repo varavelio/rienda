@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -17,12 +18,23 @@ import (
 // place where the settings, the credentials and the context window of a model
 // are turned into something the engine can use.
 //
+// Every client it hands out carries the identity of the session, which is what
+// a provider that routes a call by session reads from the request header. The
+// resolver is the one place that knows both the session and the client, so the
+// identity is attached once here and no caller has to remember it: a run, a
+// summarization or any future procedure reaches the provider with the same
+// identity without knowing the header exists.
+//
 // A client owns an HTTP client with its own connection pool, so resolving a
 // reference twice hands back the client built the first time. The cache is what
 // makes a session that switches model, or a run that re-plans after a
 // compaction, reuse the connections of the models it already talked to.
 type modelResolver struct {
 	cfg *config.Config
+
+	// sessionID is the harness identifier of the session every client of the
+	// resolver identifies itself with.
+	sessionID string
 
 	// mu guards the cache: a run resolves the model of its branch while the
 	// interface resolves the one of the footer, so two goroutines may ask for
@@ -57,6 +69,7 @@ func (r *modelResolver) Resolve(ref string) (engine.Model, llm.Client, error) {
 	if err != nil {
 		return engine.Model{}, nil, fmt.Errorf("harness: build provider client: %w", err)
 	}
+	client = sessionClient{Client: client, sessionID: r.sessionID}
 
 	model := engineModel(resolved)
 	model.ContextWindow = resolveContextWindow(resolved)
@@ -71,9 +84,15 @@ func (r *modelResolver) Refs() []string {
 }
 
 // newModelResolver builds the resolver of a session from the configuration of
-// the user: every reference a session selects is resolved against it.
-func newModelResolver(cfg *config.Config) engine.Resolver {
-	return &modelResolver{cfg: cfg, cache: make(map[string]resolvedModel)}
+// the user and the identifier of the session, which every client it hands out
+// identifies itself with: every reference a session selects is resolved
+// against it.
+func newModelResolver(cfg *config.Config, sessionID string) engine.Resolver {
+	return &modelResolver{
+		cfg:       cfg,
+		sessionID: sessionID,
+		cache:     make(map[string]resolvedModel),
+	}
 }
 
 // engineModel translates the resolved model settings into engine form.
@@ -103,4 +122,28 @@ func resolveContextWindow(resolved config.Resolved) int {
 		return catalog.FallbackWindow
 	}
 	return facts.Window(resolved.ModelID, resolved.ContextWindow)
+}
+
+// sessionClient decorates an llm.Client with the identity of the session it
+// belongs to, so every call identifies itself with the harness session ID a
+// provider that routes by session reads from the request header.
+type sessionClient struct {
+	llm.Client
+	sessionID string
+}
+
+// Generate forwards the call with the identity of the session attached. The
+// error travels unchanged, so the caller keeps classifying it exactly as it
+// would without the decorator.
+func (c sessionClient) Generate(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	//nolint:wrapcheck // the decorator forwards the error for the caller to classify.
+	return c.Client.Generate(llm.WithSessionID(ctx, c.sessionID), req)
+}
+
+// Stream forwards the call with the identity of the session attached. The error
+// travels unchanged, so the caller keeps classifying it exactly as it would
+// without the decorator.
+func (c sessionClient) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+	//nolint:wrapcheck // the decorator forwards the error for the caller to classify.
+	return c.Client.Stream(llm.WithSessionID(ctx, c.sessionID), req)
 }

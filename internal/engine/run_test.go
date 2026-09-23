@@ -119,7 +119,6 @@ func TestRun(t *testing.T) {
 			Role:   llm.RoleUser,
 			Blocks: []llm.Block{{Type: llm.BlockText, Text: "hello"}},
 		}}, client.requests[0].Messages)
-		require.Equal(t, []string{store.ID()}, client.sessionIDs)
 
 		entries := store.Entries()
 		require.Len(t, entries, 2)

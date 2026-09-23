@@ -20,16 +20,13 @@ import (
 // fakeClient is a scripted llm.Client: every Stream call consumes the next
 // script and the received requests are recorded for assertions.
 type fakeClient struct {
-	requests   []*llm.Request
-	sessionIDs []string
-	scripts    []script
+	requests []*llm.Request
+	scripts  []script
 }
 
 // Stream returns the next scripted response.
 func (c *fakeClient) Stream(ctx context.Context, request *llm.Request) (llm.Stream, error) {
 	c.requests = append(c.requests, request)
-	sessionID, _ := llm.SessionIDFromContext(ctx)
-	c.sessionIDs = append(c.sessionIDs, sessionID)
 
 	if len(c.requests) > len(c.scripts) {
 		return nil, fmt.Errorf("fakeClient: unexpected stream call %d", len(c.requests))

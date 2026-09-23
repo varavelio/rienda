@@ -84,11 +84,6 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	}
 	emit(events, start)
 
-	// The session identifier travels with every request of the conversation so
-	// providers can group them, the summarization requests included, which
-	// attach it themselves from the same store.
-	requestCtx := llm.WithSessionID(ctx, e.store.ID())
-
 	// At most one automatic compaction happens per run: without the guard a
 	// stubborn threshold would turn into a loop.
 	compacted := false
@@ -121,7 +116,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			}
 		}
 
-		response, err := e.generate(requestCtx, events, plan)
+		response, err := e.generate(ctx, events, plan)
 		if err != nil {
 			if ctx.Err() != nil {
 				emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})
