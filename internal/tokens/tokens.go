@@ -1,6 +1,10 @@
 package tokens
 
-import "github.com/varavelio/rienda/internal/llm"
+import (
+	"math"
+
+	"github.com/varavelio/rienda/internal/llm"
+)
 
 // bytesPerToken is the number of bytes a token is assumed to take. The ratio
 // holds across providers and languages well enough for a guardrail, and
@@ -42,23 +46,31 @@ type Report struct {
 	// Window is the context window of the model, as it was resolved.
 	Window int
 
-	// Percent is the share of the window in use, an integer between 0 and
-	// 100.
-	Percent int
+	// Percent is the share of the window in use, between 0 and 100, rounded to
+	// one decimal so a caller shows the granularity the estimate deserves. A
+	// whole figure stays exactly whole, which lets a reader see decimals only
+	// when they carry information.
+	Percent float64
 }
 
 // Measure builds the report of a request measured against a context window.
-// The percentage is zero when the window is not usable, it is clamped to 100
-// when the estimate exceeds the window, and Used and Window are returned
-// exactly as they were passed.
+// The percentage is zero when the window is not usable, it is rounded to one
+// decimal, it is clamped to 100 when the estimate exceeds the window, and Used
+// and Window are returned exactly as they were passed.
 func Measure(used, window int) Report {
 	report := Report{Used: used, Window: window}
 	if window <= 0 || used <= 0 {
 		return report
 	}
 
-	report.Percent = min(used*100/window, 100)
+	report.Percent = min(roundTenth(float64(used)*100/float64(window)), 100)
 	return report
+}
+
+// roundTenth rounds a value to one decimal, the precision of a context
+// percentage.
+func roundTenth(value float64) float64 {
+	return math.Round(value*10) / 10
 }
 
 // blocksBytes returns the number of bytes the model reads from a list of

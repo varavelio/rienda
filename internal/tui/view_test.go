@@ -1331,7 +1331,7 @@ func TestContextLabel(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		percent int
+		percent float64
 		style   lipgloss.Style
 	}{
 		{name: "fits the window", percent: 34, style: m.styles.footer},
@@ -1363,7 +1363,10 @@ func TestContextLabel(t *testing.T) {
 
 			require.Equal(
 				t,
-				test.style.Render(fmt.Sprintf("ctx %d%% · 68k/200k", test.percent)),
+				test.style.Render(fmt.Sprintf(
+					"ctx %s%% · 68k/200k",
+					formatPercent(test.percent),
+				)),
 				m.contextLabel(),
 			)
 		})
@@ -1376,10 +1379,31 @@ func TestContextLabel(t *testing.T) {
 	})
 
 	t.Run("reaches the footer", func(t *testing.T) {
-		m.context = tokens.Report{Used: 68000, Window: 200000, Percent: 34}
+		m.context = tokens.Report{Used: 68000, Window: 200000, Percent: 34.0}
 
 		require.Contains(t, plain(m.render()), "ctx 34% · 68k/200k")
 	})
+}
+
+// TestFormatPercent verifies the percentage of the context figure.
+func TestFormatPercent(t *testing.T) {
+	tests := []struct {
+		name    string
+		percent float64
+		want    string
+	}{
+		{name: "a whole figure keeps no decimal", percent: 44, want: "44"},
+		{name: "zero is whole", percent: 0, want: "0"},
+		{name: "a hundred is whole", percent: 100, want: "100"},
+		{name: "a decimal is shown", percent: 44.1, want: "44.1"},
+		{name: "a decimal below ten keeps its zero", percent: 9.4, want: "9.4"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, formatPercent(test.percent))
+		})
+	}
 }
 
 // TestFormatTokens verifies the token counts of the chat footer.

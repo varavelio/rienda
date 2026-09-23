@@ -163,8 +163,8 @@ func TestRun(t *testing.T) {
 			require.NotNil(t, info)
 			require.Equal(t, 100000, info.Window)
 			require.Positive(t, info.Used)
-			require.GreaterOrEqual(t, info.Percent, 0)
-			require.LessOrEqual(t, info.Percent, 100)
+			require.GreaterOrEqual(t, info.Percent, 0.0)
+			require.LessOrEqual(t, info.Percent, 100.0)
 		}
 		for index := 1; index < len(contexts); index++ {
 			require.Greater(

@@ -126,8 +126,9 @@ type ContextInfo struct {
 	// against.
 	Window int `json:"window"`
 
-	// Percent is the share of the window in use, an integer between 0 and 100.
-	Percent int `json:"percent"`
+	// Percent is the share of the window in use, between 0 and 100, rounded to
+	// one decimal.
+	Percent float64 `json:"percent"`
 }
 
 // contextFrom projects a context measurement into event form.

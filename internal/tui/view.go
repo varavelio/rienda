@@ -804,11 +804,19 @@ func (m *model) contextLabel() string {
 		style = m.styles.notice
 	}
 	return style.Render(fmt.Sprintf(
-		"ctx %d%% · %s/%s",
-		m.context.Percent,
+		"ctx %s%% · %s/%s",
+		formatPercent(m.context.Percent),
 		formatTokens(m.context.Used),
 		formatTokens(m.context.Window),
 	))
+}
+
+// formatPercent renders a percentage with the one decimal the footer shows,
+// dropping it when the figure is whole so a round number reads as a round
+// number. The measurement already carries the rounding, so the only job here is
+// to hide a zero decimal.
+func formatPercent(percent float64) string {
+	return strings.TrimSuffix(strconv.FormatFloat(percent, 'f', 1, 64), ".0")
 }
 
 // formatTokens renders a token count for the chat footer: the plain number

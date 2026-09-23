@@ -128,7 +128,7 @@ func TestMeasure(t *testing.T) {
 		name        string
 		used        int
 		window      int
-		wantPercent int
+		wantPercent float64
 	}{
 		{name: "a normal measurement", used: 100, window: 200, wantPercent: 50},
 		{name: "no use at all", used: 0, window: 200, wantPercent: 0},
@@ -137,6 +137,24 @@ func TestMeasure(t *testing.T) {
 		{name: "a window of zero", used: 50, window: 0, wantPercent: 0},
 		{name: "a negative window", used: 50, window: -10, wantPercent: 0},
 		{name: "no use and no window", used: 0, window: 0, wantPercent: 0},
+		{
+			name:        "a share that is not a round number",
+			used:        1,
+			window:      3,
+			wantPercent: 33.3,
+		},
+		{
+			name:        "rounds the first decimal down",
+			used:        1,
+			window:      9,
+			wantPercent: 11.1,
+		},
+		{
+			name:        "rounds the first decimal up",
+			used:        2,
+			window:      3,
+			wantPercent: 66.7,
+		},
 	}
 
 	for _, test := range tests {

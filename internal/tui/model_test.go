@@ -632,7 +632,7 @@ func TestModel(t *testing.T) {
 		sendEvent(t, m, engine.Event{Type: engine.EventRunStart})
 		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "hi "})
 		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "there"})
-		scripted.context = tokens.Report{Used: 68000, Window: 200000, Percent: 34}
+		scripted.context = tokens.Report{Used: 68000, Window: 200000, Percent: 34.0}
 		sendEvent(t, m, engine.Event{Type: engine.EventMessageEnd})
 		sendEvent(t, m, engine.Event{
 			Type:   engine.EventRunEnd,
@@ -2360,39 +2360,39 @@ func TestStreamEvents(t *testing.T) {
 func TestRefreshContext(t *testing.T) {
 	t.Run("reports the measurement of the branch", func(t *testing.T) {
 		m, scripted := chatModel(t)
-		scripted.context = tokens.Report{Used: 68000, Window: 200000, Percent: 34}
+		scripted.context = tokens.Report{Used: 68000, Window: 200000, Percent: 34.0}
 
 		m.refreshContext()
 
-		require.Equal(t, 34, m.context.Percent)
+		require.Equal(t, 34.0, m.context.Percent)
 		require.Contains(t, plain(m.render()), "ctx 34% · 68k/200k")
 	})
 
 	t.Run("follows the branch the interface shows", func(t *testing.T) {
 		m, scripted := chatModel(t)
-		scripted.context = tokens.Report{Used: 100, Window: 1000, Percent: 10}
+		scripted.context = tokens.Report{Used: 100, Window: 1000, Percent: 10.0}
 		m.refreshContext()
-		require.Equal(t, 10, m.context.Percent)
+		require.Equal(t, 10.0, m.context.Percent)
 
 		// A run that ends changes the figure: the session answers a different
 		// measurement and the interface picks it up.
-		scripted.context = tokens.Report{Used: 900, Window: 1000, Percent: 90}
+		scripted.context = tokens.Report{Used: 900, Window: 1000, Percent: 90.0}
 		m.input.SetValue("hello")
 		require.NotNil(t, update(t, m, pressEnter))
 		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
 
-		require.Equal(t, 90, m.context.Percent)
+		require.Equal(t, 90.0, m.context.Percent)
 	})
 
 	t.Run("keeps the previous figure when the measurement fails", func(t *testing.T) {
 		m, scripted := chatModel(t)
-		scripted.context = tokens.Report{Used: 100, Window: 1000, Percent: 10}
+		scripted.context = tokens.Report{Used: 100, Window: 1000, Percent: 10.0}
 		m.refreshContext()
 
 		scripted.contextErr = errors.New("boom")
 		m.refreshContext()
 
-		require.Equal(t, 10, m.context.Percent)
+		require.Equal(t, 10.0, m.context.Percent)
 		require.Contains(t, plain(m.render()), "ctx 10%")
 	})
 
@@ -2420,11 +2420,11 @@ func TestRefreshContext(t *testing.T) {
 
 	t.Run("ignores a context event that carries no measurement", func(t *testing.T) {
 		m, _ := chatModel(t)
-		m.context = tokens.Report{Used: 100, Window: 1000, Percent: 10}
+		m.context = tokens.Report{Used: 100, Window: 1000, Percent: 10.0}
 
 		sendEvent(t, m, engine.Event{Type: engine.EventContext})
 
-		require.Equal(t, 10, m.context.Percent, "the previous figure stands")
+		require.Equal(t, 10.0, m.context.Percent, "the previous figure stands")
 	})
 
 	t.Run("reports nothing without a session", func(t *testing.T) {
@@ -2442,14 +2442,14 @@ func TestRefreshContext(t *testing.T) {
 			textMessage(llm.RoleUser, "three"),
 			textMessage(llm.RoleAssistant, "four"),
 		)
-		require.Equal(t, 40, m.context.Percent, "the whole branch is measured")
+		require.Equal(t, 40.0, m.context.Percent, "the whole branch is measured")
 
 		// Returning to an earlier turn shortens the branch the session runs,
 		// so the figure of the same session changes with it.
 		require.NoError(t, stored.store.SetLeaf(stored.store.Branch()[1].ID))
 		m.refreshContext()
 
-		require.Equal(t, 20, m.context.Percent)
+		require.Equal(t, 20.0, m.context.Percent)
 	})
 }
 

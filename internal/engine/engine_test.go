@@ -399,7 +399,7 @@ func TestContext(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 200, report.Window)
 		require.NotZero(t, report.Used)
-		require.Greater(t, report.Percent, 0)
+		require.Greater(t, report.Percent, 0.0)
 
 		plan, err := engine.plan()
 		require.NoError(t, err)
