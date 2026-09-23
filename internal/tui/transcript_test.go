@@ -459,3 +459,66 @@ func TestTranscriptCompaction(t *testing.T) {
 		require.False(t, isTurn(entryCompaction))
 	})
 }
+
+// TestTranscriptSwitch verifies that a selection of what the branch runs is
+// shown in the conversation as a line of metadata between two turns.
+func TestTranscriptSwitch(t *testing.T) {
+	t.Run("folds a stored selection into the transcript", func(t *testing.T) {
+		var folded transcript
+
+		folded.load([]session.Entry{
+			{ID: "u1", Kind: session.KindMessage, Message: textMessage(llm.RoleUser, "hello")},
+			{
+				ID:              "a1",
+				Kind:            session.KindAgent,
+				AgentID:         "reviewer",
+				PreviousAgentID: "coder",
+			},
+			{
+				ID:               "m1",
+				Kind:             session.KindModel,
+				ModelRef:         "fake/other-model",
+				PreviousModelRef: "fake/test-model",
+			},
+		}, "coder")
+
+		require.Len(t, folded.entries, 3)
+		require.Equal(t, entrySwitch, folded.entries[1].kind)
+		require.Equal(t, session.KindAgent, folded.entries[1].selectionKind)
+		require.Equal(t, "coder → reviewer", folded.entries[1].text())
+		require.Equal(t, entrySwitch, folded.entries[2].kind)
+		require.Equal(t, session.KindModel, folded.entries[2].selectionKind)
+		require.Equal(t, "fake/test-model → fake/other-model", folded.entries[2].text())
+	})
+
+	t.Run(
+		"reads a selection without a recorded transition as the value it selects",
+		func(t *testing.T) {
+			var folded transcript
+
+			folded.load([]session.Entry{
+				{ID: "a1", Kind: session.KindAgent, AgentID: "reviewer"},
+			}, "coder")
+
+			require.Len(t, folded.entries, 1)
+			require.Equal(t, "reviewer", folded.entries[0].text(),
+				"a selection written before the transition was recorded still reads")
+		},
+	)
+
+	t.Run("keeps the agent the branch runs at its end", func(t *testing.T) {
+		var folded transcript
+
+		folded.load([]session.Entry{
+			{ID: "u1", Kind: session.KindMessage, Message: textMessage(llm.RoleUser, "hello")},
+			{ID: "a1", Kind: session.KindAgent, AgentID: "reviewer"},
+		}, "coder")
+
+		require.Equal(t, "reviewer", folded.agent,
+			"the answers that stream next are labeled with the agent that writes them")
+	})
+
+	t.Run("keeps a switch out of the stops the reader jumps between", func(t *testing.T) {
+		require.False(t, isTurn(entrySwitch))
+	})
+}

@@ -61,6 +61,8 @@ func TestAgentSwitchDrivesTheWholeFeature(t *testing.T) {
 	require.Len(t, stored.Agents, 1)
 	selection := stored.Agents[0]
 	require.Equal(t, "planner", selection.AgentID)
+	require.Equal(t, "coder", selection.PreviousAgentID,
+		"the selection records the agent it replaced, so the transition reads off the file")
 	require.NotEmpty(t, selection.ID)
 	require.Contains(
 		t,

@@ -61,6 +61,8 @@ func TestModelSwitchDrivesTheWholeFeature(t *testing.T) {
 	require.Len(t, stored.Models, 1)
 	selection := stored.Models[0]
 	require.Equal(t, secondModelRef, selection.ModelRef)
+	require.Equal(t, harness.FakeModelRef, selection.PreviousModelRef,
+		"the selection records the model it replaced, so the transition reads off the file")
 	require.NotEmpty(t, selection.ID)
 	require.Contains(t, entryIDs(stored), selection.ParentID,
 		"the selection hangs from a stored entry")

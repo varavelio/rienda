@@ -100,10 +100,22 @@ type Entry struct {
 	// branch it hangs from onto another agent.
 	AgentID string
 
+	// PreviousAgentID is the identifier of the agent the branch ran before a
+	// KindAgent entry selected AgentID. The selection records it when it is
+	// written, so the transition reads off the entry alone and never replays
+	// the branch it belongs to. It is empty when the entry does not carry it,
+	// which is the case of the selections written before the field existed.
+	PreviousAgentID string
+
 	// ModelRef is the provider/model reference a KindModel entry selects,
 	// empty when it selects none. The reference, never the resolved settings,
 	// is what a session stores: credentials belong to the configuration of the
 	// user and must never reach a session file. The entry carries no message:
 	// it only moves the branch it hangs from onto another model.
 	ModelRef string
+
+	// PreviousModelRef is the provider/model reference the branch ran before a
+	// KindModel entry selected ModelRef. It is recorded like PreviousAgentID,
+	// so the transition reads off the entry alone.
+	PreviousModelRef string
 }

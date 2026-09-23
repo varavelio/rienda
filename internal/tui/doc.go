@@ -93,33 +93,50 @@
 // them and travel with the branch, so a branch keeps the context of the turn it
 // starts from. The turns are drawn in the order the conversation grew, each
 // subtree under the turn it follows and connected to it by the vertical lines
-// of the levels above, so a branch opened from a turn of the past lands beside
-// that turn instead of at the end of the tree. Every row opens with the mark of
-// the branch its turn belongs to, drawn in a column of its own: a faint dot for
-// the turns of the branch the session runs, a bright one for the turn the
-// session is at and a blank for the turns of the branches it left behind, so
-// the branch the conversation runs reads down that column. Enter returns the
-// session to the highlighted turn, leaving the turns that followed it in the
-// tree as a branch of their own. Returning to a prompt rewinds to the turn
-// before it and offers the prompt in the input, ready to be edited and sent
-// again, which is the same as returning to the answer it followed. Every rewind
-// is announced by the block above the prompt, between two blank rows, which
-// says whether the next message opens a branch or continues the branch the
-// session returned to. A turn can also carry a tag (ctrl+t), a word the user
-// attaches to it to find it again, which the tree shows before the author in a
-// color of its own and the query matches along with the message. The turns that
-// follow a turn fold away with ctrl+f, a single key that hides and shows the
-// subtree under the highlighted turn, so a long tree is walked a subtree at a
-// time. The whole tree folds and unfolds at once with ctrl+a, which shows a
-// long conversation as the turns that open a branch, and ctrl+o folds every
-// subtree except the branch the session runs, which leaves that branch whole
-// beside the branches it left behind. Every key toggles or repeats safely, so
-// the reader folds without remembering whether the fold is already in effect;
-// folding is how the reader looks at the session, not what it stores, so it
-// lasts as long as the tree is open. A checkpoint that summarizes the oldest
-// turns is a turn like any other in both places: the conversation renders it
-// labeled Compaction where the compaction happened, and the tree draws it as a
-// node, so a branch shows at a glance where it was summarized.
+// of the branches above, so a branch opened from a turn of the past lands
+// beside that turn instead of at the end of the tree. A turn written after the
+// one before it, the only child of its parent, keeps the level of that turn and
+// is drawn right below it, so a linear conversation reads down a single column
+// however long it grows; only a turn the conversation wrote beside another
+// opens a level of its own, so the tree grows to the right when the
+// conversation branches and never merely because it is long. Every row opens
+// with the mark of the branch its turn belongs to, drawn in a column of its
+// own: a faint dot for the turns of the branch the session runs, a bright one
+// for the turn the session is at and a blank for the turns of the branches it
+// left behind, so the branch the conversation runs reads down that column.
+// Enter returns the session to the highlighted turn, leaving the turns that
+// followed it in the tree as a branch of their own. Returning to a prompt
+// rewinds to the turn before it and offers the prompt in the input, ready to be
+// edited and sent again, which is the same as returning to the answer it
+// followed. Every rewind is announced by the block above the prompt, between
+// two blank rows, which says whether the next message opens a branch or
+// continues the branch the session returned to. A turn can also carry a tag
+// (ctrl+t), a word the user attaches to it to find it again, which the tree
+// shows before the author in a color of its own and the query matches along
+// with the message. The turns that follow a turn fold away with ctrl+f, a
+// single key that hides and shows the subtree under the highlighted turn, so a
+// long tree is walked a subtree at a time. The whole tree folds and unfolds at
+// once with ctrl+a, which shows a long conversation as the turns that open a
+// branch, and ctrl+o folds every subtree except the branch the session runs,
+// which leaves that branch whole beside the branches it left behind. Every key
+// toggles or repeats safely, so the reader folds without remembering whether
+// the fold is already in effect; folding is how the reader looks at the
+// session, not what it stores, so it lasts as long as the tree is open.
+//
+// Two things that are not conversation turns are still nodes of the tree, so
+// nothing the session went through is lost by reading the tree alone. A
+// checkpoint that summarizes the oldest turns is a turn like any other: the
+// conversation renders it labeled Compaction where the compaction happened, and
+// the tree draws it as a node, so a branch shows at a glance where it was
+// summarized. A selection of what the branch runs, the agent or the model that
+// changed in the middle of the conversation, is drawn the same way, labeled
+// Agent switch or Model switch with the value it replaced and the one it wrote
+// as its message, so the whole change reads off the row. The conversation shows
+// it too, as a single faint row between two turns, which keeps a switch from
+// being lost by reading the conversation instead of the tree. Both read as
+// metadata rather than as a voice of the conversation, and the selection
+// records the value it replaced when it is written, so the transition is read
+// off the session file and never replays the branch it belongs to.
 //
 // An @ in the prompt opens the completion of the files of the project, so the
 // user never has to remember a path to point the model at a file. The

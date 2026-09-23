@@ -156,6 +156,8 @@ type SessionAgent struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// AgentID is the identifier of the selected agent.
 	AgentID string `json:"agentId"`
+	// PreviousAgentID is the identifier of the agent the selection replaced.
+	PreviousAgentID string `json:"previousAgentId"`
 }
 
 // SessionModel is one decoded model selection entry of a session file.
@@ -170,6 +172,8 @@ type SessionModel struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// ModelRef is the provider/model reference the entry selects.
 	ModelRef string `json:"modelRef"`
+	// PreviousModelRef is the provider/model reference the selection replaced.
+	PreviousModelRef string `json:"previousModelRef"`
 }
 
 // SessionUsage is the token consumption persisted with an assistant entry.

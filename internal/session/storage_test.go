@@ -34,17 +34,19 @@ func titleMarkerLine(title string) string {
 }
 
 // agentLine builds an agent selection line selecting the agent with the id,
-// hanging from parentID.
+// hanging from parentID and replacing the agent the branch ran before.
 func agentLine(id, parentID, agentID string) string {
 	return `{"kind":"agent","id":"` + id + `","parentId":"` + parentID + `",` +
-		`"createdAt":"2026-09-16T10:15:35Z","agentId":"` + agentID + `"}`
+		`"createdAt":"2026-09-16T10:15:35Z","agentId":"` + agentID + `",` +
+		`"previousAgentId":"coder"}`
 }
 
 // modelLine builds a model selection line selecting ref, hanging from
-// parentID.
+// parentID and replacing the model the branch ran before.
 func modelLine(id, parentID, ref string) string {
 	return `{"kind":"model","id":"` + id + `","parentId":"` + parentID + `",` +
-		`"createdAt":"2026-09-16T10:15:36Z","modelRef":"` + ref + `"}`
+		`"createdAt":"2026-09-16T10:15:36Z","modelRef":"` + ref + `",` +
+		`"previousModelRef":"test/model"}`
 }
 
 // compactionLine builds a compaction line replacing everything before keptID.
@@ -173,6 +175,8 @@ func TestDecode(t *testing.T) {
 		require.Equal(t, "a1", selection.ID)
 		require.Equal(t, "m1", selection.ParentID)
 		require.Equal(t, "reviewer", selection.AgentID)
+		require.Equal(t, "coder", selection.PreviousAgentID,
+			"the agent the selection replaced is read back")
 		require.Equal(t, "a1", leaf)
 	})
 
@@ -189,6 +193,8 @@ func TestDecode(t *testing.T) {
 		require.Equal(t, "s1", selection.ID)
 		require.Equal(t, "m1", selection.ParentID)
 		require.Equal(t, "anthropic/claude-sonnet", selection.ModelRef)
+		require.Equal(t, "test/model", selection.PreviousModelRef,
+			"the model the selection replaced is read back")
 		require.Equal(t, "s1", leaf)
 	})
 

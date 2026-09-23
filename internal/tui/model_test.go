@@ -2011,7 +2011,12 @@ func TestTree(t *testing.T) {
 
 		view := plain(m.render())
 		require.Contains(t, view, "├─ You: second")
-		require.Contains(t, view, "│  └─ Agent (coder): two")
+		require.Contains(
+			t,
+			view,
+			"│  Agent (coder): two",
+			"the continuation keeps the column of its branch",
+		)
 		require.Contains(t, view, "└─ You: other", "the branch closes the group of the answer")
 		require.Less(
 			t,
@@ -2936,6 +2941,9 @@ func TestSwitchAgent(t *testing.T) {
 		update(t, m, pressEnter)
 		typeFilter(t, m, "reviewer")
 		update(t, m, pressEnter)
+		// The switch writes a row of its own, so the window grows to keep both
+		// turns of the conversation in view.
+		update(t, m, windowMsg(80, 40))
 
 		// The answer written before the selection keeps its author, and the
 		// one written after carries the agent that wrote it.

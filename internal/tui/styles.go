@@ -35,6 +35,11 @@ type styles struct {
 	notice    lipgloss.Style
 	footer    lipgloss.Style
 	activity  lipgloss.Style
+	// selection styles the label of a selection of what the branch runs, the
+	// agent or the model that changed in the middle of the conversation. It
+	// stays faint so a switch reads as metadata rather than as a voice of the
+	// conversation, and it takes no color of its own for the same reason.
+	selection lipgloss.Style
 	// on and off style the state of an option of the harness.
 	on  lipgloss.Style
 	off lipgloss.Style
@@ -137,6 +142,7 @@ func newStyles(isDark bool) styles {
 		notice:      lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
 		footer:      lipgloss.NewStyle().Faint(true),
 		activity:    lipgloss.NewStyle(),
+		selection:   lipgloss.NewStyle().Faint(true),
 		on:          lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
 		off:         lipgloss.NewStyle().Faint(true),
 		tag:         lipgloss.NewStyle().Foreground(lipgloss.Color("11")),

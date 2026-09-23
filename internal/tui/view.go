@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -513,11 +514,14 @@ func (m *model) treeMessage(node treeNode, highlighted bool) string {
 
 // treeMessageWidth returns the columns the message of a turn may take, so a
 // long message never floods the tree: it never grows past treeMessageMax, and a
-// narrow row shows what the room the gutter leaves it allows. A row too narrow to
+// narrow row shows what the room left by the guides and the connector of its
+// level allows, which is measured from the glyphs really drawn so a turn of the
+// trunk is not cut short by the column it does not open. A row too narrow to
 // leave the message any room shows it whole, which the terminal clips.
 func (m *model) treeMessageWidth(node treeNode) int {
-	room := m.width - treeMessageReserve - len(node.guides)*len(treeLevel)
-	return max(0, min(treeMessageMax, room))
+	prefix := utf8.RuneCountInString(treeGuides(node.guides)) +
+		utf8.RuneCountInString(treeConnector(node))
+	return max(0, min(treeMessageMax, m.width-treeRowReserve-prefix))
 }
 
 // clipText cuts a line to the given width, keeping it whole when the width is
@@ -545,37 +549,48 @@ func treeGuides(guides []bool) string {
 	return line.String()
 }
 
-// treeConnector returns the glyph that opens a turn of the tree: the last turn
-// of a group closes it and the turns before it keep it open, while a turn that
-// opens a branch holds no connector, because it hangs from nothing. A turn
-// whose children are folded carries the glyph that says so, so the reader
-// knows a subtree is hidden under it: the turn that opens a branch shows it
-// even when it closes no group, so a tree folded down to its roots still shows
-// that they hold turns.
+// treeConnector returns the glyph that opens a turn of the tree, placing it in
+// the branch it belongs to: the last turn of a group closes it and the turns
+// before it keep it open, while a turn that continues the one before it only
+// draws the column it shares with it, or nothing at all at the root of the
+// tree. A continuation whose column closes draws a blank of its width, so its
+// message stays aligned with the turn it continues. A turn whose children are
+// folded carries the glyph that says so, so the reader knows a subtree is
+// hidden under it: the turn that opens a branch shows it even when it closes no
+// group, so a tree folded down to its roots still shows that they hold turns.
 func treeConnector(node treeNode) string {
 	switch {
-	case node.folded && node.last:
-		return "⊟─ "
-	case node.folded:
+	case node.folded && node.open:
 		return "⊞─ "
+	case node.folded:
+		return "⊟─ "
 	case node.parent < 0:
 		return ""
-	case node.last:
-		return "└─ "
-	default:
+	case node.continued && len(node.guides) == 0:
+		return ""
+	case node.continued && node.open:
+		return treeLine
+	case node.continued:
+		return treeGap
+	case node.open:
 		return "├─ "
+	default:
+		return "└─ "
 	}
 }
 
 // treeName returns the author of a turn, which the tree shows before the
 // message so the reader always knows who wrote it. An answer names the agent
 // that wrote it, which is the agent the branch ran at that turn, so a
-// conversation that changed agent shows who wrote what. A checkpoint carries
-// its own label instead of an author.
+// conversation that changed agent shows who wrote what. A checkpoint and a
+// selection of what the branch runs carry a label of their own instead of an
+// author.
 func treeName(node treeNode) string {
 	switch {
 	case node.entry.Kind == session.KindCompaction:
 		return "Compaction:"
+	case node.entry.Kind == session.KindAgent || node.entry.Kind == session.KindModel:
+		return selectionLabel(node.entry.Kind) + ":"
 	case node.entry.Message.Role == llm.RoleUser:
 		return "You:"
 	default:
@@ -584,11 +599,15 @@ func treeName(node treeNode) string {
 }
 
 // treeNameStyle returns the style of the author of a turn, the color the
-// conversation gives the same author.
+// conversation gives the same author. A selection of what the branch runs reads
+// as metadata, so it takes the faint style the conversation gives the same
+// switch instead of a color of its own.
 func (m *model) treeNameStyle(entry session.Entry) lipgloss.Style {
 	switch {
 	case entry.Kind == session.KindCompaction:
 		return m.styles.compaction.title
+	case entry.Kind == session.KindAgent || entry.Kind == session.KindModel:
+		return m.styles.selection
 	case entry.Message.Role == llm.RoleUser:
 		return m.styles.user.title
 	default:
@@ -874,9 +893,26 @@ func (m *model) renderBlockBody(current *entry, width int) string {
 		return m.styles.notice.Render(wrap(current.text(), width))
 	case entryCompaction:
 		return m.styles.compaction.block(width, "Compaction", current.text())
+	case entrySwitch:
+		return m.renderSwitch(current, width)
 	default:
 		return m.styles.failure.block(width, "Error", current.text())
 	}
+}
+
+// renderSwitch renders a selection of what the branch runs as a single row, so
+// a switch reads as metadata between two turns instead of as a turn of its own:
+// the thin marker keeps it apart from the turns, the label stays faint and the
+// transition the selection wrote stays visible. A long transition wraps inside
+// the row, so the model that follows is never cut off.
+func (m *model) renderSwitch(current *entry, width int) string {
+	row := m.styles.selection.Render(markerActivity) + " " +
+		m.styles.selection.Render(selectionLabel(current.selectionKind)+": ") +
+		current.text()
+	if width <= 0 {
+		return row
+	}
+	return lipgloss.Wrap(row, width, "")
 }
 
 // renderAssistantBlock renders an answer of the model, formatted as markdown

@@ -52,15 +52,14 @@ const (
 	treeGutterGap = " "
 )
 
-// treeMessageReserve is the columns a row keeps outside the message of its
-// turn: the cursor, the gutter that marks the branch, the author and the
-// connector that places the turn, which the message must never push out of it.
-// It counts the runes of the widest of each, because the cursor, the gutter and
-// the connector are single glyphs the terminal draws in one column each. The
-// columns of the levels above the turn are measured apart, because they grow
-// with its depth.
-var treeMessageReserve = utf8.RuneCountInString("Agent (agent): ") + // the author
-	utf8.RuneCountInString("└─ ") + // the connector that places the turn
+// treeRowReserve is the columns a row keeps outside the guides and the
+// connector that place its turn: the cursor, the gutter that marks the branch,
+// the author and the blank between the author and the message. It counts the
+// runes of the widest of each, because the cursor, the gutter and the mark are
+// single glyphs the terminal draws in one column each. The guides and the
+// connector are measured from the turn itself, because they grow with its level
+// and the message must never push them out of the row.
+var treeRowReserve = utf8.RuneCountInString("Agent (agent): ") + // the author
 	utf8.RuneCountInString("› ") + // the cursor of a row
 	utf8.RuneCountInString(treeCurrentMark) + // the mark of the gutter
 	utf8.RuneCountInString("  ") // the gutter blank and the one before the message
@@ -127,11 +126,12 @@ type treeNode struct {
 	// opens a branch.
 	parent int
 
-	// guides holds, for every level above the node, whether that level still
-	// holds a turn to close. A level that does draws the vertical line that
+	// guides holds, for every branch above the node, whether that branch still
+	// holds a turn to close. A branch that does draws the vertical line that
 	// connects the turns of a subtree to the turn they follow, so the tree
-	// reads as a tree instead of a list of indented rows. Its length is the
-	// depth of the node.
+	// reads as a tree instead of a list of rows. Its length is the level of the
+	// node: every branch on the path to it opens a level, and the turns that
+	// continue one another share it.
 	guides []bool
 
 	// children is the number of turns that follow the node.
@@ -142,10 +142,16 @@ type treeNode struct {
 	// children, so the screen can say how many turns it holds.
 	folded bool
 
-	// last reports that no turn follows the node inside the group of turns it
-	// belongs to, which the rendering draws with the connector that closes a
-	// group.
-	last bool
+	// continued reports that the node is the only turn written after the turn
+	// before it, so it keeps the level of that turn and is drawn right below it
+	// instead of opening a level of its own. It is what keeps a long linear
+	// conversation in a single column.
+	continued bool
+
+	// open reports that the column of the node still holds a turn to close
+	// below it, either a turn written beside it or the turn it continues. It
+	// decides the connector the rendering draws for the node.
+	open bool
 
 	// active reports that the node belongs to the branch the session leaves
 	// open.
@@ -156,12 +162,19 @@ type treeNode struct {
 }
 
 // search returns the text of the node the query of the tree is matched
-// against: the message of the turn and the tag that labels it.
+// against: the message of the turn, the label of the selection it reports and
+// the tag that labels it, so a switch is found by what it changed as well as by
+// the value it wrote.
 func (n treeNode) search() string {
-	if n.entry.Tag == "" {
-		return n.text
+	text := n.text
+	switch n.entry.Kind {
+	case session.KindAgent, session.KindModel:
+		text = selectionLabel(n.entry.Kind) + " " + text
 	}
-	return n.text + " " + n.entry.Tag
+	if n.entry.Tag == "" {
+		return text
+	}
+	return text + " " + n.entry.Tag
 }
 
 // newTreeScreen builds the tree screen of the interface: the list that
@@ -182,11 +195,19 @@ func newTreeScreen(text func(int) string, base styles, isDark bool) tree {
 }
 
 // treeNodes builds the nodes of the session tree from the entries of a
-// session: one node per turn, linked to the turn it follows and placed under
-// it, so the tree reads in the order it grew. The branch tells which turns the
-// session leaves open, so the tree can mark where the conversation stands, and
-// folded names the turns whose children the user hid, which keeps their
-// subtrees out of the nodes.
+// session: one node per turn of the conversation and per selection of what the
+// branch runs, linked to the turn it follows and placed under it, so the tree
+// reads in the order it grew. The branch tells which turns the session leaves
+// open, so the tree can mark where the conversation stands, and folded names
+// the turns whose children the user hid, which keeps their subtrees out of the
+// nodes.
+//
+// A turn written after the one before it, the only child of its parent, keeps
+// the level of that turn and is drawn right below it, so a linear conversation
+// reads down a single column however long it grows. Only a turn the
+// conversation wrote beside another, a parent with several children, opens a
+// level of its own for each branch, so the tree grows to the right when the
+// conversation branches and never merely because it is long.
 //
 // The nodes are walked from the roots of the forest, depth first, so the turns
 // of a subtree stay together under the turn they follow however late they were
@@ -199,8 +220,8 @@ func treeNodes(entries, branch []session.Entry, folded map[string]bool, owner st
 	}
 	current := currentTurn(branch)
 
-	// above links every entry to the turn it hangs from, and children groups
-	// the turns by the turn they follow, in the order they were written. An
+	// above links every entry to the node it hangs from, and children groups
+	// the nodes by the node they follow, in the order they were written. An
 	// activity hangs from the turn it belongs to, so it never breaks the chain
 	// between two turns.
 	//
@@ -211,7 +232,7 @@ func treeNodes(entries, branch []session.Entry, folded map[string]bool, owner st
 	above := map[string]string{"": ""}
 	effective := map[string]string{"": owner}
 	children := map[string][]string{}
-	turns := make(map[string]session.Entry, len(entries))
+	stored := make(map[string]session.Entry, len(entries))
 	for _, entry := range entries {
 		parent := above[entry.ParentID]
 		if entry.Kind == session.KindAgent {
@@ -220,36 +241,35 @@ func treeNodes(entries, branch []session.Entry, folded map[string]bool, owner st
 			effective[entry.ID] = effective[entry.ParentID]
 		}
 
-		if !isTurnEntry(entry) {
+		if !isTreeNode(entry) {
 			above[entry.ID] = parent
 			continue
 		}
 		above[entry.ID] = entry.ID
-		turns[entry.ID] = entry
+		stored[entry.ID] = entry
 		children[parent] = append(children[parent], entry.ID)
 	}
 
-	nodes := make([]treeNode, 0, len(turns))
-	index := make(map[string]int, len(turns))
-	// walk appends the subtree of a turn, carrying the guides of the levels
-	// above it. A level that still holds a turn to close draws its line, so the
-	// turns of a subtree stay connected to the turn they follow.
-	var walk func(id string, parent int, guides []bool)
-	walk = func(id string, parent int, guides []bool) {
-		entry := turns[id]
-		siblings := children[above[entry.ParentID]]
-
+	nodes := make([]treeNode, 0, len(stored))
+	index := make(map[string]int, len(stored))
+	// walk appends the subtree of a node, carrying the guides of the branches
+	// above it. A branch that still holds a turn to close draws its guide, so
+	// the turns of a subtree stay connected to the turn they follow.
+	var walk func(id string, parent int, guides []bool, continued, open bool)
+	walk = func(id string, parent int, guides []bool, continued, open bool) {
+		entry := stored[id]
 		node := treeNode{
-			entry:    entry,
-			text:     turnText(entry),
-			agent:    effective[entry.ParentID],
-			parent:   parent,
-			guides:   guides,
-			last:     id == siblings[len(siblings)-1],
-			folded:   folded[id],
-			active:   active[id],
-			current:  id == current,
-			children: len(children[id]),
+			entry:     entry,
+			text:      nodeText(entry),
+			agent:     effective[entry.ParentID],
+			parent:    parent,
+			guides:    guides,
+			continued: continued,
+			open:      open,
+			folded:    folded[id],
+			active:    active[id],
+			current:   id == current,
+			children:  len(children[id]),
 		}
 		index[id] = len(nodes)
 		nodes = append(nodes, node)
@@ -258,51 +278,69 @@ func treeNodes(entries, branch []session.Entry, folded map[string]bool, owner st
 			return
 		}
 
-		// The level of the turn draws a line while a turn of its own group
-		// follows it. A turn that opens a branch holds no level of its own, so
-		// the turns below it start at the root.
-		line := false
-		if parent >= 0 {
-			line = !node.last
-		}
-		for _, child := range children[id] {
-			walk(child, index[id], append(slices.Clone(guides), line))
+		switch branches := children[id]; len(branches) {
+		case 0:
+		case 1:
+			// The only turn written after this one continues it, so it keeps
+			// the level and reads right below it.
+			walk(branches[0], index[id], guides, true, open)
+		default:
+			// The conversation branches here: every turn opens a level of its
+			// own beside the turns it was written with, and the level of this
+			// one keeps drawing its guide while a turn of its own follows.
+			for position, child := range branches {
+				walk(
+					child,
+					index[id],
+					append(slices.Clone(guides), open),
+					false,
+					position < len(branches)-1,
+				)
+			}
 		}
 	}
-	for _, root := range children[""] {
-		walk(root, -1, nil)
+	roots := children[""]
+	for position, root := range roots {
+		walk(root, -1, nil, false, position < len(roots)-1)
 	}
 	return nodes
 }
 
-// currentTurn returns the identifier of the turn the session is at: the last
-// turn of the active branch. The branch ends in the active leaf, which is a
-// turn of the conversation or an activity of the turn around it, as the tool
-// results an interrupted run leaves behind are.
+// currentTurn returns the identifier of the node the session is at: the last
+// node of the active branch. The branch ends in the active leaf, which is a
+// turn of the conversation, a selection of what it runs, or an activity of the
+// turn around it, as the tool results an interrupted run leaves behind are.
 func currentTurn(branch []session.Entry) string {
 	for _, entry := range slices.Backward(branch) {
-		if isTurnEntry(entry) {
+		if isTreeNode(entry) {
 			return entry.ID
 		}
 	}
 	return ""
 }
 
-// isTurnEntry reports whether an entry is a turn of the conversation: a prompt
-// written by the user, an answer of the agent or a compaction checkpoint. The
-// user turns that carry tool results and the answers that only request tools
-// are activities of a turn, so the tree skips them and the reader finds the
-// same stops the conversation offers.
-func isTurnEntry(entry session.Entry) bool {
-	return opensTurn(entry) || closesTurn(entry) || entry.Kind == session.KindCompaction
+// isTreeNode reports whether an entry is drawn as a node of the session tree: a
+// turn of the conversation, a prompt written by the user or an answer of the
+// agent, a compaction checkpoint, or a selection of what the branch runs. The
+// user turns that carry tool results, the answers that only request tools and
+// the reasoning are activities of a turn, so the tree skips them and the reader
+// finds the same stops the conversation offers.
+func isTreeNode(entry session.Entry) bool {
+	return opensTurn(entry) || closesTurn(entry) ||
+		entry.Kind == session.KindCompaction ||
+		entry.Kind == session.KindAgent ||
+		entry.Kind == session.KindModel
 }
 
-// turnText returns the message of one turn on a single line, so a turn of the
-// tree never takes more than one row. A checkpoint says what it is instead of
-// carrying a message.
-func turnText(entry session.Entry) string {
-	if entry.Kind == session.KindCompaction {
+// nodeText returns the text of one node of the tree on a single line, so a node
+// never takes more than one row: the message of a turn, the transition a
+// selection wrote, or the note that names a checkpoint.
+func nodeText(entry session.Entry) string {
+	switch entry.Kind {
+	case session.KindCompaction:
 		return compactionBody
+	case session.KindAgent, session.KindModel:
+		return selectionText(entry)
 	}
 
 	text := strings.Join(strings.Fields(textOf(entry.Message.Blocks)), " ")

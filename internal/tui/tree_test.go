@@ -91,9 +91,9 @@ func TestTreeNodes(t *testing.T) {
 		)
 		require.Equal(
 			t,
-			[]int{0, 1, 2, 2, 3},
+			[]int{0, 0, 1, 1, 1},
 			nodesField(nodes, func(node treeNode) int { return len(node.guides) }),
-			"the guides of a turn place it at its depth",
+			"only a branch opens a level; a continuation keeps the one of its turn",
 		)
 		require.Equal(
 			t,
@@ -102,9 +102,15 @@ func TestTreeNodes(t *testing.T) {
 		)
 		require.Equal(
 			t,
-			[]bool{true, true, false, true, true},
-			nodesField(nodes, func(node treeNode) bool { return node.last }),
-			"the last turn of a group closes it",
+			[]bool{false, true, false, false, true},
+			nodesField(nodes, func(node treeNode) bool { return node.continued }),
+			"the only turn written after a turn continues it at the same level",
+		)
+		require.Equal(
+			t,
+			[]bool{false, false, true, false, false},
+			nodesField(nodes, func(node treeNode) bool { return node.open }),
+			"the column of a turn stays open while a turn of its group follows",
 		)
 	})
 
@@ -214,15 +220,15 @@ func TestTreeNodes(t *testing.T) {
 			t,
 			[]string{
 				"",
+				"",
+				"   ├─ ",
 				"   └─ ",
-				"      ├─ ",
-				"      └─ ",
-				"         └─ ",
+				"      ",
 			},
 			nodesField(nodes, func(node treeNode) string {
 				return treeGuides(node.guides) + treeConnector(node)
 			}),
-			"every level of the tree draws the column that keeps it connected",
+			"a continuation keeps the column of the turn it follows",
 		)
 	})
 
@@ -239,7 +245,7 @@ func TestTreeNodes(t *testing.T) {
 
 		require.Equal(
 			t,
-			[]string{"", "   └─ ", "      ├─ ", "      │  └─ ", "      └─ "},
+			[]string{"", "", "   ├─ ", "   │  ", "   └─ "},
 			nodesField(nodes, func(node treeNode) string {
 				return treeGuides(node.guides) + treeConnector(node)
 			}),
@@ -506,8 +512,8 @@ func TestTreeCompaction(t *testing.T) {
 			CompactionKeptID:  "u1",
 		}
 
-		require.True(t, isTurnEntry(entry))
-		require.Equal(t, compactionBody, turnText(entry))
+		require.True(t, isTreeNode(entry))
+		require.Equal(t, compactionBody, nodeText(entry))
 		require.Equal(t, "Compaction:", treeName(treeNode{entry: entry}))
 	})
 
@@ -603,5 +609,110 @@ func TestTreeCompaction(t *testing.T) {
 		last := m.tree.nodes[len(m.tree.nodes)-1]
 		require.Equal(t, session.KindCompaction, m.tree.nodes[len(m.tree.nodes)-2].entry.Kind)
 		require.Equal(t, "after the checkpoint", last.text)
+	})
+}
+
+// TestTreeSwitch verifies that a selection of what the branch runs is shown as
+// a node of the tree, exactly as a checkpoint is, so a conversation that
+// changed agent or model keeps the change in the tree.
+func TestTreeSwitch(t *testing.T) {
+	// switches returns the entries of a conversation that ran on one agent and
+	// one model, switched both, and went on, which is what the tests below
+	// read the tree from.
+	switches := func() []session.Entry {
+		return []session.Entry{
+			turnEntry("m1", "", llm.RoleUser, "first"),
+			turnEntry("m2", "m1", llm.RoleAssistant, "one"),
+			{
+				ID:              "a1",
+				ParentID:        "m2",
+				Kind:            session.KindAgent,
+				AgentID:         "reviewer",
+				PreviousAgentID: "coder",
+			},
+			{
+				ID:               "s1",
+				ParentID:         "a1",
+				Kind:             session.KindModel,
+				ModelRef:         "fake/other-model",
+				PreviousModelRef: "fake/test-model",
+			},
+			turnEntry("m3", "s1", llm.RoleUser, "second"),
+			turnEntry("m4", "m3", llm.RoleAssistant, "two"),
+		}
+	}
+
+	t.Run("draws a selection as a node of its own", func(t *testing.T) {
+		entries := switches()
+
+		nodes := treeNodes(entries, entries, nil, "coder")
+
+		require.Equal(
+			t,
+			[]string{"m1", "m2", "a1", "s1", "m3", "m4"},
+			nodesField(nodes, func(node treeNode) string { return node.entry.ID }),
+			"a selection is a node, not an activity of the turn around it",
+		)
+		require.Equal(
+			t,
+			[]int{0, 0, 0, 0, 0, 0},
+			nodesField(nodes, func(node treeNode) int { return len(node.guides) }),
+			"a selection continues the chain, so it opens no level",
+		)
+	})
+
+	t.Run("labels a selection with its transition", func(t *testing.T) {
+		entries := switches()
+
+		nodes := treeNodes(entries, entries, nil, "coder")
+
+		require.Equal(t, "Agent switch:", treeName(nodes[2]))
+		require.Equal(t, "coder → reviewer", nodes[2].text)
+		require.Equal(t, "Model switch:", treeName(nodes[3]))
+		require.Equal(t, "fake/test-model → fake/other-model", nodes[3].text)
+	})
+
+	t.Run("labels the answers with the agent the branch runs at the turn", func(t *testing.T) {
+		entries := switches()
+
+		nodes := treeNodes(entries, entries, nil, "coder")
+
+		require.Equal(t, "coder", nodes[1].agent, "the answer before the switch keeps its agent")
+		require.Equal(t, "reviewer", nodes[5].agent, "the answer after carries the new agent")
+	})
+
+	t.Run("finds a selection by what it changed", func(t *testing.T) {
+		entries := switches()
+
+		nodes := treeNodes(entries, entries, nil, "coder")
+
+		require.Contains(t, nodes[2].search(), "reviewer")
+		require.Contains(t, nodes[2].search(), "Agent switch")
+	})
+
+	t.Run("marks a selection the session stands on as the turn it is at", func(t *testing.T) {
+		entries := switches()
+
+		nodes := treeNodes(entries, entries[:4], nil, "coder")
+
+		require.True(t, nodes[3].current, "the session stands on the model it just selected")
+	})
+
+	t.Run("renders a selection with the style of the metadata", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		require.NoError(t, stored.store.SetAgent(t.Context(), "reviewer"))
+		m.buildTree()
+
+		rendered := m.render()
+		require.Contains(t, plain(rendered), "Agent switch: coder → reviewer")
+		require.Contains(
+			t,
+			rendered,
+			m.styles.selection.Render("Agent switch:"),
+			"a switch reads as metadata instead of as a voice of the conversation",
+		)
 	})
 }

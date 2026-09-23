@@ -38,6 +38,9 @@ const (
 	// entryCompaction reports that the conversation before it was summarized
 	// into a checkpoint.
 	entryCompaction
+	// entrySwitch reports a selection of what the branch runs, the agent or
+	// the model that changed in the middle of the conversation.
+	entrySwitch
 )
 
 // isTurn reports whether an entry opens a turn of the conversation: a message
@@ -71,6 +74,11 @@ type entry struct {
 	// belong to no agent, such as a notice. It labels the answers of the
 	// conversation, so a session that switched agent shows who wrote what.
 	agent string
+
+	// selectionKind is the kind of the stored selection a switch entry
+	// reports, empty for every other entry. It selects the label the
+	// conversation shows for the switch, so the label is written once.
+	selectionKind session.Kind
 
 	// Tool fields are only meaningful for entryTool entries.
 	toolCallID    string
@@ -181,7 +189,6 @@ func (t *transcript) finishTurn(elapsed time.Duration) {
 // answered it, so a slow provider that takes minutes to answer is reported
 // like any other turn.
 func (t *transcript) load(entries []session.Entry, agent string) {
-	t.agent = agent
 	var opened time.Time
 	for _, entry := range entries {
 		// The branch is linear, so the agent of every turn is the one the
@@ -189,7 +196,6 @@ func (t *transcript) load(entries []session.Entry, agent string) {
 		// turns that follow it and leaves the earlier ones untouched.
 		if entry.Kind == session.KindAgent {
 			agent = entry.AgentID
-			continue
 		}
 		t.fold(entry, agent)
 		switch {
@@ -200,17 +206,23 @@ func (t *transcript) load(entries []session.Entry, agent string) {
 			opened = time.Time{}
 		}
 	}
+
+	// The transcript keeps the agent the branch runs at its end, so the answers
+	// that stream in from now on are labeled with the agent that writes them.
+	t.agent = agent
 }
 
 // fold appends the content of one stored entry to the transcript, written by
-// the agent the branch runs at that point. A selection entry carries no content
-// of its own, so it is skipped: it only changes the label of what follows.
+// the agent the branch runs at that point. A compaction checkpoint and a
+// selection of what the branch runs carry no message of their own, so they are
+// shown for what they are instead of being folded as conversation.
 func (t *transcript) fold(entry session.Entry, agent string) {
-	if entry.Kind == session.KindCompaction {
+	switch entry.Kind {
+	case session.KindCompaction:
 		t.addCompaction()
 		return
-	}
-	if entry.Kind == session.KindAgent {
+	case session.KindAgent, session.KindModel:
+		t.addSwitch(entry)
 		return
 	}
 
@@ -252,6 +264,44 @@ func closesTurn(entry session.Entry) bool {
 // hasBlock reports whether the blocks hold one of the given type.
 func hasBlock(blocks []llm.Block, kind llm.BlockType) bool {
 	return slices.ContainsFunc(blocks, func(block llm.Block) bool { return block.Type == kind })
+}
+
+// addSwitch appends a selection of what the branch runs: the agent or the
+// model that changed in the middle of the conversation. The conversation shows
+// it as a line of metadata between two turns, exactly as the tree shows it as a
+// node of its own, so a switch is never lost by reading one of the two.
+func (t *transcript) addSwitch(selection session.Entry) {
+	t.push(entry{
+		kind:          entrySwitch,
+		selectionKind: selection.Kind,
+		fragments:     []string{selectionText(selection)},
+	})
+}
+
+// selectionLabel names what a selection of the given kind changes, as in
+// "Agent switch". The tree and the conversation both label a switch with it, so
+// it is written once and the two views can never disagree.
+func selectionLabel(kind session.Kind) string {
+	if kind == session.KindModel {
+		return "Model switch"
+	}
+	return "Agent switch"
+}
+
+// selectionText returns the transition a selection wrote, as in
+// "coder → reviewer". The selection records the value it replaced when it is
+// written, so the transition reads off the entry alone. A selection that does
+// not carry it, which is the case of the ones written before the value was
+// recorded, reads as the value it selects.
+func selectionText(selection session.Entry) string {
+	previous, next := selection.PreviousAgentID, selection.AgentID
+	if selection.Kind == session.KindModel {
+		previous, next = selection.PreviousModelRef, selection.ModelRef
+	}
+	if previous == "" {
+		return next
+	}
+	return previous + " → " + next
 }
 
 // addTool appends a tool invocation to the transcript.

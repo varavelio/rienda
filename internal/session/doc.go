@@ -25,8 +25,8 @@
 //	{"kind":"tag","targetId":"01k5w9wr4t8d2m4xj6q7r5s9za","createdAt":"...","tag":"bug"}
 //	{"kind":"title","createdAt":"...","title":"Fix the parser"}
 //	{"kind":"compaction","id":"...","parentId":"...","createdAt":"...","summary":"...","keptId":"...","tokensBefore":184203,"responseModel":"...","responseUsage":{...}}
-//	{"kind":"agent","id":"...","parentId":"...","createdAt":"...","agentId":"reviewer"}
-//	{"kind":"model","id":"...","parentId":"...","createdAt":"...","modelRef":"anthropic/claude-sonnet"}
+//	{"kind":"agent","id":"...","parentId":"...","createdAt":"...","agentId":"reviewer","previousAgentId":"coder"}
+//	{"kind":"model","id":"...","parentId":"...","createdAt":"...","modelRef":"anthropic/claude-sonnet","previousModelRef":"openrouter/kimi-k2"}
 //
 // Files are append-only: branching in place never rewrites them, so every
 // branch stays recoverable. Five marker kinds carry the state of the session

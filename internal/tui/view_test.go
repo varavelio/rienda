@@ -550,7 +550,12 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "Session tree")
 		require.Contains(t, view, "You: fix the parser")
 		require.Contains(t, view, "Agent (coder): it is fixed")
-		require.Contains(t, view, "└─", "a turn hangs from the turn it follows")
+		require.Contains(
+			t,
+			view,
+			"› ● Agent (coder): it is fixed",
+			"a continuation reads right below the turn it follows, without opening a level",
+		)
 		require.Contains(t, view, "● You: fix the parser", "the branch the session runs is marked")
 		require.Contains(
 			t,
@@ -746,7 +751,7 @@ func TestView(t *testing.T) {
 		require.LessOrEqual(
 			t,
 			ansi.StringWidth(row),
-			treeMessageReserve+treeMessageMax,
+			treeRowReserve+treeMessageMax,
 			"the message stops growing at its cap",
 		)
 	})
@@ -1588,5 +1593,106 @@ func TestSettingsInput(t *testing.T) {
 		require.Contains(t, view, "error: boom")
 		require.Contains(t, view, "esc cancel")
 		require.NotContains(t, view, "enter save", "the failure takes the place of the hints")
+	})
+}
+
+// TestTreeLayout verifies how the tree places its turns: a linear conversation
+// reads down a single column, and only a branch opens a level to the right.
+func TestTreeLayout(t *testing.T) {
+	t.Run("keeps a linear conversation in one column", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+			textMessage(llm.RoleUser, "third"),
+			textMessage(llm.RoleAssistant, "three"),
+		)
+
+		view := plain(m.render())
+
+		require.NotContains(t, view, "├─", "a linear conversation opens no level")
+		require.NotContains(t, view, "└─", "a linear conversation opens no level")
+		require.Contains(
+			t,
+			view,
+			"› ● Agent (coder): three",
+			"the turn the session is at reads at the left edge, however long the conversation grew",
+		)
+	})
+
+	t.Run("indents a branch under the turn it follows", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+			textMessage(llm.RoleUser, "second"),
+			textMessage(llm.RoleAssistant, "two"),
+		)
+		// The session returns to the first answer and writes again from it,
+		// which opens a branch beside the turn that followed it.
+		update(t, m, pressUp)
+		update(t, m, pressUp)
+		update(t, m, pressEnter)
+		m.input.SetValue("again")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+		update(t, m, pressCtrlT)
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "├─ You: second", "the turn the session left keeps its branch")
+		require.Contains(
+			t,
+			view,
+			"│  Agent (coder): two",
+			"a continuation keeps the column of its branch",
+		)
+		require.Contains(t, view, "└─ You: again", "the branch the session opened closes the group")
+	})
+}
+
+// TestChatSwitch verifies that a selection of what the branch runs is shown in
+// the conversation as a line of metadata between two turns.
+func TestChatSwitch(t *testing.T) {
+	t.Run("renders a switch as a line of the conversation", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		update(t, m, windowMsg(80, 40))
+		require.NoError(t, stored.store.SetAgent(t.Context(), "reviewer"))
+		require.NoError(t, stored.store.SetModel(t.Context(), "fake/other-model"))
+		m.reloadTranscript()
+
+		rendered := m.render()
+		require.Contains(t, plain(rendered), "│ Agent switch: coder → reviewer")
+		require.Contains(t, plain(rendered), "│ Model switch: fake/test-model → fake/other-model")
+		require.Contains(
+			t,
+			rendered,
+			m.styles.selection.Render("Agent switch: "),
+			"a switch reads as metadata, exactly as it does in the tree",
+		)
+	})
+
+	t.Run("keeps a long switch inside the row", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		update(t, m, windowMsg(24, 40))
+		require.NoError(t, stored.store.SetModel(t.Context(), "provider/very-long-model-reference"))
+		m.reloadTranscript()
+
+		rendered := m.render()
+		require.Contains(t, plain(rendered), "Model switch")
+		for line := range strings.SplitSeq(rendered, "\n") {
+			require.LessOrEqual(
+				t,
+				ansi.StringWidth(line),
+				24,
+				"the row never outgrows the terminal",
+			)
+		}
 	})
 }

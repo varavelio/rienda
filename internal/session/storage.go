@@ -90,46 +90,53 @@ type storedCompaction struct {
 // storedAgent is an agent selection line of a session file. The selection
 // hangs from the active leaf and carries no content, so the next message
 // continues from it under another agent. It reuses no response field, because
-// it makes no model call.
+// it makes no model call. The previous agent is stored, so the transition the
+// selection wrote reads off the line alone; it is omitted when the selection
+// does not carry it, which keeps the files written before the field valid.
 type storedAgent struct {
-	Kind      Kind      `json:"kind"`
-	ID        string    `json:"id"`
-	ParentID  string    `json:"parentId,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	AgentID   string    `json:"agentId"`
+	Kind            Kind      `json:"kind"`
+	ID              string    `json:"id"`
+	ParentID        string    `json:"parentId,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	AgentID         string    `json:"agentId"`
+	PreviousAgentID string    `json:"previousAgentId,omitempty"`
 }
 
 // entry converts a stored agent selection into its in-memory form.
 func (s storedAgent) entry() Entry {
 	return Entry{
-		ID:        s.ID,
-		ParentID:  s.ParentID,
-		CreatedAt: s.CreatedAt,
-		Kind:      KindAgent,
-		AgentID:   s.AgentID,
+		ID:              s.ID,
+		ParentID:        s.ParentID,
+		CreatedAt:       s.CreatedAt,
+		Kind:            KindAgent,
+		AgentID:         s.AgentID,
+		PreviousAgentID: s.PreviousAgentID,
 	}
 }
 
 // storedModel is a model selection line of a session file. The selection hangs
 // from the active leaf and carries no content, so the next message continues
 // from it under another model. It stores the reference the user named, never
-// the credentials the configuration resolves for it.
+// the credentials the configuration resolves for it, and the reference the
+// selection replaced, so the transition reads off the line alone.
 type storedModel struct {
-	Kind      Kind      `json:"kind"`
-	ID        string    `json:"id"`
-	ParentID  string    `json:"parentId,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	ModelRef  string    `json:"modelRef"`
+	Kind             Kind      `json:"kind"`
+	ID               string    `json:"id"`
+	ParentID         string    `json:"parentId,omitempty"`
+	CreatedAt        time.Time `json:"createdAt"`
+	ModelRef         string    `json:"modelRef"`
+	PreviousModelRef string    `json:"previousModelRef,omitempty"`
 }
 
 // entry converts a stored model selection into its in-memory form.
 func (s storedModel) entry() Entry {
 	return Entry{
-		ID:        s.ID,
-		ParentID:  s.ParentID,
-		CreatedAt: s.CreatedAt,
-		Kind:      KindModel,
-		ModelRef:  s.ModelRef,
+		ID:               s.ID,
+		ParentID:         s.ParentID,
+		CreatedAt:        s.CreatedAt,
+		Kind:             KindModel,
+		ModelRef:         s.ModelRef,
+		PreviousModelRef: s.PreviousModelRef,
 	}
 }
 

@@ -692,6 +692,8 @@ func TestSetModel(t *testing.T) {
 		require.Equal(t, KindModel, selection.Kind)
 		require.Equal(t, second.ID, selection.ParentID)
 		require.Equal(t, "fake/other-model", selection.ModelRef)
+		require.Equal(t, "test/model", selection.PreviousModelRef,
+			"the selection records the model it replaced")
 		require.Equal(t, selection.ID, store.Leaf())
 
 		// The selection is not a message, so it never reaches the provider.
@@ -784,6 +786,8 @@ func TestSetAgent(t *testing.T) {
 		require.Equal(t, KindAgent, selection.Kind)
 		require.Equal(t, second.ID, selection.ParentID)
 		require.Equal(t, "reviewer", selection.AgentID)
+		require.Equal(t, "coder", selection.PreviousAgentID,
+			"the selection records the agent it replaced")
 		require.Equal(t, selection.ID, store.Leaf())
 
 		// The selection is not a message, so it never reaches the provider.

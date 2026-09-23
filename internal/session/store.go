@@ -608,27 +608,30 @@ func (s *Store) SetLeaf(id string) error {
 // session that stays on its agent from writing markers it does not need. The
 // entry stores the identifier as it was given: whether an agent with that
 // identifier exists is for the caller to know, and an agent that is missing
-// simply leaves the branch with nothing to run.
+// simply leaves the branch with nothing to run. The agent it replaced is
+// recorded beside it, so the transition is read off the entry alone.
 func (s *Store) SetAgent(ctx context.Context, id string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return errors.New("session: the agent id must not be empty")
 	}
-	if s.ActiveAgent() == id {
+	previous := s.ActiveAgent()
+	if previous == id {
 		return nil
 	}
 
 	_, err := appendSelection(
 		s,
 		ctx,
-		Entry{Kind: KindAgent, AgentID: id},
+		Entry{Kind: KindAgent, AgentID: id, PreviousAgentID: previous},
 		func(entry Entry) storedAgent {
 			return storedAgent{
-				Kind:      KindAgent,
-				ID:        entry.ID,
-				ParentID:  entry.ParentID,
-				CreatedAt: entry.CreatedAt,
-				AgentID:   entry.AgentID,
+				Kind:            KindAgent,
+				ID:              entry.ID,
+				ParentID:        entry.ParentID,
+				CreatedAt:       entry.CreatedAt,
+				AgentID:         entry.AgentID,
+				PreviousAgentID: entry.PreviousAgentID,
 			}
 		},
 	)
@@ -642,27 +645,31 @@ func (s *Store) SetAgent(ctx context.Context, id string) error {
 //
 // The entry stores the provider/model reference as it was given. The
 // configuration that resolves it, and the credentials that resolution carries,
-// are read on every turn and never written to the session.
+// are read on every turn and never written to the session. The model it
+// replaced is recorded beside it, so the transition is read off the entry
+// alone.
 func (s *Store) SetModel(ctx context.Context, ref string) error {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return errors.New("session: the model reference must not be empty")
 	}
-	if s.ActiveModel() == ref {
+	previous := s.ActiveModel()
+	if previous == ref {
 		return nil
 	}
 
 	_, err := appendSelection(
 		s,
 		ctx,
-		Entry{Kind: KindModel, ModelRef: ref},
+		Entry{Kind: KindModel, ModelRef: ref, PreviousModelRef: previous},
 		func(entry Entry) storedModel {
 			return storedModel{
-				Kind:      KindModel,
-				ID:        entry.ID,
-				ParentID:  entry.ParentID,
-				CreatedAt: entry.CreatedAt,
-				ModelRef:  entry.ModelRef,
+				Kind:             KindModel,
+				ID:               entry.ID,
+				ParentID:         entry.ParentID,
+				CreatedAt:        entry.CreatedAt,
+				ModelRef:         entry.ModelRef,
+				PreviousModelRef: entry.PreviousModelRef,
 			}
 		},
 	)
