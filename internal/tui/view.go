@@ -604,13 +604,13 @@ func treeName(node treeNode) string {
 }
 
 // treeNameStyle returns the style of the author of a turn, the color the
-// conversation gives the same author. A selection of what the branch runs reads
-// as metadata, so it takes the faint style the conversation gives the same
-// switch instead of a color of its own.
+// conversation gives the same author. A checkpoint and a selection of what the
+// branch runs are secondary metadata rather than voices of the conversation, so
+// both take a faint style of their own.
 func (m *model) treeNameStyle(entry session.Entry) lipgloss.Style {
 	switch {
 	case entry.Kind == session.KindCompaction:
-		return m.styles.compaction.title
+		return m.styles.compactionNode
 	case entry.Kind == session.KindAgent || entry.Kind == session.KindModel:
 		return m.styles.selection
 	case entry.Message.Role == llm.RoleUser:

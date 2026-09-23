@@ -502,7 +502,8 @@ func TestTreeForks(t *testing.T) {
 	})
 }
 
-// TestTreeCompaction verifies the checkpoint node of the session tree.
+// TestTreeCompaction verifies the checkpoint node of the session tree, drawn
+// as the faint metadata a switch is, rather than in a color of its own.
 func TestTreeCompaction(t *testing.T) {
 	t.Run("draws the checkpoint as a labeled node", func(t *testing.T) {
 		entry := session.Entry{
@@ -541,8 +542,14 @@ func TestTreeCompaction(t *testing.T) {
 		require.Contains(
 			t,
 			rendered,
-			m.styles.compaction.title.Render("Compaction:"),
-			"the node carries the color of a checkpoint",
+			m.styles.compactionNode.Render("Compaction:"),
+			"the node stays faint, like the metadata it is",
+		)
+		require.Equal(
+			t,
+			m.styles.selection,
+			m.styles.compactionNode,
+			"a checkpoint and a switch share the same faint style",
 		)
 	})
 
@@ -571,8 +578,8 @@ func TestTreeCompaction(t *testing.T) {
 		require.Contains(
 			t,
 			rendered,
-			m.styles.compaction.title.Render("Compaction:"),
-			"the checkpoint keeps its white",
+			m.styles.compactionNode.Render("Compaction:"),
+			"the checkpoint keeps its faint style",
 		)
 		require.Contains(
 			t,
