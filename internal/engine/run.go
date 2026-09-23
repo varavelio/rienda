@@ -84,8 +84,9 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	}
 	emit(events, start)
 
-	// The session identifier travels with the request so providers can group
-	// the calls of one conversation.
+	// The session identifier travels with every request of the conversation so
+	// providers can group them, the summarization requests included, which
+	// attach it themselves from the same store.
 	requestCtx := llm.WithSessionID(ctx, e.store.ID())
 
 	// At most one automatic compaction happens per run: without the guard a
@@ -104,7 +105,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 		}
 		if !compacted && e.shouldCompact(plan) {
 			compacted = true
-			if err := e.compactBranch(requestCtx, events); err != nil {
+			if err := e.compactBranch(ctx, events); err != nil {
 				if ctx.Err() != nil {
 					emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})
 					return

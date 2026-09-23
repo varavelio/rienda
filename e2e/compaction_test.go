@@ -86,6 +86,12 @@ func TestCompactionDrivesTheWholeFeature(t *testing.T) {
 	require.False(t, summaryRequest.Stream, "the summary is not streamed")
 	require.Contains(t, summaryRequest.Messages[0].Text(), "### Objective")
 	require.Contains(t, summaryRequest.Messages[1].Text(), "[User]: first prompt")
+	require.Equal(
+		t,
+		sessionID,
+		requests[1].Header.Get("x-session-id"),
+		"the summarization carries the session header of the conversation",
+	)
 
 	continuedRequest := requests[2].Chat(t)
 	replayed := joinedMessages(continuedRequest)
@@ -101,10 +107,13 @@ func TestCompactionDrivesTheWholeFeature(t *testing.T) {
 }
 
 // compactionConfig returns the configuration of the scenario: the default
-// provider with a compaction reserve and tail small enough that the second
-// prompt of the conversation crosses the threshold.
+// provider, declaring the session header so the scenario proves the
+// summarization identifies itself like every other call of the conversation,
+// with a compaction reserve and tail small enough that the second prompt of the
+// conversation crosses the threshold.
 func compactionConfig() *harness.Config {
 	cfg := harness.DefaultConfig()
+	cfg.Providers[0].SessionHeader = new("x-session-id")
 	cfg.Compaction = &harness.Compaction{ReserveTokens: 50, KeepRecentTokens: 1}
 	return &cfg
 }

@@ -22,6 +22,7 @@ type scriptedCompactor struct {
 	err        error
 	compacted  int
 	settings   compaction.Settings
+	sessionIDs []string
 }
 
 // Refusal reports why the branch holds nothing to compact, following the same
@@ -33,13 +34,17 @@ func (c *scriptedCompactor) Refusal(branch []session.Entry) (compaction.Refusal,
 	return compaction.Refusal{Kind: compaction.RefusalShort, Needed: 1000}, true
 }
 
-// Compact returns the scripted result.
+// Compact returns the scripted result, recording the harness session ID the
+// engine attached to the context, which is what the provider client forwards to
+// the services that route a call by session.
 func (c *scriptedCompactor) Compact(
-	_ context.Context,
+	ctx context.Context,
 	branch []session.Entry,
 	_ string,
 ) (compaction.Result, bool, error) {
 	c.compacted++
+	sessionID, _ := llm.SessionIDFromContext(ctx)
+	c.sessionIDs = append(c.sessionIDs, sessionID)
 	if c.err != nil {
 		return compaction.Result{}, false, c.err
 	}
@@ -117,6 +122,12 @@ func TestAutomaticCompaction(t *testing.T) {
 		events := collect(engine.Run(t.Context(), "next"))
 
 		require.Equal(t, 1, compactor.compacted)
+		require.Equal(
+			t,
+			[]string{store.ID()},
+			compactor.sessionIDs,
+			"the summarization carries the session ID of the conversation",
+		)
 		require.Equal(
 			t,
 			[]EventType{
@@ -273,6 +284,12 @@ func TestManualCompaction(t *testing.T) {
 			eventTypes(events),
 		)
 		require.Equal(t, EndReasonTurn, events[len(events)-1].Reason)
+		require.Equal(
+			t,
+			[]string{store.ID()},
+			compactor.sessionIDs,
+			"the summarization carries the session ID of the conversation",
+		)
 	})
 
 	t.Run("works while the automatic compaction is disabled", func(t *testing.T) {
