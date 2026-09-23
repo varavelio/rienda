@@ -1442,24 +1442,14 @@ func TestCompactionRendering(t *testing.T) {
 		require.Contains(
 			t,
 			rendered,
-			m.styles.compaction.title.Render("Compaction"),
-			"the label carries the color of a checkpoint",
+			m.styles.metadata.title.Render("Compaction"),
+			"the label carries the faint style of the metadata",
 		)
 		require.Contains(
 			t,
 			rendered,
-			m.styles.compaction.mark(m.styles.compaction.title.Render("Compaction")),
+			m.styles.metadata.mark(m.styles.metadata.title.Render("Compaction")),
 			"the checkpoint opens with the thick marker of the rows of metadata",
-		)
-		require.False(
-			t,
-			m.styles.compaction.title.GetBold(),
-			"the checkpoint is not bold, so it matches the faint switch beside it",
-		)
-		require.False(
-			t,
-			m.styles.compaction.markerStyle.GetBold(),
-			"the marker of a checkpoint is not bold either",
 		)
 	})
 
@@ -1489,8 +1479,8 @@ func TestCompactionRendering(t *testing.T) {
 		require.Contains(
 			t,
 			rendered,
-			m.styles.compaction.title.Render("Compaction"),
-			"the checkpoint keeps its white",
+			m.styles.metadata.title.Render("Compaction"),
+			"the checkpoint keeps its faint style",
 		)
 		require.Contains(
 			t,
@@ -1712,15 +1702,20 @@ func TestChatSwitch(t *testing.T) {
 		require.Contains(
 			t,
 			rendered,
-			m.styles.selection.Render("Agent switch"),
+			m.styles.metadata.title.Render("Agent switch"),
 			"a switch reads as metadata, exactly as it does in the tree",
 		)
 		require.Contains(
 			t,
 			rendered,
-			m.styles.selection.Render(markerTurn),
+			m.styles.metadata.title.Render(markerTurn),
 			"a switch opens with the thick marker of the rows of metadata",
 		)
+
+		// The switch and the checkpoint are drawn with the same style, so the
+		// conversation never makes one look like a voice and the other like a
+		// note.
+		require.Equal(t, m.styles.metadata.title, m.styles.metadata.markerStyle)
 	})
 
 	t.Run("keeps a long switch inside the row", func(t *testing.T) {

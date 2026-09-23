@@ -22,9 +22,9 @@ const (
 // rules adapt to the terminal background.
 //
 // Every element keeps a color of its own: the blue of a highlighted row, the
-// magenta of the user, the green of the agent, the yellow of the tags and the
-// notices and the white of a compaction checkpoint. A color shared by two
-// elements would make one read as the other, which is what the palette avoids.
+// magenta of the user, the green of the agent and the yellow of the tags and
+// the notices. A color shared by two elements would make one read as the
+// other, which is what the palette avoids.
 type styles struct {
 	header    lipgloss.Style
 	title     lipgloss.Style
@@ -35,16 +35,6 @@ type styles struct {
 	notice    lipgloss.Style
 	footer    lipgloss.Style
 	activity  lipgloss.Style
-	// selection styles the label of a selection of what the branch runs, the
-	// agent or the model that changed in the middle of the conversation. It
-	// stays faint so a switch reads as metadata rather than as a voice of the
-	// conversation, and it takes no color of its own for the same reason.
-	selection lipgloss.Style
-	// compactionNode styles the label of a checkpoint in the tree. It stays
-	// faint like a selection, so a checkpoint reads as the metadata the tree
-	// draws beside the turns of the conversation, while the row the
-	// conversation renders keeps the white of its section.
-	compactionNode lipgloss.Style
 	// on and off style the state of an option of the harness.
 	on  lipgloss.Style
 	off lipgloss.Style
@@ -57,12 +47,12 @@ type styles struct {
 	inputBox    lipgloss.Style
 	inputPrompt lipgloss.Style
 
-	user       section
-	assistant  section
-	thinking   section
-	tool       section
-	failure    section
-	compaction section
+	user      section
+	assistant section
+	thinking  section
+	tool      section
+	failure   section
+	metadata  section
 }
 
 // section groups the styles of one kind of conversation block.
@@ -144,17 +134,15 @@ func newStyles(isDark bool) styles {
 			Foreground(lightDark(lipgloss.Color("252"), lipgloss.Color("236"))),
 		divider: lipgloss.NewStyle().
 			Foreground(lightDark(lipgloss.Color("246"), lipgloss.Color("242"))),
-		notice:         lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
-		footer:         lipgloss.NewStyle().Faint(true),
-		activity:       lipgloss.NewStyle(),
-		selection:      lipgloss.NewStyle().Faint(true),
-		compactionNode: lipgloss.NewStyle().Faint(true),
-		on:             lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
-		off:            lipgloss.NewStyle().Faint(true),
-		tag:            lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
-		branch:         lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
-		errorText:      lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
-		inputPrompt:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
+		notice:      lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
+		footer:      lipgloss.NewStyle().Faint(true),
+		activity:    lipgloss.NewStyle(),
+		on:          lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
+		off:         lipgloss.NewStyle().Faint(true),
+		tag:         lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
+		branch:      lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
+		errorText:   lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
+		inputPrompt: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
 		inputBox: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lightDark(lipgloss.Color("252"), lipgloss.Color("236"))).
@@ -190,16 +178,16 @@ func newStyles(isDark bool) styles {
 			title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")),
 			body:        lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
 		},
-		// White is the only free color of the palette: 9 is failures, 10 the
-		// agent and the branch marks, 11 the tags and the notices, 12 the
-		// highlight, 13 the user and 14 the tools. It reads as metadata rather
-		// than as a voice in the conversation, which is what a checkpoint is,
-		// so it is left unbolded like the faint switch it is drawn beside.
-		compaction: section{
+		// A checkpoint and a switch share the faint metadata section, so both
+		// read as secondary notes between the turns and neither takes a color
+		// that could make one pass for a voice of the conversation. The label
+		// stays faint while the body it introduces keeps the plain style, so
+		// the text the row carries stays as readable as the rest.
+		metadata: section{
 			marker:      markerTurn,
-			markerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
-			title:       lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
-			body:        lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
+			markerStyle: lipgloss.NewStyle().Faint(true),
+			title:       lipgloss.NewStyle().Faint(true),
+			body:        lipgloss.NewStyle(),
 		},
 	}
 }

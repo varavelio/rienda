@@ -606,13 +606,13 @@ func treeName(node treeNode) string {
 // treeNameStyle returns the style of the author of a turn, the color the
 // conversation gives the same author. A checkpoint and a selection of what the
 // branch runs are secondary metadata rather than voices of the conversation, so
-// both take a faint style of their own.
+// both take the faint style the conversation also gives them.
 func (m *model) treeNameStyle(entry session.Entry) lipgloss.Style {
 	switch {
-	case entry.Kind == session.KindCompaction:
-		return m.styles.compactionNode
-	case entry.Kind == session.KindAgent || entry.Kind == session.KindModel:
-		return m.styles.selection
+	case entry.Kind == session.KindCompaction,
+		entry.Kind == session.KindAgent,
+		entry.Kind == session.KindModel:
+		return m.styles.metadata.title
 	case entry.Message.Role == llm.RoleUser:
 		return m.styles.user.title
 	default:
@@ -922,11 +922,11 @@ func metadataRow(prefix, body string, width int) string {
 // renderCompaction renders a checkpoint as a row of metadata between two turns,
 // exactly as a switch is drawn, so the conversation shows where it was
 // summarized without devoting a block of its own to it: the thick marker that
-// opens a turn, the label of the checkpoint and the note that closes it, all on
-// a single line.
+// opens a turn, the faint label of the checkpoint and the note that closes it,
+// all on a single line.
 func (m *model) renderCompaction(current *entry, width int) string {
-	prefix := m.styles.compaction.mark(m.styles.compaction.title.Render("Compaction"))
-	return metadataRow(prefix, m.styles.compaction.body.Render(current.text()), width)
+	prefix := m.styles.metadata.mark(m.styles.metadata.title.Render("Compaction"))
+	return metadataRow(prefix, m.styles.metadata.body.Render(current.text()), width)
 }
 
 // renderSwitch renders a selection of what the branch runs as a row of metadata
@@ -934,9 +934,12 @@ func (m *model) renderCompaction(current *entry, width int) string {
 // by reading the conversation instead of the tree: the thick marker that opens a
 // turn, the faint label that names the switch and the transition the selection
 // wrote, all on a single line.
+//
+// The transition keeps the plain style the rest of the row does not, so the
+// values the switch replaced and selected stay readable beside the faint label.
 func (m *model) renderSwitch(current *entry, width int) string {
-	prefix := m.styles.selection.Render(markerTurn) + " " +
-		m.styles.selection.Render(selectionLabel(current.selectionKind))
+	prefix := m.styles.metadata.title.Render(markerTurn) + " " +
+		m.styles.metadata.title.Render(selectionLabel(current.selectionKind))
 	return metadataRow(prefix, current.text(), width)
 }
 

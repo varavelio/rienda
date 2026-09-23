@@ -542,14 +542,8 @@ func TestTreeCompaction(t *testing.T) {
 		require.Contains(
 			t,
 			rendered,
-			m.styles.compactionNode.Render("Compaction:"),
+			m.styles.metadata.title.Render("Compaction:"),
 			"the node stays faint, like the metadata it is",
-		)
-		require.Equal(
-			t,
-			m.styles.selection,
-			m.styles.compactionNode,
-			"a checkpoint and a switch share the same faint style",
 		)
 	})
 
@@ -578,7 +572,7 @@ func TestTreeCompaction(t *testing.T) {
 		require.Contains(
 			t,
 			rendered,
-			m.styles.compactionNode.Render("Compaction:"),
+			m.styles.metadata.title.Render("Compaction:"),
 			"the checkpoint keeps its faint style",
 		)
 		require.Contains(
@@ -718,8 +712,14 @@ func TestTreeSwitch(t *testing.T) {
 		require.Contains(
 			t,
 			rendered,
-			m.styles.selection.Render("Agent switch:"),
+			m.styles.metadata.title.Render("Agent switch:"),
 			"a switch reads as metadata instead of as a voice of the conversation",
+		)
+		require.Equal(
+			t,
+			m.styles.metadata.title,
+			m.treeNameStyle(session.Entry{Kind: session.KindCompaction}),
+			"a checkpoint and a switch share the same faint style in the tree",
 		)
 	})
 }
