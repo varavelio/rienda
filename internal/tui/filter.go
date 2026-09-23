@@ -37,6 +37,16 @@ type filter struct {
 
 	// cursor is the position in shown the highlight holds.
 	cursor int
+
+	// windowRows is the number of rows the list shows at once, which the window
+	// uses to keep the margin of rows below the highlight that its screen asks
+	// for. It is zero until the screen sets it, which keeps no margin.
+	windowRows int
+
+	// windowMargin is the number of rows the window keeps visible below the
+	// highlight, so the reader sees which entries come next. It is zero until
+	// the screen sets it, which keeps the highlight at the bottom edge.
+	windowMargin int
 }
 
 // newFilter builds a list of count items whose text the caller reads with the
@@ -117,10 +127,27 @@ func (l *filter) empty() bool {
 	return len(l.shown) == 0
 }
 
-// window returns the positions of the matches that fit in rows while keeping
-// the highlight visible.
-func (l *filter) window(rows int) (first, last int) {
-	return visibleWindow(l.cursor, len(l.shown), rows)
+// window returns the positions of the matches that fit in the rows of the list
+// while keeping the highlight visible and leaving the margin of rows below it
+// that the screen asked for, so the reader always sees which entry comes next.
+func (l *filter) window() (first, last int) {
+	return visibleWindow(l.cursor, len(l.shown), max(1, l.windowRows), l.windowMargin)
+}
+
+// setWindowRows sets the rows the list shows at once, which the window uses to
+// place the margin of rows below the highlight that setWindowMargin asks for.
+// It is called whenever the list is laid out, so a terminal that was resized
+// keeps a margin that still fits.
+func (l *filter) setWindowRows(rows int) {
+	l.windowRows = max(1, rows)
+}
+
+// setWindowMargin sets the rows the window keeps visible below the highlight,
+// so the reader sees the entries that come next instead of running the
+// highlight into the bottom edge. It gives the margin up on its own when the
+// list has fewer rows left to show, so the window always fills with entries.
+func (l *filter) setWindowMargin(margin int) {
+	l.windowMargin = max(0, margin)
 }
 
 // clear empties the query and shows every item again. It reports whether there

@@ -155,7 +155,7 @@ func (m *model) viewStart() string {
 	rows = append(rows, "Start a new session or continue a previous one", "")
 	rows = append(rows, m.filterRow(&m.start), "")
 
-	first, last := m.start.window(m.listRows())
+	first, last := m.start.window()
 	for position := first; position < last; position++ {
 		rows = append(rows, m.startLine(position))
 	}
@@ -235,12 +235,17 @@ func (m *model) listRows() int {
 }
 
 // visibleWindow returns the range of a list of total items that fits in rows
-// while keeping the cursor visible.
-func visibleWindow(cursor, total, rows int) (first, last int) {
+// while keeping the cursor visible, with margin rows always kept below it so the
+// reader sees which entries come next instead of running the highlight into the
+// bottom edge. The margin is given up only when the list has fewer rows left to
+// show than it asks for, so the window still fills with entries and the cursor
+// never leaves the screen.
+func visibleWindow(cursor, total, rows, margin int) (first, last int) {
 	if total <= rows {
 		return 0, total
 	}
-	first = min(max(cursor-rows+1, 0), total-rows)
+	margin = min(max(margin, 0), rows-1)
+	first = min(max(cursor-rows+1+margin, 0), total-rows)
 	return first, first + rows
 }
 
@@ -281,7 +286,7 @@ func (m *model) viewPicker() string {
 	rows = append(rows, m.pickerTitle(), "")
 	rows = append(rows, m.filterRow(&m.picker), "")
 
-	first, last := m.picker.window(m.listRows())
+	first, last := m.picker.window()
 	for position := first; position < last; position++ {
 		rows = append(rows, m.pickerLine(position))
 	}
@@ -343,7 +348,7 @@ func (m *model) viewSettings() string {
 	rows = append(rows, "Command center", "")
 	rows = append(rows, m.settingsInputRow(), "")
 
-	first, last := m.commands.window(m.listRows())
+	first, last := m.commands.window()
 	for position := first; position < last; position++ {
 		rows = append(rows, m.commandLine(position))
 	}
@@ -423,7 +428,7 @@ func (m *model) viewTree() string {
 	rows = append(rows, "Session tree", "")
 	rows = append(rows, m.treeInputRow(), "")
 
-	first, last := m.tree.filter.window(m.listRows())
+	first, last := m.tree.filter.window()
 	for position := first; position < last; position++ {
 		rows = append(rows, m.treeLine(position))
 	}
@@ -730,7 +735,8 @@ func (m *model) activityLabel() string {
 // prompt holds, inside the rows the terminal gives it. The highlighted
 // suggestion is the one the user accepts with enter.
 func (m *model) mentionList(rows int) string {
-	first, last := visibleWindow(m.mention.cursor, len(m.mention.items), rows)
+	// The completion popup needs no margin: every suggestion is one key away.
+	first, last := visibleWindow(m.mention.cursor, len(m.mention.items), rows, 0)
 
 	lines := make([]string, 0, rows)
 	for index := first; index < last; index++ {

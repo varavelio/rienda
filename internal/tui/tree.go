@@ -33,6 +33,13 @@ const treeGap = "   "
 // message never floods the tree however wide the terminal is.
 const treeMessageMax = 96
 
+// treeWindowMargin is the number of rows the tree keeps visible below the
+// highlighted turn, so the reader sees which turns come next before reaching
+// the bottom of a long tree instead of running the highlight into its edge. It
+// is given up near the end of the tree, where there are no turns left to
+// reveal, so the tree still fills the screen with turns.
+const treeWindowMargin = 5
+
 // treeGutter opens every row of the tree with the mark that places its turn in
 // the conversation, in a column of its own: the dot of the branch the session
 // runs and the dot of the turn the session is at. The turns of the branches the

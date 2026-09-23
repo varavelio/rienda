@@ -123,14 +123,26 @@ func TestFilter(t *testing.T) {
 
 	t.Run("windows the matches around the highlight", func(t *testing.T) {
 		f := filterOf(items)
+		f.setWindowRows(2)
 
-		first, last := f.window(2)
+		first, last := f.window()
 		require.Equal(t, 0, first)
 		require.Equal(t, 2, last)
 
 		f.cursor = 3
-		first, last = f.window(2)
+		first, last = f.window()
 		require.Equal(t, 2, first, "the window follows the highlight to the end")
 		require.Equal(t, 4, last)
+	})
+
+	t.Run("keeps the margin below the highlight", func(t *testing.T) {
+		f := filterOf(items)
+		f.setWindowRows(2)
+		f.setWindowMargin(1)
+
+		f.cursor = 1
+		first, last := f.window()
+		require.Equal(t, 1, first, "the row after the highlight stays visible")
+		require.Equal(t, 3, last)
 	})
 }

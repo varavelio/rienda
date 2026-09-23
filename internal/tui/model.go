@@ -2084,6 +2084,18 @@ func (m *model) resize(width, height int) {
 	m.commands.setWidth(width)
 	m.rename.SetWidth(max(1, width-renamePromptWidth))
 	m.tree.setWidth(width)
+
+	// The lists window their entries to the rows the terminal leaves them, so
+	// the tree can keep the margin of turns the reader needs to see what comes
+	// next. The lists of the other phases show the same rows without a margin,
+	// so their highlight rests on the bottom edge as before.
+	rows := m.listRows()
+	m.start.setWindowRows(rows)
+	m.picker.setWindowRows(rows)
+	m.commands.setWindowRows(rows)
+	m.tree.filter.setWindowRows(rows)
+	m.tree.filter.setWindowMargin(treeWindowMargin)
+
 	m.syncInputHeight()
 	m.invalidateTranscript()
 	m.refreshTranscript()

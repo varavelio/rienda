@@ -1137,24 +1137,45 @@ func TestChatLayout(t *testing.T) {
 // TestVisibleWindow verifies the windowing of long lists.
 func TestVisibleWindow(t *testing.T) {
 	t.Run("returns the whole list when it fits", func(t *testing.T) {
-		first, last := visibleWindow(0, 3, 5)
+		first, last := visibleWindow(0, 3, 5, 0)
 
 		require.Equal(t, 0, first)
 		require.Equal(t, 3, last)
 	})
 
-	t.Run("keeps the cursor at the bottom edge", func(t *testing.T) {
-		first, last := visibleWindow(9, 20, 5)
+	t.Run("keeps the cursor at the bottom edge without a margin", func(t *testing.T) {
+		first, last := visibleWindow(9, 20, 5, 0)
 
 		require.Equal(t, 5, first)
 		require.Equal(t, 10, last)
 	})
 
-	t.Run("never scrolls past the end", func(t *testing.T) {
-		first, last := visibleWindow(19, 20, 5)
+	t.Run("never scrolls past the end without a margin", func(t *testing.T) {
+		first, last := visibleWindow(19, 20, 5, 0)
 
 		require.Equal(t, 15, first)
 		require.Equal(t, 20, last)
+	})
+
+	t.Run("keeps the margin of rows below the cursor", func(t *testing.T) {
+		first, last := visibleWindow(9, 20, 5, 3)
+
+		require.Equal(t, 8, first)
+		require.Equal(t, 13, last, "the three rows after the cursor stay visible")
+	})
+
+	t.Run("gives the margin up at the end of the list", func(t *testing.T) {
+		first, last := visibleWindow(19, 20, 5, 3)
+
+		require.Equal(t, 15, first)
+		require.Equal(t, 20, last, "the window still fills with the last rows")
+	})
+
+	t.Run("never leaves the cursor off the screen", func(t *testing.T) {
+		first, last := visibleWindow(19, 20, 5, 10)
+
+		require.LessOrEqual(t, first, 19)
+		require.Greater(t, last, 19, "a margin wider than the window still shows the cursor")
 	})
 }
 
@@ -1694,5 +1715,66 @@ func TestChatSwitch(t *testing.T) {
 				"the row never outgrows the terminal",
 			)
 		}
+	})
+}
+
+// TestTreeScrollMargin verifies that a long tree keeps a few turns visible
+// below the highlight, so the reader sees which turns come next instead of
+// running the highlight into the bottom of the screen, and that the margin is
+// given up near the end of the tree.
+func TestTreeScrollMargin(t *testing.T) {
+	// longTree returns a tree of a conversation long enough to fill the screen
+	// several times over, and the rows the tree shows at once.
+	longTree := func(t *testing.T) (*model, int) {
+		t.Helper()
+
+		messages := make([]llm.Message, 0, 40)
+		for index := range 20 {
+			messages = append(
+				messages,
+				textMessage(llm.RoleUser, fmt.Sprintf("prompt %02d", index)),
+				textMessage(llm.RoleAssistant, fmt.Sprintf("answer %02d", index)),
+			)
+		}
+		m, _ := treeModel(t, messages...)
+		update(t, m, windowMsg(80, 24))
+		return m, m.listRows()
+	}
+
+	t.Run("keeps the turns after the highlight visible", func(t *testing.T) {
+		m, rows := longTree(t)
+
+		// The highlight stands in the middle of the tree, where the margin
+		// holds on both sides.
+		m.tree.filter.cursor = len(m.tree.nodes) / 2
+		first, last := m.tree.filter.window()
+
+		require.Equal(t, first, m.tree.filter.cursor-rows+1+treeWindowMargin,
+			"the window follows the highlight once it passes the margin")
+		require.Equal(t, treeWindowMargin, last-1-m.tree.filter.cursor,
+			"the turns after the highlight stay visible")
+	})
+
+	t.Run("gives the margin up near the end of the tree", func(t *testing.T) {
+		m, rows := longTree(t)
+
+		m.tree.filter.cursor = len(m.tree.nodes) - 1
+		first, last := m.tree.filter.window()
+
+		require.Equal(t, len(m.tree.nodes)-rows, first)
+		require.Equal(t, len(m.tree.nodes), last, "the tree still fills the screen with turns")
+		require.Equal(t, 0, last-1-m.tree.filter.cursor, "no turn follows the last one to reveal")
+	})
+
+	t.Run("shows the newest turn when the tree opens", func(t *testing.T) {
+		m, _ := longTree(t)
+
+		// The tree opens on the turn the session is at, the newest one, which
+		// sits at the end of the tree where the margin no longer holds.
+		_, last := m.tree.filter.window()
+
+		require.Equal(t, len(m.tree.nodes), last)
+		require.True(t, m.tree.nodes[m.tree.filter.shown[last-1]].current,
+			"the turn the session is at rests on the last row of the tree")
 	})
 }
