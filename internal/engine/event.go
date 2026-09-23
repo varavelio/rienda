@@ -14,8 +14,10 @@ import (
 type EventType string
 
 const (
-	// EventRunStart opens a run with the session, agent and model identifiers
-	// and the entry of the user message that started it.
+	// EventRunStart opens a run with the session, agent and model identifiers,
+	// the entry of the user message that started it and the diagnostics of the
+	// workspace. It is the only event that reports a diagnostic, which is what
+	// makes a diagnostic a per-run report.
 	EventRunStart EventType = "run_start"
 	// EventTextDelta carries an incremental text fragment in Text.
 	EventTextDelta EventType = "text_delta"
@@ -153,6 +155,14 @@ type Event struct {
 	// EntryID identifies the persisted entry an event refers to: the user
 	// message in EventRunStart and the assistant message in EventMessageEnd.
 	EntryID string `json:"entryId,omitempty"`
+
+	// Diagnostics lists the non-fatal problems found while discovering the
+	// skills of the workspace, one entry per skill, identified by the relative
+	// path of its SKILL.md. It is only meaningful in EventRunStart, which
+	// already opens a run exactly once: the diagnostics are therefore reported
+	// once per run, never by a context measurement and never by a compaction,
+	// and nothing has to remember that they were reported.
+	Diagnostics []string `json:"diagnostics,omitempty"`
 
 	// Text carries incremental text in EventTextDelta, incremental reasoning
 	// in EventThinkingDelta and the result text in EventToolResult.

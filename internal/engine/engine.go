@@ -10,6 +10,7 @@ import (
 	"github.com/varavelio/rienda/internal/agent"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/skill"
 	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
 )
@@ -232,6 +233,11 @@ type turnPlan struct {
 	// tools pairs the tool definitions sent to the provider with the tools
 	// that execute the calls the model requests.
 	tools turnTools
+
+	// diagnostics lists the non-fatal problems found while discovering the
+	// skills of the workspace. The run that opens reports them; a context
+	// measurement ignores them, so measuring a branch never reports anything.
+	diagnostics []string
 }
 
 // plan builds the plan of the next turn from the stored history: the agent, the
@@ -249,7 +255,12 @@ func (e *Engine) plan() (turnPlan, error) {
 		return turnPlan{}, fmt.Errorf("engine: resolve model: %w", err)
 	}
 
-	system, err := e.systemPrompt(definition)
+	// The skills of the workspace are discovered on every turn, exactly like
+	// the project instructions are read, so a skill created, edited or removed
+	// applies to the next turn and nothing has to be invalidated for that to be
+	// true.
+	skills := skill.Discover(e.workdir)
+	system, err := e.systemPrompt(definition, skills.Section)
 	if err != nil {
 		return turnPlan{}, err
 	}
@@ -273,7 +284,8 @@ func (e *Engine) plan() (turnPlan, error) {
 			TopP:        model.TopP,
 			Thinking:    thinking(model),
 		},
-		tools: tools,
+		tools:       tools,
+		diagnostics: skills.Diagnostics,
 	}, nil
 }
 

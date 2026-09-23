@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -375,6 +377,136 @@ func TestRequest(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, plan.request.System, "be nice")
 		require.Contains(t, plan.request.System, "Use tabs.")
+	})
+}
+
+// writeSkill writes a SKILL.md file of a skill into a workspace.
+func writeSkill(t *testing.T, dir, name, contents string) {
+	t.Helper()
+
+	path := filepath.Join(dir, ".agents", "skills", name, "SKILL.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
+}
+
+// skillFile returns the contents of a SKILL.md file that declares the fields
+// the catalog publishes.
+func skillFile(name, description string) string {
+	return "---\nname: " + name + "\ndescription: " + description + "\n---\nbody\n"
+}
+
+// TestRequestSkills verifies that the skills of the workspace reach the request
+// of a turn.
+func TestRequestSkills(t *testing.T) {
+	t.Run("publishes the catalog of the workspace", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSkill(t, dir, "pdfs", skillFile("pdfs", "Handle PDFs."))
+		engine, _ := newTestEngine(t, Config{
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
+			Workdir: dir,
+		})
+
+		plan, err := engine.plan()
+
+		require.NoError(t, err)
+		require.Contains(t, plan.request.System, "<name>pdfs</name>")
+		require.Contains(
+			t,
+			plan.request.System,
+			"<location>./.agents/skills/pdfs/SKILL.md</location>",
+		)
+		require.Empty(t, plan.diagnostics)
+	})
+
+	t.Run("publishes the catalog for an agent that declares no tool", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSkill(t, dir, "pdfs", skillFile("pdfs", "Handle PDFs."))
+		engine, _ := newTestEngine(t, Config{
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
+			Workdir: dir,
+		})
+
+		plan, err := engine.plan()
+
+		require.NoError(t, err)
+		require.Empty(t, plan.request.Tools)
+		require.Contains(t, plan.request.System, "<name>pdfs</name>")
+		require.Contains(t, plan.request.System, "cannot read a skill")
+	})
+
+	t.Run("changes nothing when the workspace declares no skill", func(t *testing.T) {
+		dir := t.TempDir()
+		writeProjectInstructions(t, dir, "Use tabs.")
+		engine, _ := newTestEngine(t, Config{
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
+			Workdir: dir,
+		})
+
+		plan, err := engine.plan()
+
+		require.NoError(t, err)
+		require.Equal(t, "be nice\n\n---\n\n"+wantSection("AGENTS.md", "Use tabs."),
+			plan.request.System)
+		require.NotContains(t, plan.request.System, "available_skills")
+		require.Empty(t, plan.diagnostics)
+	})
+
+	t.Run("collects the diagnostics of a broken skill", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSkill(t, dir, "broken", "---\nname: broken\n---\nbody\n")
+		engine, _ := newTestEngine(t, Config{
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
+			Workdir: dir,
+		})
+
+		plan, err := engine.plan()
+
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			"./.agents/skills/broken/SKILL.md: the description is missing or empty",
+		}, plan.diagnostics)
+	})
+
+	t.Run("keeps the catalog current across turns", func(t *testing.T) {
+		dir := t.TempDir()
+		engine, _ := newTestEngine(t, Config{
+			Agents:  []agent.Agent{{ID: "coder"}},
+			Workdir: dir,
+		})
+
+		before, err := engine.plan()
+		require.NoError(t, err)
+		require.NotContains(t, before.request.System, "available_skills")
+
+		writeSkill(t, dir, "pdfs", skillFile("pdfs", "Handle PDFs."))
+
+		after, err := engine.plan()
+		require.NoError(t, err)
+		require.Contains(t, after.request.System, "<name>pdfs</name>")
+	})
+
+	t.Run("measures the catalog as part of the request", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSkill(t, dir, "pdfs", skillFile("pdfs", "Handle PDFs."))
+		engine, _ := newTestEngine(t, Config{
+			Agents:  []agent.Agent{{ID: "coder", SystemPrompt: "be nice"}},
+			Workdir: dir,
+			Resolver: newTestResolver(&fakeClient{}, Model{
+				ID:            "test-model",
+				ContextWindow: 100000,
+			}),
+		})
+
+		withSkills, err := engine.Context()
+		require.NoError(t, err)
+
+		require.NoError(t, os.RemoveAll(filepath.Join(dir, ".agents")))
+
+		withoutSkills, err := engine.Context()
+		require.NoError(t, err)
+
+		require.Greater(t, withSkills.Used, withoutSkills.Used,
+			"the catalog is counted like any other system prompt content")
 	})
 }
 

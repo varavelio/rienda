@@ -61,6 +61,10 @@ func render(events <-chan engine.Event, stdout, stderr io.Writer) error {
 			if err := renderToolResult(stderr, event, streamed[event.ToolCallID]); err != nil {
 				return err
 			}
+		case engine.EventRunStart:
+			if err := renderDiagnostics(stderr, event); err != nil {
+				return err
+			}
 		case engine.EventMessageEnd:
 			if err := flush(); err != nil {
 				return err
@@ -124,6 +128,18 @@ func renderToolResult(w io.Writer, event engine.Event, streamed bool) error {
 	case event.IsError:
 		if _, err := fmt.Fprintln(w, "tool failed"); err != nil {
 			return fmt.Errorf("render: write tool result: %w", err)
+		}
+	}
+	return nil
+}
+
+// renderDiagnostics writes the diagnostics of a workspace to standard error, one
+// line each, prefixed so a diagnostic is never mistaken for the answer of the
+// model. Standard output stays the answer and nothing else.
+func renderDiagnostics(w io.Writer, event engine.Event) error {
+	for _, diagnostic := range event.Diagnostics {
+		if _, err := fmt.Fprintln(w, "skill "+diagnostic); err != nil {
+			return fmt.Errorf("render: write skill diagnostic: %w", err)
 		}
 	}
 	return nil

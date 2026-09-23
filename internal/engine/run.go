@@ -62,10 +62,11 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	}
 
 	start := Event{
-		Type:      EventRunStart,
-		SessionID: e.store.ID(),
-		AgentID:   plan.agent.ID,
-		ModelID:   plan.model.ID,
+		Type:        EventRunStart,
+		SessionID:   e.store.ID(),
+		AgentID:     plan.agent.ID,
+		ModelID:     plan.model.ID,
+		Diagnostics: plan.diagnostics,
 	}
 	switch {
 	case prompt != "":

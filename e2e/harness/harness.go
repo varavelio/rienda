@@ -19,6 +19,10 @@ type Options struct {
 	// directory of the instance.
 	Agents []Agent
 
+	// Skills lists the skills written into the workspace directory of the
+	// instance, under .agents/skills.
+	Skills []Skill
+
 	// Config overrides the configuration file of the instance. It defaults to
 	// DefaultConfig. Providers that declare no base URL point at the fake
 	// provider of the harness, whichever connection they declare.
@@ -74,6 +78,9 @@ func New(t *testing.T, opts Options) *Harness {
 	}
 	for _, definition := range opts.Agents {
 		definition.write(t, instance.AgentsDir())
+	}
+	for _, definition := range opts.Skills {
+		definition.write(t, instance.Workdir())
 	}
 
 	return instance

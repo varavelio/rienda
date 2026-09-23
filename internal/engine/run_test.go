@@ -583,6 +583,104 @@ func TestRun(t *testing.T) {
 		require.Equal(t, interruptedBeforeTool, results[1].ToolResult[0].Text)
 	})
 
+	t.Run("reports the diagnostics of the workspace once per run", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSkill(t, dir, "broken", "---\nname: broken\n---\nbody\n")
+		client := &fakeClient{scripts: []script{
+			toolTurn("call_1", "echo", `{}`),
+			toolTurn("call_2", "echo", `{}`),
+			endTurn("done"),
+		}}
+		engine, _ := newTestEngine(t, Config{
+			Registry: newTestRegistry(t, &fakeTool{name: "echo", output: "ok"}),
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"echo"}}},
+			Workdir:  dir,
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		events := collect(engine.Run(t.Context(), "go"))
+
+		reported := make([]Event, 0, 4)
+		for _, event := range events {
+			if len(event.Diagnostics) > 0 {
+				reported = append(reported, event)
+			}
+		}
+		require.Len(t, reported, 1, "a run reports its diagnostics exactly once")
+		require.Equal(t, EventRunStart, reported[0].Type)
+		require.Equal(t, []string{
+			"./.agents/skills/broken/SKILL.md: the description is missing or empty",
+		}, reported[0].Diagnostics)
+
+		require.Greater(
+			t,
+			len(client.requests),
+			2,
+			"the run performed several turns and tool batches",
+		)
+		require.NotEmpty(t, eventTypes(events))
+	})
+
+	t.Run("reports the diagnostics again on the next run", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSkill(t, dir, "broken", "---\nname: broken\n---\nbody\n")
+		client := &fakeClient{scripts: []script{endTurn("one"), endTurn("two")}}
+		engine, _ := newTestEngine(t, Config{
+			Agents:   []agent.Agent{{ID: "coder"}},
+			Workdir:  dir,
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		first := collect(engine.Run(t.Context(), "one"))
+		second := collect(engine.Run(t.Context(), "two"))
+
+		require.Len(t, first[0].Diagnostics, 1, "nothing is remembered between runs")
+		require.Equal(t, first[0].Diagnostics, second[0].Diagnostics)
+	})
+
+	t.Run("does not report diagnostics on a context measurement", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSkill(t, dir, "broken", "---\nname: broken\n---\nbody\n")
+		writeSkill(t, dir, "good", skillFile("good", "Handle things."))
+		client := &fakeClient{scripts: []script{endTurn("hi")}}
+		engine, store := newTestEngine(t, Config{
+			Agents:   []agent.Agent{{ID: "coder"}},
+			Workdir:  dir,
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		report, err := engine.Context()
+		require.NoError(t, err)
+		require.Positive(t, report.Used)
+
+		plan, err := engine.plan()
+		require.NoError(t, err)
+		require.Contains(t, plan.request.System, "<name>good</name>")
+		require.NotContains(
+			t,
+			plan.request.System,
+			"the description is missing or empty",
+			"a diagnostic never reaches the model",
+		)
+		require.Empty(t, store.History(), "a diagnostic never reaches the session")
+
+		events := collect(engine.Run(t.Context(), "hi"))
+		require.Len(t, events[0].Diagnostics, 1, "only the run start reports them")
+	})
+
+	t.Run("reports no diagnostic in a workspace without skills", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{endTurn("hi")}}
+		engine, _ := newTestEngine(t, Config{
+			Agents:   []agent.Agent{{ID: "coder"}},
+			Workdir:  t.TempDir(),
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		events := collect(engine.Run(t.Context(), "hi"))
+
+		require.Empty(t, events[0].Diagnostics)
+	})
+
 	t.Run("resumes from the active leaf without a prompt", func(t *testing.T) {
 		client := &fakeClient{scripts: []script{endTurn("resumed")}}
 		engine, store := newTestEngine(t, Config{

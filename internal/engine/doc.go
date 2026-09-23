@@ -24,12 +24,34 @@
 //
 // The session is the source of truth: every request is rebuilt from the stored
 // history, so a run can stop and resume at any time. The system prompt is
-// rebuilt on every turn too: the instructions of the project the session runs
-// in, read from the first project instruction file that exists in the working
-// directory (AGENTS.md, agents.md, AGENTS.MD, CLAUDE.md, claude.md or
-// CLAUDE.MD, in that order), are appended to the system prompt of the agent
-// and sent current, so an edit to that file applies to the next request even
-// when earlier turns sent different content.
+// rebuilt on every turn too, as a straight pipeline of up to three sections
+// joined by a separator that is written only between two sections that carry
+// content: the system prompt of the agent, the instructions of the project the
+// session runs in and the skills the workspace declares. A workspace without
+// skills, and a project without an instruction file, therefore contribute
+// nothing and leave no dangling separator.
+//
+// The instructions of the project are read from the first project instruction
+// file that exists in the working directory (AGENTS.md, agents.md, AGENTS.MD,
+// CLAUDE.md, claude.md or CLAUDE.MD, in that order). The skills are discovered
+// under .agents/skills of the same working directory on every turn as well, so
+// an edit to an instruction file or a skill created, edited or removed applies
+// to the next request even when earlier turns sent different content. The
+// skills section is the catalog the model reads to decide which skill to load
+// with its own tools: the engine registers no skill tool and never injects
+// skill content into the conversation, and because the catalog lives in the
+// system prompt it is never carried by a compaction request and never
+// summarized away.
+//
+// A skill the engine cannot use is a diagnostic and never a failure: the run
+// continues without it, every other skill is still published, and the
+// diagnostics ride the run start event, which already opens a run exactly once.
+// They are therefore reported once per run however many turns, tool batches and
+// context measurements that run performs, a context measurement reported
+// outside a run reports none, and there is no bookkeeping to keep them from
+// repeating: a broken skill is reported again on every run until the user fixes
+// or removes it. Diagnostics never reach the session file and are never sent to
+// the model.
 //
 // A run always leaves that history valid for every provider:
 //

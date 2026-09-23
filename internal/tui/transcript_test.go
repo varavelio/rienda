@@ -283,6 +283,39 @@ func TestTranscript(t *testing.T) {
 		require.Equal(t, entryNotice, conversation.entries[2].kind)
 	})
 
+	t.Run("folds the diagnostics of a workspace into notices", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{
+			Type: engine.EventRunStart,
+			Diagnostics: []string{
+				"./.agents/skills/broken/SKILL.md: the description is missing or empty",
+				"./.agents/skills/other/SKILL.md: the name is missing or empty",
+			},
+		})
+
+		require.Len(t, conversation.entries, 2)
+		require.Equal(t, entryNotice, conversation.entries[0].kind)
+		require.Equal(t,
+			"skill ./.agents/skills/broken/SKILL.md: the description is missing or empty",
+			conversation.entries[0].text(),
+		)
+		require.Equal(t, entryNotice, conversation.entries[1].kind)
+	})
+
+	t.Run("folds a run start without diagnostics into nothing", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventRunStart})
+
+		require.Empty(t, conversation.entries)
+	})
+
+	t.Run("ignores diagnostics reported outside a run start", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventContext, Diagnostics: []string{"late"}})
+
+		require.Empty(t, conversation.entries)
+	})
+
 	t.Run("ignores output of unknown calls", func(t *testing.T) {
 		conversation := transcript{}
 		conversation.apply(

@@ -24,9 +24,10 @@ var projectInstructionsFiles = []string{
 	"CLAUDE.MD",
 }
 
-// projectInstructionsSeparator divides the system prompt of the agent from the
-// project instructions appended to it.
-const projectInstructionsSeparator = "\n\n---\n\n"
+// sectionSeparator divides two sections of the system prompt, whatever they
+// are: the system prompt of the agent, the instructions of the project and the
+// skills of the workspace.
+const sectionSeparator = "\n\n---\n\n"
 
 // projectInstructionsTemplate wraps the project instructions in the section
 // appended to the system prompt. The first placeholder is the name of the file
@@ -51,31 +52,45 @@ type projectInstructions struct {
 	Content string
 }
 
-// systemPrompt builds the system instruction of the next turn: the system
-// prompt of the agent the branch runs followed by the instructions of the
-// project the session runs in. The instructions are read from disk on every
-// turn, so an edit to the project instruction file applies to the next request
-// even when earlier turns sent different content.
-func (e *Engine) systemPrompt(definition agent.Agent) (string, error) {
-	systemPrompt := strings.TrimSpace(definition.SystemPrompt)
+// section returns the instructions of the project as the section appended to
+// the system prompt, or an empty string when the project declares none.
+func (p projectInstructions) section() string {
+	if p.Content == "" {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf(projectInstructionsTemplate, p.Source, p.Content))
+}
 
+// systemPrompt builds the system instruction of the next turn from the
+// sections that carry content: the system prompt of the agent the branch runs,
+// the instructions of the project the session runs in and the skills the
+// workspace declares, in that order. The instructions and the skills are read
+// from disk on every turn, so an edit to the project instruction file or to a
+// skill applies to the next request even when earlier turns sent different
+// content.
+func (e *Engine) systemPrompt(definition agent.Agent, skills string) (string, error) {
 	instructions, err := e.loadProjectInstructions()
 	if err != nil {
 		return "", err
 	}
-	if instructions.Content == "" {
-		return systemPrompt, nil
-	}
+	return joinSections(
+		strings.TrimSpace(definition.SystemPrompt),
+		instructions.section(),
+		strings.TrimSpace(skills),
+	), nil
+}
 
-	section := strings.TrimSpace(fmt.Sprintf(
-		projectInstructionsTemplate,
-		instructions.Source,
-		instructions.Content,
-	))
-	if systemPrompt == "" {
-		return section, nil
+// joinSections joins the sections that carry content with the section
+// separator, so a missing section never leaves a leading, a trailing or a
+// doubled separator, and no section at all yields no prompt.
+func joinSections(sections ...string) string {
+	present := make([]string, 0, len(sections))
+	for _, current := range sections {
+		if current != "" {
+			present = append(present, current)
+		}
 	}
-	return systemPrompt + projectInstructionsSeparator + section, nil
+	return strings.Join(present, sectionSeparator)
 }
 
 // loadProjectInstructions returns the instructions of the project the session
