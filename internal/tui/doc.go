@@ -46,7 +46,10 @@
 // animation: the reasoning and tool blocks are static, and the footer under the
 // input shows the live context figure of the branch the session runs, colored
 // by how much of the model window it uses, together with the keys the interface
-// listens to. The status line occupies no room once the run is over, so the
+// listens to. The figure follows a run as it grows: the engine measures the
+// conversation after every block it persists and reports it, so the footer
+// moves with the answer, the reasoning and the tools instead of waiting for the
+// run to end, and a partial block a retry discards never moves it at all. The status line occupies no room once the run is over, so the
 // conversation grows into its rows instead of leaving them blank.
 //
 // Neither the escape that interrupts a run nor the ctrl+c and ctrl+d that leave

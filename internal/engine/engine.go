@@ -290,6 +290,19 @@ func (e *Engine) Context() (tokens.Report, error) {
 	return tokens.Measure(tokens.OfRequest(plan.request), plan.model.ContextWindow), nil
 }
 
+// emitContext reports the estimated context of the request the next turn would
+// send. The engine emits it after every change to the stored conversation, so a
+// front end shows the live figure of a branch while a run is in flight instead
+// of only when it ends. A measurement that cannot be built is skipped: the
+// figure is a courtesy and never a reason to fail a run.
+func (e *Engine) emitContext(events chan<- Event) {
+	report, err := e.Context()
+	if err != nil {
+		return
+	}
+	emit(events, Event{Type: EventContext, Context: contextFrom(report)})
+}
+
 // thinking returns the extended thinking configuration of a model. It is nil
 // when the model configures no thinking.
 func thinking(model Model) *llm.ThinkingConfig {

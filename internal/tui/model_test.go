@@ -2396,6 +2396,37 @@ func TestRefreshContext(t *testing.T) {
 		require.Contains(t, plain(m.render()), "ctx 10%")
 	})
 
+	t.Run("follows a run in flight through the context events", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.input.SetValue("hello")
+		require.NotNil(t, update(t, m, pressEnter))
+		m.context = tokens.Report{}
+
+		// The engine measures the branch after every change to the
+		// conversation and reports it, so the footer follows the run as it grows
+		// instead of waiting for it to end.
+		sendEvent(t, m, engine.Event{
+			Type:    engine.EventContext,
+			Context: &engine.ContextInfo{Used: 30000, Window: 100000, Percent: 30},
+		})
+		require.Contains(t, plain(m.render()), "ctx 30% · 30k/100k")
+
+		sendEvent(t, m, engine.Event{
+			Type:    engine.EventContext,
+			Context: &engine.ContextInfo{Used: 55000, Window: 100000, Percent: 55},
+		})
+		require.Contains(t, plain(m.render()), "ctx 55% · 55k/100k")
+	})
+
+	t.Run("ignores a context event that carries no measurement", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.context = tokens.Report{Used: 100, Window: 1000, Percent: 10}
+
+		sendEvent(t, m, engine.Event{Type: engine.EventContext})
+
+		require.Equal(t, 10, m.context.Percent, "the previous figure stands")
+	})
+
 	t.Run("reports nothing without a session", func(t *testing.T) {
 		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, 0, nil)
 

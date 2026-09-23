@@ -604,6 +604,9 @@ type model struct {
 	// context is the last measurement of the active branch, shown by the chat
 	// footer. It is cached because building the request it measures reads the
 	// project instructions from disk, which must never happen once per frame.
+	// A run refreshes it through the context event the engine emits after
+	// every change to the conversation, and a branch the interface opens or
+	// returns to refreshes it from the session (see refreshContext).
 	context tokens.Report
 
 	// runStart is when the run in flight started, kept to report how long the
@@ -1903,6 +1906,11 @@ func (m *model) applyEvent(event engine.Event) {
 	m.trackActivity(event)
 
 	switch event.Type {
+	case engine.EventContext:
+		// The engine measured the request the next turn would send once the
+		// conversation changed, so the footer follows the run as it grows
+		// instead of waiting for it to end.
+		m.applyContext(event.Context)
 	case engine.EventCompactionEnd:
 		// The conversation the user reads changed: the summarized turns are
 		// replaced by the checkpoint, which is what DisplayedBranch returns.
@@ -2177,9 +2185,12 @@ func (m *model) invalidateTranscript() {
 }
 
 // refreshContext recomputes the context figure of the active branch. It runs
-// when the branch changes — a session opened, a run finished, a session
-// returned to an earlier turn — never once per frame. A failed measurement
-// keeps the previous figure instead of leaving the footer blank.
+// when the branch changes without a run in flight — a session opened, a session
+// returned to an earlier turn, what the branch runs switched, a run finished —
+// never once per frame. While a run is in flight the engine measures and
+// reports the figure through the context event, because the store belongs to
+// the run and must not be read from here. A failed measurement keeps the
+// previous figure instead of leaving the footer blank.
 func (m *model) refreshContext() {
 	if m.session == nil {
 		return
@@ -2190,6 +2201,17 @@ func (m *model) refreshContext() {
 		return
 	}
 	m.context = report
+}
+
+// applyContext records the context figure a run reported through a context
+// event. It is the counterpart of refreshContext for a run in flight: the
+// engine owns the store while a run is in flight, so the interface never
+// measures the branch itself and only shows what the engine reported.
+func (m *model) applyContext(info *engine.ContextInfo) {
+	if info == nil {
+		return
+	}
+	m.context = tokens.Report{Used: info.Used, Window: info.Window, Percent: info.Percent}
 }
 
 // reloadTranscript rebuilds the conversation from the active branch of the

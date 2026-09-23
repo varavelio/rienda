@@ -121,16 +121,19 @@ func TestAutomaticCompaction(t *testing.T) {
 			t,
 			[]EventType{
 				EventRunStart,
+				EventContext,
 				EventCompactionStart,
 				EventCompactionEnd,
+				EventContext,
 				EventTextDelta,
 				EventMessageEnd,
+				EventContext,
 				EventRunEnd,
 			},
 			eventTypes(events),
 		)
 
-		end := events[2].Compaction
+		end := events[3].Compaction
 		require.NotNil(t, end)
 		require.Equal(t, session.KindCompaction, end.Entry.Kind)
 		require.Equal(t, "the summary", end.Entry.CompactionSummary)
@@ -269,7 +272,7 @@ func TestManualCompaction(t *testing.T) {
 		require.Equal(t, 1, compactor.compacted)
 		require.Equal(
 			t,
-			[]EventType{EventCompactionStart, EventCompactionEnd, EventRunEnd},
+			[]EventType{EventCompactionStart, EventCompactionEnd, EventContext, EventRunEnd},
 			eventTypes(events),
 		)
 		require.Equal(t, EndReasonTurn, events[len(events)-1].Reason)

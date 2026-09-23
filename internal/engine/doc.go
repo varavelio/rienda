@@ -61,6 +61,16 @@
 // run without writing an entry. The same procedure can be driven on demand
 // through Compact, which ignores the threshold because the user asked for it.
 //
+// The engine is also where the context figure of a branch is measured, because
+// a run owns the store while it is in flight. After every change to the stored
+// conversation — the prompt that opens the run, a persisted assistant message,
+// the results of a tool batch and a checkpoint — it measures the request the
+// next turn would send and emits a context event, so a front end shows a live
+// figure instead of only the one a finished run leaves behind. A partial
+// response that a retry discards is never persisted and therefore never
+// measured, which keeps the figure on the conversation the providers actually
+// receive.
+//
 // Consumers follow a run through the channel returned by Run, which always
 // closes after a run_end event.
 package engine

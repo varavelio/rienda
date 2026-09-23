@@ -148,6 +148,7 @@ func (e *Engine) compactBranch(ctx context.Context, events chan<- Event) error {
 			Usage:        usageFrom(result.Usage),
 		},
 	})
+	e.emitContext(events)
 	return nil
 }
 

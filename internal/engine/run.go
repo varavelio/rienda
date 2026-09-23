@@ -83,6 +83,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 		return
 	}
 	emit(events, start)
+	e.emitContext(events)
 
 	// At most one automatic compaction happens per run: without the guard a
 	// stubborn threshold would turn into a loop.
@@ -148,6 +149,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			StopReason: response.stopReason,
 			Usage:      usageFrom(response.usage),
 		})
+		e.emitContext(events)
 
 		calls := response.toolCalls()
 		if len(calls) == 0 {
@@ -162,6 +164,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			fail(events, err)
 			return
 		}
+		e.emitContext(events)
 	}
 }
 

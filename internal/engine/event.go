@@ -6,6 +6,7 @@ import (
 
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
 )
 
@@ -37,6 +38,12 @@ const (
 	// EventCompactionEnd closes a compaction with the persisted checkpoint and
 	// the measurements around it.
 	EventCompactionEnd EventType = "compaction_end"
+	// EventContext reports the estimated context of the request the next turn
+	// would send. The engine emits it after every change to the stored
+	// conversation — the prompt of the run, an assistant message, the results
+	// of a tool batch and a checkpoint — so a front end shows a live context
+	// figure while a run is in flight instead of only when it ends.
+	EventContext EventType = "context"
 	// EventRunEnd closes a run. It is the last event of every channel.
 	EventRunEnd EventType = "run_end"
 	// EventError reports the failure that ended a run.
@@ -108,6 +115,26 @@ type CompactionInfo struct {
 	Usage *Usage `json:"usage,omitempty"`
 }
 
+// ContextInfo reports how much of the context window of a model the request the
+// next turn would send consumes. It is what an EventContext carries, so a front
+// end renders the live figure of a run without measuring anything itself.
+type ContextInfo struct {
+	// Used is the estimated number of tokens the request consumes.
+	Used int `json:"used"`
+
+	// Window is the context window of the model the request is measured
+	// against.
+	Window int `json:"window"`
+
+	// Percent is the share of the window in use, an integer between 0 and 100.
+	Percent int `json:"percent"`
+}
+
+// contextFrom projects a context measurement into event form.
+func contextFrom(report tokens.Report) *ContextInfo {
+	return &ContextInfo{Used: report.Used, Window: report.Window, Percent: report.Percent}
+}
+
 // Event is a single update emitted while a run is in flight. Only the fields
 // valid for the event Type carry meaning; the rest stay at their zero value.
 //
@@ -164,6 +191,11 @@ type Event struct {
 	// about why the compaction happened, because a front end only renders the
 	// checkpoint.
 	Compaction *CompactionInfo `json:"compaction,omitempty"`
+
+	// Context carries the measurement of an EventContext: the estimated size
+	// of the request the next turn would send and the context window it is
+	// measured against.
+	Context *ContextInfo `json:"context,omitempty"`
 
 	// Reason explains why the run ended in EventRunEnd.
 	Reason EndReason `json:"reason,omitempty"`

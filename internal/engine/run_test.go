@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -99,18 +100,23 @@ func TestRun(t *testing.T) {
 
 		require.Equal(
 			t,
-			[]EventType{EventRunStart, EventTextDelta, EventMessageEnd, EventRunEnd},
+			[]EventType{
+				EventRunStart,
+				EventContext,
+				EventTextDelta, EventMessageEnd, EventContext,
+				EventRunEnd,
+			},
 			eventTypes(events),
 		)
 		require.Equal(t, store.ID(), events[0].SessionID)
 		require.Equal(t, "coder", events[0].AgentID)
 		require.Equal(t, "test-model", events[0].ModelID)
 		require.NotEmpty(t, events[0].EntryID)
-		require.Equal(t, "hi", events[1].Text)
-		require.NotEmpty(t, events[2].EntryID)
-		require.Equal(t, llm.StopReasonEndTurn, events[2].StopReason)
-		require.Equal(t, &Usage{InputTokens: 3, OutputTokens: 2}, events[2].Usage)
-		require.Equal(t, EndReasonTurn, events[3].Reason)
+		require.Equal(t, "hi", events[2].Text)
+		require.NotEmpty(t, events[3].EntryID)
+		require.Equal(t, llm.StopReasonEndTurn, events[3].StopReason)
+		require.Equal(t, &Usage{InputTokens: 3, OutputTokens: 2}, events[3].Usage)
+		require.Equal(t, EndReasonTurn, events[5].Reason)
 
 		require.Len(t, client.requests, 1)
 		require.Equal(t, "test-model", client.requests[0].Model)
@@ -125,6 +131,77 @@ func TestRun(t *testing.T) {
 		require.Equal(t, "wire-model", entries[1].ResponseModel)
 		require.Equal(t, llm.StopReasonEndTurn, entries[1].ResponseStopReason)
 		require.Equal(t, llm.Usage{InputTokens: 3, OutputTokens: 2}, entries[1].ResponseUsage)
+	})
+
+	t.Run("reports the context after every change to the conversation", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{
+			toolTurn("call_1", "echo", `{}`),
+			endTurn("done"),
+		}}
+		engine, _ := newTestEngine(t, Config{
+			Registry: newTestRegistry(t, &fakeTool{
+				name:   "echo",
+				output: strings.Repeat("ok", 500),
+			}),
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"echo"}}},
+			Resolver: newTestResolver(client, Model{ID: "test-model", ContextWindow: 100000}),
+		})
+
+		events := collect(engine.Run(t.Context(), "go"))
+
+		contexts := make([]*ContextInfo, 0, 4)
+		for _, event := range events {
+			if event.Type == EventContext {
+				contexts = append(contexts, event.Context)
+			}
+		}
+		require.Len(t, contexts, 4, "the prompt, the answer and both tool results are measured")
+
+		// Every measurement covers the request the next turn would send, so the
+		// figure grows as the conversation does.
+		for _, info := range contexts {
+			require.NotNil(t, info)
+			require.Equal(t, 100000, info.Window)
+			require.Positive(t, info.Used)
+			require.GreaterOrEqual(t, info.Percent, 0)
+			require.LessOrEqual(t, info.Percent, 100)
+		}
+		for index := 1; index < len(contexts); index++ {
+			require.Greater(
+				t,
+				contexts[index].Used,
+				contexts[index-1].Used,
+				"the figure follows the conversation as it grows",
+			)
+		}
+	})
+
+	t.Run("measures a model whose window was not resolved", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{endTurn("hi")}}
+		engine, _ := newTestEngine(t, Config{
+			Resolver: &testResolver{
+				client: client,
+				models: map[string]Model{"test/model": {ID: "wire", ContextWindow: 0}},
+			},
+		})
+
+		events := collect(engine.Run(t.Context(), "hello"))
+
+		contexts := make([]*ContextInfo, 0, 2)
+		for _, event := range events {
+			if event.Type == EventContext {
+				contexts = append(contexts, event.Context)
+			}
+		}
+		require.Len(t, contexts, 2, "the raw estimate is reported even without a window")
+
+		// The estimate stands, but there is no window to turn it into a
+		// percentage, so the front end has nothing to render.
+		for _, info := range contexts {
+			require.Positive(t, info.Used)
+			require.Zero(t, info.Window)
+			require.Zero(t, info.Percent)
+		}
 	})
 
 	t.Run("runs the agent the branch selected", func(t *testing.T) {
@@ -263,9 +340,10 @@ func TestRun(t *testing.T) {
 
 		require.Equal(t, []EventType{
 			EventRunStart,
-			EventTextDelta, EventMessageEnd,
-			EventToolCall, EventToolOutput, EventToolOutput, EventToolResult,
-			EventTextDelta, EventMessageEnd,
+			EventContext,
+			EventTextDelta, EventMessageEnd, EventContext,
+			EventToolCall, EventToolOutput, EventToolOutput, EventToolResult, EventContext,
+			EventTextDelta, EventMessageEnd, EventContext,
 			EventRunEnd,
 		}, eventTypes(events))
 		require.Equal(t, EndReasonTurn, events[len(events)-1].Reason)
@@ -445,6 +523,7 @@ func TestRun(t *testing.T) {
 		events := engine.Run(ctx, "hello")
 
 		require.Equal(t, EventRunStart, (<-events).Type)
+		require.Equal(t, EventContext, (<-events).Type)
 		require.Equal(t, EventTextDelta, (<-events).Type)
 		cancel()
 
@@ -519,7 +598,12 @@ func TestRun(t *testing.T) {
 
 		require.Equal(
 			t,
-			[]EventType{EventRunStart, EventTextDelta, EventMessageEnd, EventRunEnd},
+			[]EventType{
+				EventRunStart,
+				EventContext,
+				EventTextDelta, EventMessageEnd, EventContext,
+				EventRunEnd,
+			},
 			eventTypes(events),
 		)
 		require.Empty(t, events[0].EntryID)
@@ -545,9 +629,13 @@ func TestRun(t *testing.T) {
 
 		events := collect(engine.Run(t.Context(), "hello"))
 
-		require.Equal(t, []EventType{EventRunStart, EventError, EventRunEnd}, eventTypes(events))
-		require.Contains(t, events[1].Error, "connect boom")
-		require.Equal(t, EndReasonError, events[2].Reason)
+		require.Equal(
+			t,
+			[]EventType{EventRunStart, EventContext, EventError, EventRunEnd},
+			eventTypes(events),
+		)
+		require.Contains(t, events[2].Error, "connect boom")
+		require.Equal(t, EndReasonError, events[3].Reason)
 		require.Len(t, store.History(), 1)
 	})
 
@@ -564,10 +652,10 @@ func TestRun(t *testing.T) {
 
 		require.Equal(
 			t,
-			[]EventType{EventRunStart, EventTextDelta, EventError, EventRunEnd},
+			[]EventType{EventRunStart, EventContext, EventTextDelta, EventError, EventRunEnd},
 			eventTypes(events),
 		)
-		require.Equal(t, EndReasonError, events[3].Reason)
+		require.Equal(t, EndReasonError, events[4].Reason)
 		require.Len(t, store.History(), 1)
 	})
 
@@ -637,11 +725,11 @@ func TestRun(t *testing.T) {
 
 		require.Equal(
 			t,
-			[]EventType{EventRunStart, EventTextDelta, EventError, EventRunEnd},
+			[]EventType{EventRunStart, EventContext, EventTextDelta, EventError, EventRunEnd},
 			eventTypes(events),
 		)
-		require.Contains(t, events[2].Error, "store is closed")
-		require.Equal(t, EndReasonError, events[3].Reason)
+		require.Contains(t, events[3].Error, "store is closed")
+		require.Equal(t, EndReasonError, events[4].Reason)
 	})
 
 	t.Run("reports tool result persistence failures", func(t *testing.T) {
