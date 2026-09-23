@@ -42,7 +42,7 @@ type styles struct {
 	selection lipgloss.Style
 	// compactionNode styles the label of a checkpoint in the tree. It stays
 	// faint like a selection, so a checkpoint reads as the metadata the tree
-	// draws beside the turns of the conversation, while the block the
+	// draws beside the turns of the conversation, while the row the
 	// conversation renders keeps the white of its section.
 	compactionNode lipgloss.Style
 	// on and off style the state of an option of the harness.
@@ -193,11 +193,12 @@ func newStyles(isDark bool) styles {
 		// White is the only free color of the palette: 9 is failures, 10 the
 		// agent and the branch marks, 11 the tags and the notices, 12 the
 		// highlight, 13 the user and 14 the tools. It reads as metadata rather
-		// than as a voice in the conversation, which is what a checkpoint is.
+		// than as a voice in the conversation, which is what a checkpoint is,
+		// so it is left unbolded like the faint switch it is drawn beside.
 		compaction: section{
 			marker:      markerTurn,
-			markerStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")),
-			title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")),
+			markerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
+			title:       lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
 			body:        lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
 		},
 	}

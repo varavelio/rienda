@@ -15,8 +15,8 @@ import (
 // maxToolOutput caps the tool output retained per invocation.
 const maxToolOutput = 64 << 10
 
-// compactionBody is the one-line note that closes a checkpoint block, so the
-// reader sees where the conversation was summarized.
+// compactionBody is the note that closes a checkpoint row of the conversation,
+// so the reader sees where the conversation was summarized.
 const compactionBody = "the conversation was compacted"
 
 // entryKind discriminates the transcript entries.
@@ -163,8 +163,8 @@ func (t *transcript) addNotice(text string) {
 	t.push(entry{kind: entryNotice, fragments: []string{text}})
 }
 
-// addCompaction appends the checkpoint of a compaction as a turn of its own,
-// labeled like any other turn.
+// addCompaction appends the checkpoint of a compaction, which the conversation
+// renders as a row of metadata between two turns.
 func (t *transcript) addCompaction() {
 	t.push(entry{kind: entryCompaction, fragments: []string{compactionBody}})
 }

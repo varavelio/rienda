@@ -898,7 +898,7 @@ func (m *model) renderBlockBody(current *entry, width int) string {
 	case entryNotice:
 		return m.styles.notice.Render(wrap(current.text(), width))
 	case entryCompaction:
-		return m.styles.compaction.block(width, "Compaction", current.text())
+		return m.renderCompaction(current, width)
 	case entrySwitch:
 		return m.renderSwitch(current, width)
 	default:
@@ -906,19 +906,38 @@ func (m *model) renderBlockBody(current *entry, width int) string {
 	}
 }
 
-// renderSwitch renders a selection of what the branch runs as a single row, so
-// a switch reads as metadata between two turns instead of as a turn of its own:
-// the thin marker keeps it apart from the turns, the label stays faint and the
-// transition the selection wrote stays visible. A long transition wraps inside
-// the row, so the model that follows is never cut off.
-func (m *model) renderSwitch(current *entry, width int) string {
-	row := m.styles.selection.Render(markerActivity) + " " +
-		m.styles.selection.Render(selectionLabel(current.selectionKind)+": ") +
-		current.text()
+// metadataRow renders a row of metadata that separates two turns of the
+// conversation, a checkpoint or a selection of what the branch runs: the prefix,
+// which already carries the marker that opens the row and the styled label that
+// names it, and the body the row carries, all on a single line. The row wraps
+// inside the given width, so a long body never outgrows the terminal.
+func metadataRow(prefix, body string, width int) string {
+	row := prefix + ": " + body
 	if width <= 0 {
 		return row
 	}
 	return lipgloss.Wrap(row, width, "")
+}
+
+// renderCompaction renders a checkpoint as a row of metadata between two turns,
+// exactly as a switch is drawn, so the conversation shows where it was
+// summarized without devoting a block of its own to it: the thick marker that
+// opens a turn, the label of the checkpoint and the note that closes it, all on
+// a single line.
+func (m *model) renderCompaction(current *entry, width int) string {
+	prefix := m.styles.compaction.mark(m.styles.compaction.title.Render("Compaction"))
+	return metadataRow(prefix, m.styles.compaction.body.Render(current.text()), width)
+}
+
+// renderSwitch renders a selection of what the branch runs as a row of metadata
+// between two turns, exactly as a checkpoint is drawn, so a switch is never lost
+// by reading the conversation instead of the tree: the thick marker that opens a
+// turn, the faint label that names the switch and the transition the selection
+// wrote, all on a single line.
+func (m *model) renderSwitch(current *entry, width int) string {
+	prefix := m.styles.selection.Render(markerTurn) + " " +
+		m.styles.selection.Render(selectionLabel(current.selectionKind))
+	return metadataRow(prefix, current.text(), width)
 }
 
 // renderAssistantBlock renders an answer of the model, formatted as markdown
