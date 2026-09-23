@@ -1,83 +1,43 @@
 package engine
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/varavelio/rienda/internal/agent"
+	"github.com/varavelio/rienda/internal/instructions"
+	"github.com/varavelio/rienda/internal/skill"
 )
-
-// projectInstructionsFiles lists the names of the files that may hold the
-// instructions of a project, in lookup order. The first one that exists in the
-// working directory is the one loaded, so a project that uses any of the
-// common conventions is honored.
-var projectInstructionsFiles = []string{
-	"AGENTS.md",
-	"agents.md",
-	"AGENTS.MD",
-	"CLAUDE.md",
-	"claude.md",
-	"CLAUDE.MD",
-}
 
 // sectionSeparator divides two sections of the system prompt, whatever they
 // are: the system prompt of the agent, the instructions of the project and the
 // skills of the workspace.
 const sectionSeparator = "\n\n---\n\n"
 
-// projectInstructionsTemplate wraps the project instructions in the section
-// appended to the system prompt. The first placeholder is the name of the file
-// the instructions were read from and the second one is its content.
-const projectInstructionsTemplate = `
-CRITICAL: The project instructions loaded from %[1]s inside <project_instructions> are mandatory guidelines for this workspace. You MUST strictly adhere to them for every task. The ONLY exception is if the user explicitly instructs you to bypass or override a specific rule in the active conversation.
+// systemPrompt builds the system instruction of the next turn as a straight
+// pipeline of the sections that carry content, in this order: the system
+// prompt of the agent the branch runs, the instructions the project declares
+// and the skills the workspace declares. The instructions and the skills are
+// read from the workspace on every call, so an edit to an instruction file or
+// to a skill applies to the next run.
+//
+// The diagnostics of the workspace are returned alongside the prompt. They ride
+// the run start event, which only the turn that opens a run emits, so a context
+// measurement and the later turns of the same run read them and report
+// nothing.
+func (e *Engine) systemPrompt(definition agent.Agent) (string, []string, error) {
+	systemPrompt := strings.TrimSpace(definition.SystemPrompt)
 
-<project_instructions source="%[1]s">
-%[2]s
-</project_instructions>
-`
-
-// projectInstructions holds the instructions of the project a session runs in
-// together with the file they were read from.
-type projectInstructions struct {
-	// Source is the name of the file the instructions were read from, empty
-	// when the project declares none.
-	Source string
-
-	// Content is the trimmed body of the instructions, empty when the project
-	// declares none.
-	Content string
-}
-
-// section returns the instructions of the project as the section appended to
-// the system prompt, or an empty string when the project declares none.
-func (p projectInstructions) section() string {
-	if p.Content == "" {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprintf(projectInstructionsTemplate, p.Source, p.Content))
-}
-
-// systemPrompt builds the system instruction of the next turn from the
-// sections that carry content: the system prompt of the agent the branch runs,
-// the instructions of the project the session runs in and the skills the
-// workspace declares, in that order. The instructions and the skills are read
-// from disk on every turn, so an edit to the project instruction file or to a
-// skill applies to the next request even when earlier turns sent different
-// content.
-func (e *Engine) systemPrompt(definition agent.Agent, skills string) (string, error) {
-	instructions, err := e.loadProjectInstructions()
+	projectSection, err := instructions.Section(e.workdir)
 	if err != nil {
-		return "", err
+		return "", nil, fmt.Errorf("engine: %w", err)
 	}
-	return joinSections(
-		strings.TrimSpace(definition.SystemPrompt),
-		instructions.section(),
-		strings.TrimSpace(skills),
-	), nil
+	projectSection = strings.TrimSpace(projectSection)
+
+	skills := skill.Discover(e.workdir)
+	skillsSection := strings.TrimSpace(skills.Section)
+
+	return joinSections(systemPrompt, projectSection, skillsSection), skills.Diagnostics, nil
 }
 
 // joinSections joins the sections that carry content with the section
@@ -91,31 +51,4 @@ func joinSections(sections ...string) string {
 		}
 	}
 	return strings.Join(present, sectionSeparator)
-}
-
-// loadProjectInstructions returns the instructions of the project the session
-// runs in, read from the first file of projectInstructionsFiles that exists in
-// the working directory. It returns zero instructions when the session runs in
-// no directory or the project declares no instruction file.
-func (e *Engine) loadProjectInstructions() (projectInstructions, error) {
-	if e.workdir == "" {
-		return projectInstructions{}, nil
-	}
-
-	for _, name := range projectInstructionsFiles {
-		path := filepath.Join(e.workdir, name)
-		//nolint:gosec // the path is the session working directory plus a known file name.
-		data, err := os.ReadFile(path)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			continue
-		case err != nil:
-			return projectInstructions{}, fmt.Errorf("engine: read project instructions: %w", err)
-		}
-		return projectInstructions{
-			Source:  name,
-			Content: strings.TrimSpace(string(data)),
-		}, nil
-	}
-	return projectInstructions{}, nil
 }

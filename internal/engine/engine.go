@@ -10,7 +10,6 @@ import (
 	"github.com/varavelio/rienda/internal/agent"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
-	"github.com/varavelio/rienda/internal/skill"
 	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
 )
@@ -240,10 +239,25 @@ type turnPlan struct {
 	diagnostics []string
 }
 
+// withSystem returns the plan of a turn of a run, sending the system prompt the
+// run read when it opened instead of the one this plan read from the workspace,
+// and dropping the diagnostics, which only the turn that opens a run reports.
+// The run owns the system prompt of its turns because a skill or an instruction
+// file has to be able to change without the model seeing a different prompt in
+// the middle of the work it is doing.
+func (p turnPlan) withSystem(system string) turnPlan {
+	request := *p.request
+	request.System = system
+	p.request = &request
+	p.diagnostics = nil
+	return p
+}
+
 // plan builds the plan of the next turn from the stored history: the agent, the
 // model and the client the branch runs, and its request. The system prompt is
-// rebuilt on every turn so the instructions of the project the session runs in
-// stay current.
+// read from the workspace on every turn, so a plan always reflects the workspace
+// as it stands; a run pins the prompt of its own turns through withSystem, and a
+// context measurement reads it and reports nothing.
 func (e *Engine) plan() (turnPlan, error) {
 	definition, err := e.agentOf()
 	if err != nil {
@@ -255,12 +269,10 @@ func (e *Engine) plan() (turnPlan, error) {
 		return turnPlan{}, fmt.Errorf("engine: resolve model: %w", err)
 	}
 
-	// The skills of the workspace are discovered on every turn, exactly like
-	// the project instructions are read, so a skill created, edited or removed
-	// applies to the next turn and nothing has to be invalidated for that to be
-	// true.
-	skills := skill.Discover(e.workdir)
-	system, err := e.systemPrompt(definition, skills.Section)
+	// The system prompt is read from the workspace on every turn, so a skill or
+	// an instruction file created, edited or removed applies without anything
+	// having to be invalidated for that to be true.
+	system, diagnostics, err := e.systemPrompt(definition)
 	if err != nil {
 		return turnPlan{}, err
 	}
@@ -285,7 +297,7 @@ func (e *Engine) plan() (turnPlan, error) {
 			Thinking:    thinking(model),
 		},
 		tools:       tools,
-		diagnostics: skills.Diagnostics,
+		diagnostics: diagnostics,
 	}, nil
 }
 

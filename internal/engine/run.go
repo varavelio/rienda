@@ -61,6 +61,13 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 		return
 	}
 
+	// The system prompt of the run is the one read from the workspace when it
+	// opened, and every turn of the run sends it unchanged. Reading it once per
+	// run rather than once per turn is what keeps a skill or an instruction file
+	// from changing under the model in the middle of the work it was asked to
+	// do; the next run reads the workspace again and picks the change up.
+	system := plan.request.System
+
 	start := Event{
 		Type:        EventRunStart,
 		SessionID:   e.store.ID(),
@@ -100,6 +107,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			fail(events, err)
 			return
 		}
+		plan = plan.withSystem(system)
 		if !compacted && e.shouldCompact(plan) {
 			compacted = true
 			if err := e.compactBranch(ctx, events); err != nil {
@@ -111,11 +119,13 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 				return
 			}
 			// The branch changed under the run: the compaction appended a
-			// checkpoint, so the plan is rebuilt from the branch as it stands.
+			// checkpoint, so the plan is rebuilt from the branch as it stands
+			// and pinned to the system prompt the run opened with.
 			if plan, err = e.plan(); err != nil {
 				fail(events, err)
 				return
 			}
+			plan = plan.withSystem(system)
 		}
 
 		response, err := e.generate(ctx, events, plan)

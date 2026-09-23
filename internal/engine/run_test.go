@@ -621,6 +621,88 @@ func TestRun(t *testing.T) {
 		require.NotEmpty(t, eventTypes(events))
 	})
 
+	t.Run("keeps the system prompt of the run fixed across its turns", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSkill(t, dir, "one", skillFile("one", "First."))
+
+		// A tool that writes a brand new skill while the run is in flight: the
+		// workspace changes under the model, and the run must not notice.
+		writer := &fakeTool{name: "writer", output: "ok"}
+		writer.before = func(context.Context) {
+			writeSkill(t, dir, "injected", skillFile("injected", "Injected mid-run."))
+		}
+
+		client := &fakeClient{scripts: []script{
+			toolTurn("call_1", "writer", `{}`),
+			endTurn("done"),
+		}}
+		engine, _ := newTestEngine(t, Config{
+			Registry: newTestRegistry(t, writer),
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"writer"}}},
+			Workdir:  dir,
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		collect(engine.Run(t.Context(), "go"))
+
+		require.Len(t, client.requests, 2)
+		require.Contains(t, client.requests[0].System, "<name>one</name>")
+		require.NotContains(t, client.requests[0].System, "injected")
+		require.Equal(
+			t,
+			client.requests[0].System,
+			client.requests[1].System,
+			"every turn of a run sends the system prompt the run opened with",
+		)
+	})
+
+	t.Run("reads the workspace again on the next run", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSkill(t, dir, "one", skillFile("one", "First."))
+		client := &fakeClient{scripts: []script{endTurn("a"), endTurn("b")}}
+		engine, _ := newTestEngine(t, Config{
+			Agents:   []agent.Agent{{ID: "coder"}},
+			Workdir:  dir,
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		collect(engine.Run(t.Context(), "first"))
+		require.Contains(t, client.requests[0].System, "First.")
+
+		// The user edits the description and adds a skill between two prompts.
+		writeSkill(t, dir, "one", skillFile("one", "Second."))
+		writeSkill(t, dir, "two", skillFile("two", "Brand new."))
+
+		collect(engine.Run(t.Context(), "second"))
+
+		require.Contains(t, client.requests[1].System, "Second.",
+			"the next run picks up the edited description")
+		require.Contains(t, client.requests[1].System, "Brand new.",
+			"the next run picks up the new skill")
+		require.NotContains(t, client.requests[1].System, "First.")
+	})
+
+	t.Run("reads the project instructions again on the next run", func(t *testing.T) {
+		dir := t.TempDir()
+		writeProjectInstructions(t, dir, "Rule one.")
+		client := &fakeClient{scripts: []script{endTurn("a"), endTurn("b")}}
+		engine, _ := newTestEngine(t, Config{
+			Agents:   []agent.Agent{{ID: "coder"}},
+			Workdir:  dir,
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		collect(engine.Run(t.Context(), "first"))
+		require.Contains(t, client.requests[0].System, "Rule one.")
+
+		writeProjectInstructions(t, dir, "Rule two.")
+
+		collect(engine.Run(t.Context(), "second"))
+
+		require.Contains(t, client.requests[1].System, "Rule two.")
+		require.NotContains(t, client.requests[1].System, "Rule one.")
+	})
+
 	t.Run("reports the diagnostics again on the next run", func(t *testing.T) {
 		dir := t.TempDir()
 		writeSkill(t, dir, "broken", "---\nname: broken\n---\nbody\n")

@@ -116,9 +116,9 @@ func TestSkillsWithoutWorkspaceSkills(t *testing.T) {
 	require.NotContains(t, request.Messages[0].Text(), "available_skills")
 }
 
-// TestSkillsReportsABrokenSkillOnEveryRun verifies that the binary keeps no
+// TestSkillsReportsABrokenSkillOnEveryPrompt verifies that the binary keeps no
 // memory of a diagnostic: a second prompt without a fix reports it again.
-func TestSkillsReportsABrokenSkillOnEveryRun(t *testing.T) {
+func TestSkillsReportsABrokenSkillOnEveryPrompt(t *testing.T) {
 	app := skillsApp(t,
 		[]harness.Skill{{Dir: "broken", Raw: "---\nname: broken\n---\nbody\n"}},
 		harness.Text("first"),
@@ -190,4 +190,55 @@ func TestSkillsSurviveACompaction(t *testing.T) {
 	require.Contains(t, continued.Messages[0].Text(), "<available_skills>",
 		"the turn that follows the compaction publishes the catalog again")
 	require.Contains(t, continued.Messages[0].Text(), "<name>pdfs</name>")
+}
+
+// TestSkillsPickUpWorkspaceChangesBetweenPrompts verifies that a skill created,
+// edited or removed while a session is open is reflected by the next prompt:
+// the workspace is read again when each run opens, so the system prompt of the
+// new run carries what is on disk right now.
+func TestSkillsPickUpWorkspaceChangesBetweenPrompts(t *testing.T) {
+	app := skillsApp(t,
+		[]harness.Skill{{Dir: "one", Name: "one", Description: "First description."}},
+		harness.Text("first"),
+		harness.Text("second"),
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(app.Workdir(), "AGENTS.md"), []byte("First rule.\n"), 0o600,
+	))
+
+	first := app.Run(t, "run", "-a", "coder", "-p", "first prompt")
+	first.RequireSuccess(t)
+	firstSystem := app.Provider().Requests()[0].Chat(t).Messages[0].Text()
+	require.Contains(t, firstSystem, "First description.")
+	require.Contains(t, firstSystem, "First rule.")
+
+	// The user edits the skill, adds another one and edits the project
+	// instructions, all while the session is open.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(app.Workdir(), ".agents", "skills", "one", "SKILL.md"),
+		[]byte("---\nname: one\ndescription: Second description.\n---\nbody\n"), 0o600,
+	))
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(app.Workdir(), ".agents", "skills", "two"), 0o750,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(app.Workdir(), ".agents", "skills", "two", "SKILL.md"),
+		[]byte("---\nname: two\ndescription: Brand new.\n---\nbody\n"), 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(app.Workdir(), "AGENTS.md"), []byte("Second rule.\n"), 0o600,
+	))
+
+	second := app.Run(t, "run", "-s", first.SessionID(t), "-p", "second prompt")
+	second.RequireSuccess(t)
+
+	secondSystem := app.Provider().Requests()[1].Chat(t).Messages[0].Text()
+	require.Contains(t, secondSystem, "Second description.",
+		"the edited description of a skill reaches the next prompt")
+	require.Contains(t, secondSystem, "Brand new.",
+		"a skill added while the session is open reaches the next prompt")
+	require.Contains(t, secondSystem, "Second rule.",
+		"the edited project instructions reach the next prompt")
+	require.NotContains(t, secondSystem, "First description.")
+	require.NotContains(t, secondSystem, "First rule.")
 }
