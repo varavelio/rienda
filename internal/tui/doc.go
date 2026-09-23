@@ -104,10 +104,11 @@
 // own: a faint dot for the turns of the branch the session runs, a bright one
 // for the turn the session is at and a blank for the turns of the branches it
 // left behind, so the branch the conversation runs reads down that column. A
-// tree taller than the screen scrolls with the arrows and keeps a few turns
-// visible below the highlight, so the reader sees which turns come next instead
-// of running the highlight into the bottom edge; the margin is given up near
-// the end of the tree, which still fills the screen with turns. Enter returns
+// tree taller than the screen scrolls with the arrows and keeps half the rows
+// it shows visible below the highlight, so the highlight rests in the middle of
+// the screen and the reader sees as many turns before it as after it instead of
+// running it into the bottom edge; the margin is given up near the end of the
+// tree, which still fills the screen with turns. Enter returns
 // the session to the highlighted turn, leaving the turns that
 // followed it in the tree as a branch of their own. Returning to a prompt
 // rewinds to the turn before it and offers the prompt in the input, ready to be

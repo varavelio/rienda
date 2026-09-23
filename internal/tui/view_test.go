@@ -1748,10 +1748,11 @@ func TestTreeScrollMargin(t *testing.T) {
 		// holds on both sides.
 		m.tree.filter.cursor = len(m.tree.nodes) / 2
 		first, last := m.tree.filter.window()
+		margin := treeWindowMargin(rows)
 
-		require.Equal(t, first, m.tree.filter.cursor-rows+1+treeWindowMargin,
+		require.Equal(t, first, m.tree.filter.cursor-rows+1+margin,
 			"the window follows the highlight once it passes the margin")
-		require.Equal(t, treeWindowMargin, last-1-m.tree.filter.cursor,
+		require.Equal(t, margin, last-1-m.tree.filter.cursor,
 			"the turns after the highlight stay visible")
 	})
 
