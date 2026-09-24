@@ -272,8 +272,11 @@ func TestRun(t *testing.T) {
 		writeCache(t, path, base, map[string]int{"previous": 123})
 
 		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		go cat.Run(ctx)
+		stopped := make(chan struct{})
+		go func() {
+			cat.Run(ctx)
+			close(stopped)
+		}()
 
 		// The cache is fresh, so the immediate pass fetches nothing.
 		clock.ticks <- base
@@ -284,5 +287,15 @@ func TestRun(t *testing.T) {
 		clock.ticks <- base
 		endpoint.wait(t)
 		require.Equal(t, 1, endpoint.count())
+
+		// The loop must stop before the test returns: the refresh it may still
+		// be writing would otherwise race the cleanup of the temporary
+		// directory.
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(endpointTimeout):
+			t.Fatal("the refresh loop did not stop with its context")
+		}
 	})
 }
