@@ -2804,6 +2804,10 @@ func TestRenameSession(t *testing.T) {
 
 	t.Run("shows the name in the identity of the session", func(t *testing.T) {
 		m, _ := chatModel(t)
+		// The identity gathers the agent, the model, the identifier and the
+		// name, so the terminal must be wide enough for the name to survive
+		// the clipping of the line.
+		update(t, m, windowMsg(100, 24))
 		require.NotContains(t, plain(m.render()), "Fix the parser")
 
 		update(t, m, pressCtrlP)

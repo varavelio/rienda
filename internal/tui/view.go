@@ -13,6 +13,7 @@ import (
 
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/version"
 )
 
 // brand is the name of the interface, shown at the top of every phase.
@@ -103,12 +104,28 @@ func (m *model) renderPhase() string {
 	}
 }
 
-// brandIdentity renders the logo and the name that open the identity line of
-// every phase. The logo stays static and shares the faint color of the header
-// text, so it reads as part of the identity rather than drawing the eye; the
-// status line carries the only animation of the interface.
+// brandIdentity renders the logo, the name of the interface and its build
+// version, which open the identity line of every phase. The logo and the
+// version stay static and share the faint color of the header text, so they
+// read as part of the identity rather than drawing the eye, while the name
+// carries the emphasis; the status line carries the only animation of the
+// interface.
 func (m *model) brandIdentity() string {
-	return m.styles.header.Render(varavelLogo+" · ") + m.styles.title.Render(brand)
+	return m.styles.header.Render(varavelLogo+" · ") +
+		m.styles.title.Render(brand) +
+		m.styles.header.Render(" · "+brandVersion())
+}
+
+// brandVersion returns the build version that closes the identity of the
+// interface, tagged so it reads as a version. A development build shows the
+// placeholder of the version package untagged, because it carries no release
+// number to tag.
+func brandVersion() string {
+	number := version.Number()
+	if number == "dev" {
+		return number
+	}
+	return "v" + number
 }
 
 // headerRows returns the rows that open a phase: the identity line, the

@@ -21,6 +21,7 @@ import (
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/tokens"
+	"github.com/varavelio/rienda/internal/version"
 )
 
 // plain strips the styling and the padding of rendered output.
@@ -206,7 +207,11 @@ func TestView(t *testing.T) {
 
 		view := plain(m.render())
 
-		require.Contains(t, view, "rienda · coder · fake/test-model · session-1")
+		require.Contains(
+			t,
+			view,
+			brand+" · "+brandVersion()+" · coder · fake/test-model · session-1",
+		)
 		require.Contains(t, view, "You")
 		require.Contains(t, view, "hello")
 		require.Contains(t, view, "Agent: thinking")
@@ -794,18 +799,20 @@ func TestView(t *testing.T) {
 		require.Contains(t, view, "esc close")
 	})
 
-	t.Run("opens every identity line with the brand logo", func(t *testing.T) {
+	t.Run("opens every identity line with the brand logo and version", func(t *testing.T) {
 		m, _ := chatModel(t)
 		update(t, m, windowMsg(80, 24))
 
-		require.Contains(t, plain(m.render()), varavelLogo+" \u00b7 varavel rienda")
+		identity := varavelLogo + " \u00b7 " + brand + " \u00b7 " + brandVersion()
+
+		require.Contains(t, plain(m.render()), identity)
 
 		menu := newTestModelWith(t, modelConfig{
 			agents:   []agent.Agent{{ID: "coder"}},
 			selected: 0,
 			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
 		})
-		require.Contains(t, plain(menu.render()), varavelLogo+" \u00b7 varavel rienda")
+		require.Contains(t, plain(menu.render()), identity)
 	})
 
 	t.Run("renders the alternate screen and reports the wheel", func(t *testing.T) {
@@ -1823,5 +1830,48 @@ func TestTreeScrollMargin(t *testing.T) {
 		require.Equal(t, len(m.tree.nodes), last)
 		require.True(t, m.tree.nodes[m.tree.filter.shown[last-1]].current,
 			"the turn the session is at rests on the last row of the tree")
+	})
+}
+
+// withBrandVersion runs a test against an injected build version and restores
+// the metadata of the version package afterwards.
+func withBrandVersion(t *testing.T, value string, test func()) {
+	t.Helper()
+	previous := version.Version
+	version.Version = value
+	t.Cleanup(func() { version.Version = previous })
+
+	test()
+}
+
+// TestBrandVersion verifies the version token that closes the identity of the
+// interface.
+func TestBrandVersion(t *testing.T) {
+	t.Run("tags the version injected at build time", func(t *testing.T) {
+		withBrandVersion(t, "1.2.3", func() {
+			require.Equal(t, "v1.2.3", brandVersion())
+
+			m, _ := chatModel(t)
+			update(t, m, windowMsg(80, 24))
+
+			require.Contains(
+				t,
+				plain(m.render()),
+				varavelLogo+" \u00b7 varavel rienda \u00b7 v1.2.3",
+				"the version reaches the header of every phase",
+			)
+		})
+	})
+
+	t.Run("shows the development version untagged", func(t *testing.T) {
+		withBrandVersion(t, "dev", func() {
+			require.Equal(t, "dev", brandVersion())
+		})
+	})
+
+	t.Run("shows an empty version as the development one", func(t *testing.T) {
+		withBrandVersion(t, "", func() {
+			require.Equal(t, "dev", brandVersion())
+		})
 	})
 }
