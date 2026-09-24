@@ -807,9 +807,11 @@ type identity struct {
 	model string
 
 	// thinking is the extended thinking level the configuration declares for
-	// the model the branch runs, empty when it declares none. It is shown
-	// beside the model, because it is a setting of that model rather than a
-	// part of the reference.
+	// the model the branch runs, empty when it declares none. The header does
+	// not show it: the level reads from the model reference itself, which the
+	// user is free to name, and a duplicate beside it only adds noise. It is
+	// kept in the identity so a screen that needs the level has it cached with
+	// the rest of what it shows, without reading the session.
 	thinking string
 
 	// id is the session identifier.
@@ -843,13 +845,7 @@ func identityFrom(s Session) identity {
 // which closes the line so the reader sees the name the session is found under
 // in the list. It renders the cached identity, so it never reads the session.
 func (m *model) chatIdentity() string {
-	// The thinking level belongs to the model, so it is written right after the
-	// reference and never takes a separator of its own.
-	model := m.identity.model
-	if m.identity.thinking != "" {
-		model += " " + m.identity.thinking
-	}
-	parts := []string{m.identity.agent, model}
+	parts := []string{m.identity.agent, m.identity.model}
 	if m.identity.id != "" {
 		parts = append(parts, m.identity.id)
 	}

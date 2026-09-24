@@ -76,10 +76,7 @@
 // offers it under, which is how a session the user comes back to is found
 // again; an empty name removes it and leaves the one derived from the first
 // message in its place. The name is shown in the identity line of the
-// conversation, after the session id, only when the user gave one. The
-// extended thinking level the configuration declares for the model the branch
-// runs closes the model of the same line, right after its reference and only
-// when the model declares one.
+// conversation, after the session id, only when the user gave one.
 // The manual compaction is offered only when the branch still holds something
 // to summarize and no run is in flight, and it shares the code path, the prompt
 // and the events of an automatic one. A command the interface cannot run stays
