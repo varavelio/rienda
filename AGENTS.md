@@ -36,7 +36,8 @@ Keep this file current and minimal. Update it only when repository-wide workflow
 - When assigned a task, do not respond or stop until the requested task is complete
 - Every time you finish your task run `task ci` for code checks. If it fails, fix failures caused by your own changes until it passes; stay within the scope of your changes and ignore pre-existing unrelated failures
 - All code, code comments, inline documentation, commit messages, and any other text in the project MUST be written in English
-- Any function, variable, constant, or other identifier must have a high-quality Godoc idiomatic comment written in plain English, following industry best practices and explaining its purpose and what it does (without including implementation details that are redundant when reading the code).
+- Any function, variable, constant, or other identifier must have a high-quality Godoc idiomatic comment written in plain English, following industry best practices and explaining its purpose and what it does (without including implementation details that are redundant when reading the code)
+- Never read files that are inside the `./temp` or `./tmp` folders, as these are folders where there are temporary files unrelated to your work (unless the user requests it)
 
 ## Testing
 
