@@ -136,19 +136,29 @@ func New(cfg Config) (*Engine, error) {
 		agents[definition.ID] = definition
 	}
 
-	// The agent and the model the session starts on are resolved eagerly, so a
-	// definition that declares a tool the harness does not provide, or a model
-	// reference the configuration does not hold, fails the session instead of
-	// the run that first selects it.
-	initial, found := agents[cfg.Store.ActiveAgent()]
-	if !found {
-		return nil, fmt.Errorf("engine: unknown agent %q", cfg.Store.ActiveAgent())
+	// The model the session starts on is resolved eagerly when the
+	// configuration holds it, so a broken provider fails the session instead
+	// of the run that first sends it. A model the configuration no longer
+	// holds does not fail the session: the branch holds nothing to run until
+	// another selection names a model that exists, which is what lets a front
+	// end read a conversation whose model disappeared (see Runnable).
+	if ref := cfg.Store.ActiveModel(); slices.Contains(cfg.Resolver.Refs(), ref) {
+		if _, _, err := cfg.Resolver.Resolve(ref); err != nil {
+			return nil, fmt.Errorf("engine: resolve model: %w", err)
+		}
 	}
-	if _, err := resolveTools(cfg.Registry, initial.Tools); err != nil {
-		return nil, err
-	}
-	if _, _, err := cfg.Resolver.Resolve(cfg.Store.ActiveModel()); err != nil {
-		return nil, fmt.Errorf("engine: resolve model: %w", err)
+
+	// The definition the branch opens on is resolved eagerly only when the
+	// roster still holds it: a definition that declares a tool the harness
+	// does not provide fails the session instead of the run that first
+	// selects it. A branch whose agent is gone, because the definition was
+	// renamed or removed, still opens: it holds nothing to run until another
+	// selection names an agent that exists, which is what lets a front end
+	// read a conversation whose agent disappeared.
+	if initial, found := agents[cfg.Store.ActiveAgent()]; found {
+		if _, err := resolveTools(cfg.Registry, initial.Tools); err != nil {
+			return nil, err
+		}
 	}
 
 	return &Engine{

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/varavelio/rienda/internal/agent"
+	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/version"
@@ -194,6 +197,10 @@ func (m *model) viewStart() string {
 // a stored session with its agent and age. The entries the list offers are the
 // ones it read last, so a session created while the interface runs shows up
 // once the list opens again.
+//
+// A session whose agent definition is gone is offered like any other, marked so
+// the reader knows before opening it that the conversation is read but not run
+// until another agent is selected.
 func (m *model) startLine(position int) string {
 	item := m.starts[m.start.shown[position]]
 	if item.newSession {
@@ -201,8 +208,31 @@ func (m *model) startLine(position int) string {
 	}
 
 	info := item.info
-	details := m.styles.dim.Render(info.Agent + " · " + formatAge(info.UpdatedAt))
-	return m.clip(m.row(position == m.start.cursor, sessionTitle(info)) + "  " + details)
+	agent := sessionAgent(info)
+	details := m.styles.dim.Render(agent + " · " + formatAge(info.UpdatedAt))
+	line := m.row(position == m.start.cursor, sessionTitle(info)) + "  " + details
+	if !m.knowsAgent(agent) {
+		line += "  " + m.styles.notice.Render("agent missing")
+	}
+	return m.clip(line)
+}
+
+// sessionAgent returns the agent a stored session runs, falling back to the
+// agent of its header for a session whose metadata does not resolve the active
+// branch, which is the case of the ones the interface was handed directly.
+func sessionAgent(info session.Info) string {
+	if info.ActiveAgent != "" {
+		return info.ActiveAgent
+	}
+	return info.Agent
+}
+
+// knowsAgent reports whether the interface holds a definition for an agent, so
+// the start list can mark a session whose agent is gone without opening it.
+func (m *model) knowsAgent(id string) bool {
+	return slices.ContainsFunc(m.agents, func(definition agent.Agent) bool {
+		return definition.ID == id
+	})
 }
 
 // sessionTitle returns the title of a session, naming the ones that were never
@@ -743,6 +773,10 @@ func (m *model) activityBlock() string {
 func (m *model) activityLine() string {
 	if !m.running {
 		switch {
+		case m.runnable != nil:
+			return m.clip(m.styles.notice.Render(
+				"⏸ " + m.stoppedLabel() + " · select a running one to send",
+			))
 		case m.rewound && m.fork:
 			return m.clip(m.styles.notice.Render(
 				"↩ rewound · the next message starts a new branch",
@@ -765,6 +799,19 @@ func (m *model) activityLine() string {
 		m.styles.dim.Render(formatElapsed(time.Since(m.runStart))) +
 		m.styles.footer.Render(" · ") + hint
 	return m.clip(line)
+}
+
+// stoppedLabel explains why the branch the conversation shows holds nothing to
+// run, naming the agent or the model the branch runs that the roster no longer
+// holds. It is the notice the status line shows instead of a run in flight, so
+// a conversation whose agent disappeared says what to do about it.
+func (m *model) stoppedLabel() string {
+	switch m.runnable.Kind {
+	case engine.RunnableUnknownModel:
+		return "the model " + m.runnable.ID + " is gone"
+	default:
+		return "the agent " + m.runnable.ID + " is gone"
+	}
 }
 
 // activityLabel describes what the run in flight is doing.

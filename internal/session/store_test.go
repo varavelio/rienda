@@ -1261,6 +1261,27 @@ func TestList(t *testing.T) {
 		require.Equal(t, infos[0].CreatedAt, infos[0].UpdatedAt)
 	})
 
+	t.Run("reports the agent each session runs now", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(
+			t.Context(),
+			dir,
+			Header{Agent: "coder", Model: "test/model"},
+			&stubGenerator{},
+		)
+		require.NoError(t, err)
+		appendMessage(t, store, llm.RoleUser, "hello")
+		require.NoError(t, store.SetAgent(t.Context(), "writer"))
+		require.NoError(t, store.Close())
+
+		infos, err := List(dir)
+		require.NoError(t, err)
+		require.Len(t, infos, 1)
+		require.Equal(t, "coder", infos[0].Agent, "the header keeps the owner it was created with")
+		require.Equal(t, "writer", infos[0].ActiveAgent,
+			"the session reports the agent the branch runs now")
+	})
+
 	t.Run("collects corrupt sessions without hiding the rest", func(t *testing.T) {
 		dir := t.TempDir()
 		store, err := Create(

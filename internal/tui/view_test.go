@@ -2029,3 +2029,17 @@ func TestBrandVersion(t *testing.T) {
 		})
 	})
 }
+
+// TestChatStopped verifies the conversation whose branch holds nothing to run,
+// read but not run until an agent that exists is selected.
+func TestChatStopped(t *testing.T) {
+	t.Run("keeps the prompt and the hint of the run in flight", func(t *testing.T) {
+		m, _ := resumedAgentModel(t)
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "@ files")
+		require.Contains(t, view, "enter send")
+		require.Contains(t, view, "select a running one to send")
+	})
+}

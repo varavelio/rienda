@@ -235,13 +235,6 @@ func TestNew(t *testing.T) {
 				wantErr: "model resolver is required",
 			},
 			{
-				name: "a branch whose model the configuration does not hold",
-				mutate: func(cfg *Config) {
-					cfg.Resolver = &testResolver{models: map[string]Model{"other/model": {}}}
-				},
-				wantErr: `unknown model "test/model"`,
-			},
-			{
 				name:    "relative workdir",
 				mutate:  func(cfg *Config) { cfg.Workdir = "relative" },
 				wantErr: "workdir must be an absolute path",
@@ -255,11 +248,6 @@ func TestNew(t *testing.T) {
 				name:    "an agent without an id",
 				mutate:  func(cfg *Config) { cfg.Agents = []agent.Agent{{}} },
 				wantErr: "every agent needs an id",
-			},
-			{
-				name:    "an agent the session does not run",
-				mutate:  func(cfg *Config) { cfg.Agents = []agent.Agent{{ID: "ghost"}} },
-				wantErr: `unknown agent "coder"`,
 			},
 			{
 				name: "declared tools without a registry",
@@ -296,6 +284,44 @@ func TestNew(t *testing.T) {
 		require.Contains(t, engine.agents, "coder")
 		require.True(t, engine.KnowsAgent("coder"))
 		require.False(t, engine.KnowsAgent("ghost"))
+	})
+
+	t.Run("opens a branch whose agent is gone", func(t *testing.T) {
+		// A branch names the agent of its header, which the roster no longer
+		// holds: the session still opens so a front end reads the
+		// conversation, and reports that it holds nothing to run.
+		engine, store := newTestEngine(t, Config{
+			Agents: []agent.Agent{{ID: "reviewer"}},
+		})
+		require.NoError(t, store.SetAgent(t.Context(), "ghost"))
+
+		refusal, refused := engine.Runnable()
+
+		require.True(t, refused)
+		require.Equal(t, RunnableUnknownAgent, refusal.Kind)
+		require.Equal(t, "ghost", refusal.ID)
+	})
+
+	t.Run("opens a branch whose model is gone", func(t *testing.T) {
+		engine, store := newTestEngine(t, Config{
+			Resolver: &testResolver{models: map[string]Model{"other/model": {}}},
+		})
+		require.NoError(t, store.SetModel(t.Context(), "test/model"))
+
+		refusal, refused := engine.Runnable()
+
+		require.True(t, refused)
+		require.Equal(t, RunnableUnknownModel, refusal.Kind)
+		require.Equal(t, "test/model", refusal.ID)
+	})
+
+	t.Run("reports a runnable branch", func(t *testing.T) {
+		engine, _ := newTestEngine(t, Config{})
+
+		refusal, refused := engine.Runnable()
+
+		require.False(t, refused)
+		require.Equal(t, RunnableRefusal{}, refusal)
 	})
 
 	t.Run("resolves the tools of the agent", func(t *testing.T) {

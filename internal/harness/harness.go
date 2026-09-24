@@ -195,6 +195,16 @@ func (s *Session) SetModel(ctx context.Context, ref string) error {
 	return nil
 }
 
+// Runnable reports why the branch of the session holds nothing to run and
+// false when it holds something: the agent the branch runs must be one of the
+// definitions of the roster and the model it runs one the configuration holds.
+// A branch that holds nothing to run still walks and reads, so a front end
+// shows the conversation and waits for a selection instead of refusing the
+// session.
+func (s *Session) Runnable() (engine.RunnableRefusal, bool) {
+	return s.engine.Runnable()
+}
+
 // SetTag replaces the tag of the entry identified by id, an empty tag removing
 // the one it carries.
 func (s *Session) SetTag(id, tag string) error {
@@ -252,7 +262,7 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, fmt.Errorf("harness: load agents: %w", err)
 	}
 
-	store, err := openSession(ctx, opts, sessionDir{
+	store, err := openSession(ctx, opts, cfg, sessionDir{
 		dir:     projectDir,
 		workdir: workdir,
 		agents:  agentsDir,
@@ -331,8 +341,21 @@ type sessionDir struct {
 // Resuming with an agent or a model selects it on the branch that continues the
 // conversation, which is the same change SetAgent and SetModel make. The
 // selection is validated before it is written, so a session never ends up
-// pointing at an agent or a model no run can honor.
-func openSession(ctx context.Context, opts Options, place sessionDir) (*session.Store, error) {
+// pointing at an agent or a model no run can honor. Resuming without them is
+// lenient instead: a stored agent or model that is gone opens the conversation
+// for reading, with nothing to run until another selection names one that
+// exists, which is what lets a front end read a session whose definition was
+// renamed or removed.
+//
+// Creating a session is strict: the user asked to run the agent now, so the
+// model it runs is resolved against the configuration here, and a broken
+// definition fails before anything is written.
+func openSession(
+	ctx context.Context,
+	opts Options,
+	cfg *config.Config,
+	place sessionDir,
+) (*session.Store, error) {
 	sessionID := strings.TrimSpace(opts.SessionID)
 	agentID := strings.TrimSpace(opts.AgentID)
 	modelRef := strings.TrimSpace(opts.ModelRef)
@@ -380,6 +403,12 @@ func openSession(ctx context.Context, opts Options, place sessionDir) (*session.
 			return nil, undefinedModel(modelRef)
 		}
 		model = modelRef
+	}
+	// The model the session is created with is resolved here, so a definition
+	// that declares a model the configuration does not hold fails before the
+	// session is written rather than at its first run.
+	if _, err := cfg.Resolve(model); err != nil {
+		return nil, fmt.Errorf("harness: model %q: %w", model, err)
 	}
 	store, err := session.Create(ctx, place.dir, session.Header{
 		Agent:   definition.ID,

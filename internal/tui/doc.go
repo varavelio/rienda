@@ -72,7 +72,11 @@
 // model that runs it. A selection the agent directory or the configuration no
 // longer holds leaves the branch with nothing to run: the conversation is
 // still walked and read, but sending waits until another agent or model is
-// selected. Naming the session gives it the title the start list
+// selected. A session whose agent is gone is offered like any other, marked in
+// the start list so the reader knows before opening it, and the conversation
+// says in the status line which agent or model is missing, so a definition that
+// was renamed or removed never hides the sessions that ran on it. Naming the
+// session gives it the title the start list
 // offers it under, which is how a session the user comes back to is found
 // again; an empty name removes it and leaves the one derived from the first
 // message in its place. The name is shown in the identity line of the

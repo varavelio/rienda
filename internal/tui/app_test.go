@@ -95,17 +95,17 @@ func TestSelectAgent(t *testing.T) {
 
 // TestResumable verifies which stored sessions the interface offers.
 func TestResumable(t *testing.T) {
-	definitions := []agent.Agent{{ID: "coder"}}
 	infos := []session.Info{
 		{ID: "session-1", Agent: "coder", Title: "hello"},
 		{ID: "session-2", Agent: "writer", Title: "hello"},
 		{ID: "session-3", Agent: "coder"},
 	}
 
-	kept := resumable(infos, definitions)
+	kept := resumable(infos)
 
-	require.Len(t, kept, 1)
+	require.Len(t, kept, 2)
 	require.Equal(t, "session-1", kept[0].ID)
+	require.Equal(t, "session-2", kept[1].ID, "a session whose agent is gone is still offered")
 }
 
 // TestRun verifies the entry point of the interface.

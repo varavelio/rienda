@@ -384,7 +384,7 @@ func TestPrepare(t *testing.T) {
 		}
 	})
 
-	t.Run("reports unknown agent models", func(t *testing.T) {
+	t.Run("reports unknown agent models of a new session", func(t *testing.T) {
 		env := newTestEnvironment(t)
 		env.writeAgent(t, "coder", "fake/missing")
 
@@ -487,12 +487,14 @@ func TestPrepare(t *testing.T) {
 		require.ErrorContains(t, err, "open session")
 	})
 
-	t.Run("reports sessions whose agent is gone", func(t *testing.T) {
-		env := newTestEnvironment(t)
+	t.Run("opens a session whose agent is gone with nothing to run", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
 		stored := env.prepare(t)
+		collectEvents(stored.Run(t.Context(), "first"))
+		require.NoError(t, stored.Close())
 
-		// Another agent stays in the roster, so the failure is the missing
-		// agent of the session rather than an empty agent directory.
+		// Another agent stays in the roster, so what is missing is the agent
+		// of the session rather than an empty agent directory.
 		env.writeAgent(t, "reviewer", "fake/test-model")
 		require.NoError(t, os.Remove(env.agentPath("coder")))
 
@@ -500,9 +502,30 @@ func TestPrepare(t *testing.T) {
 		options.AgentID = ""
 		options.SessionID = stored.ID()
 
-		_, err := Prepare(t.Context(), options)
+		resumed, err := Prepare(t.Context(), options)
+		require.NoError(t, err, "the conversation is still read")
+		t.Cleanup(func() { require.NoError(t, resumed.Close()) })
 
-		require.ErrorContains(t, err, `unknown agent "coder"`)
+		require.Equal(t, "first", resumed.Branch()[0].Message.Blocks[0].Text)
+
+		refusal, refused := resumed.Runnable()
+		require.True(t, refused)
+		require.Equal(t, engine.RunnableUnknownAgent, refusal.Kind)
+		require.Equal(t, "coder", refusal.ID)
+
+		// The run refuses before writing, so the conversation stays as it was.
+		events := collectEvents(resumed.Run(t.Context(), "second"))
+		require.Equal(
+			t,
+			[]engine.EventType{engine.EventError, engine.EventRunEnd},
+			eventTypeList(events),
+		)
+		require.Contains(t, events[0].Error, `unknown agent "coder"`)
+
+		// Selecting the agent that exists makes the branch run again.
+		require.NoError(t, resumed.SetAgent(t.Context(), "reviewer"))
+		_, refused = resumed.Runnable()
+		require.False(t, refused)
 	})
 
 	t.Run("switches the agent of a resumed session", func(t *testing.T) {

@@ -68,9 +68,9 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		agents:    definitions,
 		selected:  selected,
 		requested: opts.AgentID != "",
-		sessions:  listSessions(opts, definitions),
+		sessions:  listSessions(opts),
 		scanSessions: func() []session.Info {
-			return listSessions(opts, definitions)
+			return listSessions(opts)
 		},
 		newSession: func(agentID string) (Session, error) {
 			return prepare("", agentID)
@@ -93,16 +93,14 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 }
 
 // listSessions returns the sessions the interface offers for the workspace of
-// the options: the ones whose agent definition is still available and that
-// hold a conversation, most recently updated first. Sessions that cannot be
-// read are skipped, so a single corrupt session file never blocks the
-// interface.
-func listSessions(opts options, definitions []agent.Agent) []session.Info {
+// the options, most recently updated first. Sessions that cannot be read are
+// skipped, so a single corrupt session file never blocks the interface.
+func listSessions(opts options) []session.Info {
 	infos, _ := harness.Sessions(harness.Options{
 		Workdir:    opts.Workdir,
 		ConfigPath: opts.ConfigPath,
 	})
-	return resumable(infos, definitions)
+	return resumable(infos)
 }
 
 // newFileScanner returns the read that completes the mentions of the prompt,
@@ -140,17 +138,16 @@ func loadAgents(dir string) ([]agent.Agent, error) {
 	return definitions, nil
 }
 
-// resumable keeps the sessions the interface can open: those whose agent
-// definition is still available and that hold a conversation.
-func resumable(infos []session.Info, definitions []agent.Agent) []session.Info {
-	available := make(map[string]bool, len(definitions))
-	for _, definition := range definitions {
-		available[definition.ID] = true
-	}
-
+// resumable keeps the sessions the interface offers: those that hold a
+// conversation. A session whose agent definition is gone is offered like any
+// other, because the conversation it holds is still worth reading and
+// continuing once another agent is selected: the list marks it, the
+// conversation opens on it, and sending waits until an agent that exists is
+// selected.
+func resumable(infos []session.Info) []session.Info {
 	kept := make([]session.Info, 0, len(infos))
 	for _, info := range infos {
-		if available[info.Agent] && info.Title != "" {
+		if info.Title != "" {
 			kept = append(kept, info)
 		}
 	}

@@ -380,6 +380,12 @@ type Session interface {
 	// carrying its events. It ignores the compaction threshold.
 	Compact(ctx context.Context) <-chan engine.Event
 
+	// Runnable reports why the active branch holds nothing to run, and false
+	// when it holds something. The interface reads it to block sending on a
+	// branch whose agent or model is gone and to say what is missing, instead
+	// of failing the run the user asked for.
+	Runnable() (engine.RunnableRefusal, bool)
+
 	// Tree returns every entry of the session in append order, the branches
 	// the user left behind included, which is what the tree screen navigates.
 	Tree() []session.Entry
@@ -625,6 +631,13 @@ type model struct {
 	// every change to the conversation, and a branch the interface opens or
 	// returns to refreshes it from the session (see refreshContext).
 	context tokens.Report
+
+	// runnable is why the branch the conversation shows holds nothing to run,
+	// or nil when it holds something. It is cached, like the identity and the
+	// context, because it reads the session, which a run holds while it works,
+	// and because the prompt must refuse to send without touching the session.
+	// It is refreshed whenever the branch changes.
+	runnable *engine.RunnableRefusal
 
 	// runStart is when the run in flight started, kept to report how long the
 	// turn takes. It is the zero time while no run is in flight.
@@ -1878,7 +1891,7 @@ func (m *model) enterChat(prepared Session) tea.Cmd {
 // submit sends the prompt held by the input to the agent.
 func (m *model) submit() tea.Cmd {
 	prompt := strings.TrimSpace(m.input.Value())
-	if prompt == "" || m.running || m.session == nil {
+	if prompt == "" || m.running || m.session == nil || m.runnable != nil {
 		return nil
 	}
 
@@ -2172,7 +2185,7 @@ func (m *model) activityHeight() int {
 	switch {
 	case m.running:
 		want = activityRows
-	case m.rewound:
+	case m.runnable != nil, m.rewound:
 		want = noticeRows
 	}
 	room := m.height - brandRows - inputBoxRows - chatFooterRows - m.input.Height() - minInputRows
@@ -2237,15 +2250,33 @@ func (m *model) applyContext(info *engine.ContextInfo) {
 	m.context = tokens.Report{Used: info.Used, Window: info.Window, Percent: info.Percent}
 }
 
+// refreshRunnable records why the branch the conversation shows holds nothing
+// to run, or clears the reason when it holds something. It reads the session
+// once per change of the branch, never once per frame, so the prompt can refuse
+// to send without touching the session a run holds.
+func (m *model) refreshRunnable() {
+	if m.session == nil {
+		m.runnable = nil
+		return
+	}
+	refusal, refused := m.session.Runnable()
+	if !refused {
+		m.runnable = nil
+		return
+	}
+	m.runnable = &refusal
+}
+
 // reloadTranscript rebuilds the conversation from the active branch of the
 // session, used whenever the branch the interface shows changes: a session that
 // was opened, a session the user returned to an earlier turn, and a run that
-// wrote a checkpoint. It also refreshes the identity the header shows, because
-// both read the same session and change at the same moments, which keeps the
-// two from ever disagreeing. The store serializes the read, so the one call
-// made while a run is in flight is safe.
+// wrote a checkpoint. It also refreshes the identity the header shows and what
+// the branch can run, because all three read the same session and change at the
+// same moments, which keeps them from ever disagreeing. The store serializes
+// the read, so the one call made while a run is in flight is safe.
 func (m *model) reloadTranscript() {
 	m.identity = identityFrom(m.session)
+	m.refreshRunnable()
 	m.transcript = transcript{}
 	m.transcript.load(m.session.DisplayedBranch(), m.session.Info().Agent)
 	m.invalidateTranscript()

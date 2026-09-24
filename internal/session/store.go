@@ -42,8 +42,17 @@ type Info struct {
 	// ID is the session identifier.
 	ID string
 
-	// Agent is the ID of the agent that owns the session.
+	// Agent is the ID of the agent that owns the session, which is the agent
+	// its header records. It is fixed for the life of the session, so a
+	// conversation that switched agent still names its owner here.
 	Agent string
+
+	// ActiveAgent is the ID of the agent the active branch runs now: the
+	// newest agent selection of the branch, or the owner above when the branch
+	// selects none. It is what a front end checks against its roster to know
+	// whether a stored session still has an agent to run, which the owner
+	// alone cannot answer once the conversation switched agent.
+	ActiveAgent string
 
 	// Model is the provider/model reference of the session.
 	Model string
@@ -206,7 +215,7 @@ func Open(dir, id string, generator IDGenerator) (*Store, error) {
 		path:      path,
 		file:      file,
 		generator: generator,
-		info:      infoFrom(header, entries, title),
+		info:      infoFrom(header, entries, leaf, title),
 		entries:   entries,
 		index:     index,
 		leaf:      leaf,
@@ -236,12 +245,12 @@ func List(dir string) ([]Info, error) {
 		}
 
 		id := strings.TrimSuffix(name, Extension)
-		header, entries, _, title, err := load(dir, id)
+		header, entries, leaf, title, err := load(dir, id)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		infos = append(infos, infoFrom(header, entries, title))
+		infos = append(infos, infoFrom(header, entries, leaf, title))
 	}
 
 	slices.SortFunc(infos, func(a, b Info) int {
@@ -926,22 +935,50 @@ func load(dir, id string) (storedHeader, []Entry, string, string, error) {
 
 // infoFrom builds the metadata of a decoded session. The title is the one the
 // user gave the session, falling back to the one derived from its first user
-// message when it carries none.
-func infoFrom(header storedHeader, entries []Entry, title string) Info {
+// message when it carries none. The agent the active branch runs is resolved
+// from the leaf, so a session that switched agent reports the one it runs now
+// rather than the owner of its header.
+func infoFrom(header storedHeader, entries []Entry, leaf, title string) Info {
 	info := Info{
-		ID:        header.ID,
-		Agent:     header.Agent,
-		Model:     header.Model,
-		Workdir:   header.Workdir,
-		Title:     effectiveTitle(title, entries),
-		Named:     title != "",
-		CreatedAt: header.CreatedAt,
-		UpdatedAt: header.CreatedAt,
+		ID:          header.ID,
+		Agent:       header.Agent,
+		ActiveAgent: activeAgentOf(header.Agent, entries, leaf),
+		Model:       header.Model,
+		Workdir:     header.Workdir,
+		Title:       effectiveTitle(title, entries),
+		Named:       title != "",
+		CreatedAt:   header.CreatedAt,
+		UpdatedAt:   header.CreatedAt,
 	}
 	if len(entries) > 0 {
 		info.UpdatedAt = entries[len(entries)-1].CreatedAt
 	}
 	return info
+}
+
+// activeAgentOf returns the identifier of the agent the branch that ends at
+// leaf runs: the agent the newest KindAgent entry of that branch selects, or
+// the owner recorded in the header when the branch selects none. It answers
+// what the store resolves through ActiveAgent, without the store, so listing
+// the sessions of a directory reports the same agent each of them would run.
+func activeAgentOf(owner string, entries []Entry, leaf string) string {
+	index := make(map[string]int, len(entries))
+	for position, entry := range entries {
+		index[entry.ID] = position
+	}
+
+	for id := leaf; id != ""; {
+		position, found := index[id]
+		if !found {
+			break
+		}
+		entry := entries[position]
+		if entry.Kind == KindAgent {
+			return entry.AgentID
+		}
+		id = entry.ParentID
+	}
+	return owner
 }
 
 // effectiveTitle returns the name of a session: the one the user gave it when

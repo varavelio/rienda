@@ -18,7 +18,10 @@
 // the selection is appended to the branch that wrote it, so another branch of
 // the same session keeps what it was running, and the header records what the
 // session was created with. An agent or a model the roster does not hold leaves
-// the branch with nothing to run until another selection names one that exists.
+// the branch with nothing to run until another selection names one that exists,
+// which a front end reads through Runnable: the conversation still opens and is
+// read, and the run refuses on the same check, so the reason a front end
+// explains never disagrees with what a run would do.
 //
 // Preparing a session also resolves the context window of its model, from the
 // configuration, the model catalog or a conservative fallback, and builds the

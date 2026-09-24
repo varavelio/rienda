@@ -48,6 +48,8 @@ type fakeSession struct {
 	titleErr     error
 	context      tokens.Report
 	contextErr   error
+	runnable     engine.RunnableRefusal
+	stopped      bool
 	refusal      compaction.Refusal
 	refused      bool
 	compact      chan engine.Event
@@ -86,6 +88,9 @@ func (s *fakeSession) DisplayedBranch() []session.Entry { return s.entries }
 
 // Context returns the scripted context report of the session.
 func (s *fakeSession) Context() (tokens.Report, error) { return s.context, s.contextErr }
+
+// Runnable reports the scripted reason the branch holds nothing to run.
+func (s *fakeSession) Runnable() (engine.RunnableRefusal, bool) { return s.runnable, s.stopped }
 
 // CompactRefusal reports the scripted reason the manual compaction cannot run.
 func (s *fakeSession) CompactRefusal() (compaction.Refusal, bool) { return s.refusal, s.refused }
@@ -256,6 +261,14 @@ func (s *storeSession) DisplayedBranch() []session.Entry { return s.store.Displa
 func (s *storeSession) Context() (tokens.Report, error) {
 	used := len(s.store.Branch()) * 100
 	return tokens.Measure(used, 1000), nil
+}
+
+// Runnable reports whether the branch the store runs still has an agent and a
+// model the session may run. A store-backed session knows no roster of its
+// own, so the agent the store runs is trusted, which keeps the interface tests
+// over a real store running their branch as the store enforces it.
+func (s *storeSession) Runnable() (engine.RunnableRefusal, bool) {
+	return engine.RunnableRefusal{}, false
 }
 
 // CompactRefusal reports why the active branch holds nothing to compact, and
@@ -3199,6 +3212,12 @@ func (s *readCountingSession) CompactRefusal() (compaction.Refusal, bool) {
 	return s.Session.CompactRefusal()
 }
 
+// Runnable records the read of what the branch can run.
+func (s *readCountingSession) Runnable() (engine.RunnableRefusal, bool) {
+	s.count("Runnable")
+	return s.Session.Runnable()
+}
+
 // Tree records the read of the whole tree.
 func (s *readCountingSession) Tree() []session.Entry {
 	s.count("Tree")
@@ -3324,4 +3343,140 @@ func TestRunReadsNoSession(t *testing.T) {
 		// the footer follows it.
 		require.Contains(t, counting.reads, "Context")
 	})
+}
+
+// resumedAgentModel opens an interface over a session whose branch runs an
+// agent the interface no longer holds, which is the case of a session the user
+// continued after renaming the agent definition it ran.
+func resumedAgentModel(t *testing.T) (*model, *fakeSession) {
+	t.Helper()
+
+	scripted := newFakeSession()
+	scripted.info.Agent = "coder"
+	scripted.activeAgent = "coder"
+	scripted.runnable = engine.RunnableRefusal{Kind: engine.RunnableUnknownAgent, ID: "coder"}
+	scripted.stopped = true
+
+	m := newTestModelWith(t, modelConfig{
+		agents:   []agent.Agent{{ID: "new-coder"}},
+		selected: -1,
+		sessions: []session.Info{{ID: "session-1", Agent: "coder", Title: "old"}},
+		resumeSession: func(string) (Session, error) {
+			return scripted, nil
+		},
+	})
+	update(t, m, windowMsg(80, 24))
+	require.Equal(t, phaseStart, m.phase)
+
+	// The offer to begin a new session leads the list, so the stored session
+	// is one row down.
+	update(t, m, pressDown)
+	run(t, m, update(t, m, pressEnter))
+
+	require.Equal(t, phaseChat, m.phase)
+	return m, scripted
+}
+
+// TestStoppedBranch verifies the conversation whose branch holds nothing to
+// run: the session opens and is read, sending waits, and selecting an agent
+// that exists takes it forward again.
+func TestStoppedBranch(t *testing.T) {
+	t.Run("opens a session whose agent is gone", func(t *testing.T) {
+		m, _ := resumedAgentModel(t)
+
+		require.NotNil(t, m.session)
+		require.NotNil(t, m.runnable)
+		require.Equal(t, engine.RunnableUnknownAgent, m.runnable.Kind)
+	})
+
+	t.Run("refuses to send a prompt", func(t *testing.T) {
+		m, scripted := resumedAgentModel(t)
+
+		m.input.SetValue("hello")
+		cmd := update(t, m, pressEnter)
+
+		require.Nil(t, cmd, "sending waits until an agent that exists is selected")
+		require.False(t, m.running)
+		require.Empty(t, scripted.prompts)
+		require.Equal(t, "hello", m.input.Value(), "the prompt stays where it was")
+	})
+
+	t.Run("says what is missing in the status line", func(t *testing.T) {
+		m, _ := resumedAgentModel(t)
+
+		require.Contains(t, plain(m.render()), "the agent coder is gone")
+		require.Contains(t, plain(m.render()), "select a running one to send")
+		require.Equal(t, noticeRows, m.activityHeight(), "the notice breathes like a branch one")
+	})
+
+	t.Run("runs again once an agent that exists is selected", func(t *testing.T) {
+		m, scripted := resumedAgentModel(t)
+
+		// The selection clears the reason and the prompt sends again.
+		scripted.stopped = false
+		update(t, m, pressCtrlX)
+		update(t, m, pressA)
+		require.Equal(t, phasePicker, m.phase)
+		run(t, m, update(t, m, pressEnter))
+		require.Equal(t, phaseChat, m.phase)
+		require.Nil(t, m.runnable)
+		require.Equal(t, []string{"new-coder"}, scripted.agents)
+
+		m.input.SetValue("hello")
+		require.NotNil(t, update(t, m, pressEnter))
+		require.True(t, m.running)
+		require.Equal(t, []string{"hello"}, scripted.prompts)
+	})
+
+	t.Run("marks a stored session whose agent is gone", func(t *testing.T) {
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "new-coder"}},
+			selected: 0,
+			sessions: []session.Info{
+				{ID: "session-1", Agent: "coder", ActiveAgent: "coder", Title: "old"},
+				{ID: "session-2", Agent: "new-coder", ActiveAgent: "new-coder", Title: "current"},
+			},
+		})
+		update(t, m, windowMsg(80, 24))
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "old")
+		require.Contains(t, view, "agent missing")
+		require.NotContains(
+			t,
+			lineOf(view, "current"),
+			"agent missing",
+			"a session whose agent exists is offered unmarked",
+		)
+	})
+
+	t.Run("reports the model that is gone", func(t *testing.T) {
+		scripted := newFakeSession()
+		scripted.runnable = engine.RunnableRefusal{
+			Kind: engine.RunnableUnknownModel,
+			ID:   "fake/old-model",
+		}
+		scripted.stopped = true
+		m := newTestModel(
+			t,
+			[]agent.Agent{{ID: "coder"}},
+			0,
+			func(string) (Session, error) { return scripted, nil },
+		)
+		run(t, m, m.Init())
+		update(t, m, windowMsg(80, 24))
+
+		require.Contains(t, plain(m.render()), "the model fake/old-model is gone")
+	})
+}
+
+// lineOf returns the line of a rendered view that holds a text.
+func lineOf(view, text string) string {
+	for line := range strings.SplitSeq(view, "\n") {
+		if strings.Contains(line, text) {
+			return line
+		}
+	}
+	return ""
 }
