@@ -29,6 +29,13 @@ const treeLine = "│  "
 // below stay aligned with the ones above.
 const treeGap = "   "
 
+// treeRootLabel names the virtual root the tree draws above the turns of the
+// conversation: the origin every branch is born from, shown faint because it
+// stands for the conversation itself rather than for a turn of it. It is
+// spelled out rather than left as a bare "root", which a reader could take for
+// the name of a turn, so the row reads as the tree it heads.
+const treeRootLabel = "Tree root"
+
 // treeMessageMax caps the columns the message of a turn may take, so a long
 // message never floods the tree however wide the terminal is.
 const treeMessageMax = 96
@@ -309,11 +316,28 @@ func treeNodes(entries, branch []session.Entry, folded map[string]bool, owner st
 			}
 		}
 	}
+	// The turns of the conversation hang from a single virtual root, which the
+	// screen draws above them, so a conversation that opens several first turns
+	// shows its branches born from one origin. A lone first turn continues the
+	// root at its own column, so a linear conversation keeps reading down a
+	// single one.
 	roots := children[""]
 	for position, root := range roots {
-		walk(root, -1, nil, false, position < len(roots)-1)
+		walk(root, -1, rootGuides(len(roots)), len(roots) == 1, position < len(roots)-1)
 	}
 	return nodes
+}
+
+// rootGuides returns the guides of a turn that opens the conversation: the
+// columns above the virtual root the tree draws. A lone first turn continues
+// the root at its own column, so it opens no level and reads at the left edge
+// of the tree. A conversation that opens several first turns hangs them from
+// the level of the root, so each one branches beside the others under it.
+func rootGuides(count int) []bool {
+	if count == 1 {
+		return nil
+	}
+	return []bool{false}
 }
 
 // currentTurn returns the identifier of the node the session is at: the last

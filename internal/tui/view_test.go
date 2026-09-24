@@ -1714,6 +1714,102 @@ func TestTreeLayout(t *testing.T) {
 	})
 }
 
+// TestTreeRoot verifies the virtual root the tree hangs from: the faint row
+// that stands for the origin of the conversation, drawn above the first turn so
+// a conversation that opens several branches shows them born from one.
+func TestTreeRoot(t *testing.T) {
+	t.Run("draws the root above a linear conversation", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		update(t, m, windowMsg(80, 24))
+
+		view := plain(m.render())
+
+		require.Contains(t, view, treeRootLabel, "the conversation hangs from a root")
+		require.NotContains(t, view, "├─", "a linear conversation opens no level")
+		require.NotContains(t, view, "└─", "a linear conversation opens no level")
+		require.Contains(
+			t,
+			view,
+			"  ● You: first",
+			"a lone first turn continues the root at its own column",
+		)
+	})
+
+	t.Run("branches every first turn from the root", func(t *testing.T) {
+		m, _ := treeModel(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		update(t, m, windowMsg(80, 24))
+		update(t, m, pressUp)
+		update(t, m, pressEnter)
+		m.input.SetValue("again")
+		update(t, m, pressEnter)
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+		update(t, m, pressCtrlT)
+
+		view := plain(m.render())
+
+		require.Contains(t, view, treeRootLabel)
+		require.Contains(t, view, "├─ You: first", "the first turn reads as a branch of the root")
+		require.Contains(t, view, "└─ You: again", "so does the second one")
+	})
+
+	t.Run("keeps the root faint", func(t *testing.T) {
+		m, _ := treeModel(t, textMessage(llm.RoleUser, "first"))
+		update(t, m, windowMsg(80, 24))
+
+		require.Contains(
+			t,
+			m.render(),
+			m.styles.dim.Render(treeRootLabel),
+			"the root is metadata rather than a voice of the conversation",
+		)
+	})
+
+	t.Run("keeps no root row while the query matches nothing", func(t *testing.T) {
+		m, _ := treeModel(t, textMessage(llm.RoleUser, "first"))
+		update(t, m, windowMsg(80, 24))
+
+		typeFilter(t, m, "zzzz")
+
+		require.NotContains(t, plain(m.render()), treeRootLabel)
+		require.Contains(t, plain(m.render()), "no matches")
+	})
+
+	t.Run("keeps the rows of the tree steady while it scrolls", func(t *testing.T) {
+		messages := make([]llm.Message, 0, 24)
+		for index := range 12 {
+			messages = append(
+				messages,
+				textMessage(llm.RoleUser, fmt.Sprintf("prompt %02d", index)),
+				textMessage(llm.RoleAssistant, fmt.Sprintf("answer %02d", index)),
+			)
+		}
+		m, _ := treeModel(t, messages...)
+		update(t, m, windowMsg(80, 16))
+
+		m.tree.filter.cursor = 0
+		top := plain(m.render())
+		require.Contains(t, top, treeRootLabel)
+
+		// Once the window left the first turn behind, the root row stays as a
+		// blank one, so the tree keeps its rows and the reader sees no shift.
+		m.tree.filter.cursor = len(m.tree.nodes) - 1
+		bottom := plain(m.render())
+		require.NotContains(t, bottom, treeRootLabel)
+		require.Equal(
+			t,
+			len(strings.Split(top, "\n")),
+			len(strings.Split(bottom, "\n")),
+			"the tree keeps the rows it shows whether the root is on screen or not",
+		)
+	})
+}
+
 // TestChatSwitch verifies that a selection of what the branch runs is shown in
 // the conversation as a line of metadata between two turns.
 func TestChatSwitch(t *testing.T) {
@@ -1791,7 +1887,7 @@ func TestTreeScrollMargin(t *testing.T) {
 		}
 		m, _ := treeModel(t, messages...)
 		update(t, m, windowMsg(80, 24))
-		return m, m.listRows()
+		return m, m.treeRows()
 	}
 
 	t.Run("keeps the turns after the highlight visible", func(t *testing.T) {

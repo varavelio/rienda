@@ -251,6 +251,15 @@ func (m *model) listRows() int {
 	return max(1, m.height-listChrome)
 }
 
+// treeRows returns the list rows the tree shows at once: the rows that fit
+// outside its fixed lines, less the row the virtual root occupies above the
+// turns of the conversation, so the root never pushes a turn out of the
+// window. It keeps a single row, which the window still fills with the turns
+// it can.
+func (m *model) treeRows() int {
+	return max(1, m.listRows()-1)
+}
+
 // visibleWindow returns the range of a list of total items that fits in rows
 // while keeping the cursor visible, with margin rows always kept below it so the
 // reader sees which entries come next instead of running the highlight into the
@@ -446,6 +455,9 @@ func (m *model) viewTree() string {
 	rows = append(rows, m.treeInputRow(), "")
 
 	first, last := m.tree.filter.window()
+	if len(m.tree.nodes) > 0 && !m.tree.filter.empty() {
+		rows = append(rows, m.treeRootRow(first == 0))
+	}
 	for position := first; position < last; position++ {
 		rows = append(rows, m.treeLine(position))
 	}
@@ -492,6 +504,24 @@ func (m *model) treeHints() string {
 	default:
 		return "↑/↓ move · enter rewind · ctrl+f/a/o fold · ctrl+t tag · esc back"
 	}
+}
+
+// treeRootRow renders the virtual root the tree hangs from: the faint label
+// that stands for the origin of the conversation, drawn above the first turn
+// so a conversation that opens several branches shows them born from one turn
+// instead of reading as sibling turns with no parent. It carries no cursor and
+// no mark, because it is not a turn the reader can reach: it only places the
+// tree on a root. Its label is aligned with the content of the turns, so the
+// root reads directly above the column the first turn opens.
+//
+// The row is rendered even once the window scrolled past the first turn, as a
+// blank one, so the tree keeps the same rows whether the root is on screen or
+// not and the reader never sees the screen shift under it.
+func (m *model) treeRootRow(shown bool) string {
+	if !shown {
+		return ""
+	}
+	return m.clip(cursorMark(false) + treeGutterGap + " " + m.styles.dim.Render(treeRootLabel))
 }
 
 // treeLine renders one turn of the tree: the cursor that opens the highlighted
@@ -574,19 +604,22 @@ func treeGuides(guides []bool) string {
 // treeConnector returns the glyph that opens a turn of the tree, placing it in
 // the branch it belongs to: the last turn of a group closes it and the turns
 // before it keep it open, while a turn that continues the one before it only
-// draws the column it shares with it, or nothing at all at the root of the
-// tree. A continuation whose column closes draws a blank of its width, so its
-// message stays aligned with the turn it continues. A turn whose children are
-// folded carries the glyph that says so, so the reader knows a subtree is
-// hidden under it: the turn that opens a branch shows it even when it closes no
-// group, so a tree folded down to its roots still shows that they hold turns.
+// draws the column it shares with it, or nothing at all when it opens the tree
+// from the virtual root. The first turns of a conversation that opened several
+// of them hang from the root, so each one draws the elbow that branches it
+// beside the others. A continuation whose column closes draws a blank of its
+// width, so its message stays aligned with the turn it continues. A turn whose
+// children are folded carries the glyph that says so, so the reader knows a
+// subtree is hidden under it: the turn that opens a branch shows it even when
+// it closes no group, so a tree folded down to its roots still shows that they
+// hold turns.
 func treeConnector(node treeNode) string {
 	switch {
 	case node.folded && node.open:
 		return "⊞─ "
 	case node.folded:
 		return "⊟─ "
-	case node.parent < 0:
+	case node.parent < 0 && len(node.guides) == 0:
 		return ""
 	case node.continued && len(node.guides) == 0:
 		return ""

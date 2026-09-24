@@ -91,10 +91,16 @@
 //
 // The tree of the session (ctrl+t) shows the whole conversation instead of the
 // branch the interface runs: one node per turn, a prompt of the user or an
-// answer of the agent, labeled with its author and its message. The tool
-// invocations and the reasoning are not nodes: they belong to the turn around
-// them and travel with the branch, so a branch keeps the context of the turn it
-// starts from. The turns are drawn in the order the conversation grew, each
+// answer of the agent, labeled with its author and its message. The turns hang
+// from a faint root that stands for the origin of the conversation, so a
+// conversation that opens several first turns shows them as branches born from
+// one place instead of reading as sibling turns with no parent. The root is a
+// mark of the screen rather than a turn: it takes no cursor, so the reader
+// walks the turns of the conversation alone, and a lone first turn continues
+// the root at its own column, so a linear conversation still reads down a
+// single one. The tool invocations and the reasoning are not nodes: they belong
+// to the turn around them and travel with the branch, so a branch keeps the
+// context of the turn it starts from. The turns are drawn in the order the conversation grew, each
 // subtree under the turn it follows and connected to it by the vertical lines
 // of the branches above, so a branch opened from a turn of the past lands
 // beside that turn instead of at the end of the tree. A turn written after the

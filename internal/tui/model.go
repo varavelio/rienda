@@ -2121,8 +2121,9 @@ func (m *model) resize(width, height int) {
 	m.start.setWindowRows(rows)
 	m.picker.setWindowRows(rows)
 	m.commands.setWindowRows(rows)
-	m.tree.filter.setWindowRows(rows)
-	m.tree.filter.setWindowMargin(treeWindowMargin(rows))
+	treeRows := m.treeRows()
+	m.tree.filter.setWindowRows(treeRows)
+	m.tree.filter.setWindowMargin(treeWindowMargin(treeRows))
 
 	m.syncInputHeight()
 	m.invalidateTranscript()

@@ -102,9 +102,9 @@ func TestTreeNodes(t *testing.T) {
 		)
 		require.Equal(
 			t,
-			[]bool{false, true, false, false, true},
+			[]bool{true, true, false, false, true},
 			nodesField(nodes, func(node treeNode) bool { return node.continued }),
-			"the only turn written after a turn continues it at the same level",
+			"the only turn written after a turn continues it at the same level, and the only first turn continues the virtual root",
 		)
 		require.Equal(
 			t,
@@ -148,10 +148,42 @@ func TestTreeNodes(t *testing.T) {
 		)
 		require.Equal(
 			t,
-			[]int{0, 0},
+			[]int{1, 1},
 			nodesField(nodes, func(node treeNode) int { return len(node.guides) }),
+			"each first turn hangs from the level of the virtual root",
 		)
 		require.True(t, nodes[1].current)
+	})
+
+	t.Run("hangs a lone first turn from the virtual root at its own column", func(t *testing.T) {
+		entries := []session.Entry{
+			turnEntry("m1", "", llm.RoleUser, "first"),
+			turnEntry("m2", "m1", llm.RoleAssistant, "one"),
+		}
+
+		nodes := treeNodes(entries, entries, nil, "coder")
+
+		require.Empty(t, nodes[0].guides, "the only first turn opens no level")
+		require.True(t, nodes[0].continued, "it continues the root instead")
+		require.Empty(t, treeConnector(nodes[0]), "so it draws no elbow and reads at the left edge")
+	})
+
+	t.Run("draws the elbow of every first turn beside the others", func(t *testing.T) {
+		entries := []session.Entry{
+			turnEntry("m1", "", llm.RoleUser, "first"),
+			turnEntry("m2", "", llm.RoleUser, "again"),
+		}
+
+		nodes := treeNodes(entries, entries[1:], nil, "coder")
+
+		require.Equal(
+			t,
+			[]string{"   ├─ ", "   └─ "},
+			nodesField(nodes, func(node treeNode) string {
+				return treeGuides(node.guides) + treeConnector(node)
+			}),
+			"the first turns branch from the level of the virtual root",
+		)
 	})
 
 	t.Run("shows the message of a turn on a single line", func(t *testing.T) {
