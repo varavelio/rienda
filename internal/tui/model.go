@@ -418,11 +418,13 @@ type Session interface {
 	// model the session was created with.
 	ActiveModel() string
 
-	// ThinkingLevel returns the extended thinking level the configuration
-	// declares for the model the branch of the session runs, empty when it
-	// declares none. It is a generation setting of the model rather than part
-	// of the conversation, so the header shows it beside the model.
-	ThinkingLevel() string
+	// ModelInfo describes a model reference beyond the reference itself: the
+	// wire identifier the provider receives, which names the real model, and
+	// the extended thinking level. Both are generation settings of the model
+	// rather than part of the conversation, so the interface shows them for the
+	// model a branch runs and for every model the picker offers. A reference
+	// the configuration does not hold describes nothing.
+	ModelInfo(ref string) engine.ModelInfo
 
 	// Models returns the provider/model references the session may run, which
 	// is the roster the picker offers.
@@ -613,15 +615,15 @@ type model struct {
 	running bool
 	fatal   error
 
-	// identity is the identity of the open session: the agent, the model, the
-	// identifier and, when the user named it, the name the chat header shows.
-	// It is cached rather than read from the session because a run holds the
-	// session while it works, so the header must render without touching it.
-	// It is refreshed whenever the branch the interface shows changes, which
-	// is the same moment the transcript is rebuilt. The run start event is
-	// deliberately not used to refresh it: that event reports the wire model
-	// identifier the provider receives, while the header shows the configured
-	// provider/model reference the session stores.
+	// identity is the identity of the open session: the agent, the model, what
+	// the configuration declares for it and, when the user named it, the name
+	// the chat header shows. It is cached rather than read from the session
+	// because a run holds the session while it works, so the header must render
+	// without touching it. It is refreshed whenever the branch the interface
+	// shows changes, which is the same moment the transcript is rebuilt. The
+	// run start event is deliberately not used to refresh it: that event
+	// reports the wire model identifier the provider receives, while the header
+	// shows the configured provider/model reference the session stores.
 	identity identity
 
 	// context is the last measurement of the active branch, shown by the chat
@@ -775,11 +777,13 @@ func (m *model) startText(index int) string {
 
 // pickerText returns the text of one entry of the picker that the query is
 // matched against: the identifier and the description of an agent, or the
-// reference of a model. The picker serves both rosters, so the text follows the
-// mode the picker was opened in.
+// reference and the description of a model. The picker serves both rosters, so
+// the text follows the mode the picker was opened in, and a model is found by
+// what describes it as well as by the reference that names it.
 func (m *model) pickerText(index int) string {
 	if m.pickerMode == pickerModel {
-		return m.session.Models()[index]
+		ref := m.session.Models()[index]
+		return modelLabel(ref, m.session.ModelInfo(ref))
 	}
 	definition := m.agents[index]
 	return definition.ID + " " + definition.Description

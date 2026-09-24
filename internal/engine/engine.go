@@ -42,6 +42,19 @@ type Model struct {
 	Thinking llm.ThinkingConfig
 }
 
+// ModelInfo describes a model a session may run, as a front end names it beyond
+// the provider/model reference that addresses it: the wire identifier the
+// provider receives and the extended thinking level the configuration declares.
+type ModelInfo struct {
+	// ID is the model identifier sent on the wire, which defaults to the alias
+	// the reference names when the configuration declares none.
+	ID string
+
+	// ThinkingLevel is the extended thinking level the configuration declares,
+	// empty when the model uses its provider default.
+	ThinkingLevel string
+}
+
 // Resolver resolves a provider/model reference into the model the engine runs
 // and the client that talks to it. The harness provides the production
 // implementation over internal/config, which reads the credentials of the user

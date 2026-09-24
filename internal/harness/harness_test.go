@@ -959,52 +959,71 @@ func writeCompactionConfig(t *testing.T, env *testEnvironment, compactionBlock s
 	require.NoError(t, os.WriteFile(env.configPath, []byte(configuration), 0o600))
 }
 
-// TestThinkingLevel verifies the thinking level the session reports for the
-// model its branch runs, which the interface shows beside the model.
-func TestThinkingLevel(t *testing.T) {
-	t.Run("reports the level the configuration declares", func(t *testing.T) {
+// TestModelInfo verifies how a session describes a model reference beyond the
+// reference itself, which is what the interface shows for the model a branch
+// runs and for every model the picker offers.
+func TestModelInfo(t *testing.T) {
+	t.Run("reports the wire identifier and the thinking level", func(t *testing.T) {
 		env := newTestEnvironment(t)
-		writeThinkingConfig(t, env, "high", "")
+		writeModelsConfig(t, env,
+			"      test-model:\n"+
+				"        id: gpt-test\n"+
+				"        thinking_level: high\n",
+		)
 
-		require.Equal(t, "high", env.prepare(t).ThinkingLevel())
+		info := env.prepare(t).ModelInfo("fake/test-model")
+
+		require.Equal(t, engine.ModelInfo{ID: "gpt-test", ThinkingLevel: "high"}, info)
 	})
 
-	t.Run("reports nothing when the model declares no level", func(t *testing.T) {
+	t.Run("reports the alias as the identifier when none is declared", func(t *testing.T) {
 		env := newTestEnvironment(t)
+		writeModelsConfig(t, env,
+			"      test-model: {}\n",
+		)
 
-		require.Empty(t, env.prepare(t).ThinkingLevel())
+		info := env.prepare(t).ModelInfo("fake/test-model")
+
+		require.Equal(t, engine.ModelInfo{ID: "test-model"}, info,
+			"a model the configuration declares with no identifier names itself by its alias")
 	})
 
-	t.Run("follows the model the branch selects", func(t *testing.T) {
+	t.Run("describes the model the branch selects", func(t *testing.T) {
 		env := newTestEnvironment(t)
-		writeThinkingConfig(t, env, "high", "low")
+		writeModelsConfig(t, env,
+			"      test-model:\n"+
+				"        id: gpt-test\n"+
+				"        thinking_level: high\n"+
+				"      second-model:\n"+
+				"        id: gpt-second\n"+
+				"        thinking_level: low\n",
+		)
 
 		prepared := env.prepare(t)
-		require.Equal(t, "high", prepared.ThinkingLevel())
+		require.Equal(t, "high", prepared.ModelInfo("fake/test-model").ThinkingLevel)
 
-		// The level belongs to the model the branch runs, so selecting another
-		// model moves the level the session reports with it.
+		// The description belongs to the model the branch runs, so selecting
+		// another model moves it with it.
 		require.NoError(t, prepared.SetModel(t.Context(), "fake/second-model"))
 
-		require.Equal(t, "low", prepared.ThinkingLevel())
+		require.Equal(t,
+			engine.ModelInfo{ID: "gpt-second", ThinkingLevel: "low"},
+			prepared.ModelInfo(prepared.ActiveModel()),
+		)
 	})
 
 	t.Run("reports nothing for a model the configuration does not hold", func(t *testing.T) {
 		env := newTestEnvironment(t)
-		writeThinkingConfig(t, env, "high", "")
 
-		prepared := env.prepare(t)
-		require.NoError(t, prepared.store.SetModel(t.Context(), "fake/ghost"))
+		info := env.prepare(t).ModelInfo("fake/ghost")
 
-		require.Empty(t, prepared.ThinkingLevel())
+		require.Equal(t, engine.ModelInfo{}, info)
 	})
 }
 
-// writeThinkingConfig rewrites the configuration of an environment, declaring a
-// thinking level for the default model and, when second is not empty, a second
-// model with a level of its own, so a test can switch the model of a session
-// and see the level follow.
-func writeThinkingConfig(t *testing.T, env *testEnvironment, first, second string) {
+// writeModelsConfig rewrites the configuration of an environment, keeping its
+// provider and replacing the models it offers with the given block.
+func writeModelsConfig(t *testing.T, env *testEnvironment, models string) {
 	t.Helper()
 
 	configuration := "providers:\n" +
@@ -1013,16 +1032,7 @@ func writeThinkingConfig(t *testing.T, env *testEnvironment, first, second strin
 		"    base_url: " + env.provider.server.URL + "\n" +
 		"    api_key: test-key\n" +
 		"    models:\n" +
-		"      test-model:\n" +
-		"        id: gpt-test\n"
-	if first != "" {
-		configuration += "        thinking_level: " + first + "\n"
-	}
-	if second != "" {
-		configuration += "      second-model:\n" +
-			"        id: gpt-test\n" +
-			"        thinking_level: " + second + "\n"
-	}
+		models
 	require.NoError(t, os.WriteFile(env.configPath, []byte(configuration), 0o600))
 }
 

@@ -79,8 +79,17 @@
 // session gives it the title the start list
 // offers it under, which is how a session the user comes back to is found
 // again; an empty name removes it and leaves the one derived from the first
-// message in its place. The name is shown in the identity line of the
-// conversation, after the session id, only when the user gave one.
+// message in its place. The identity line of the conversation names the agent
+// the branch runs, the model it runs and, when the user named it, the name. The
+// model reads by its real wire identifier together with the extended thinking
+// level the configuration declares, as in "deepseek-v4.1 max", rather than by
+// the provider/model reference that addresses it, which the line leaves to the
+// picker; a reference the configuration no longer holds falls back to itself,
+// so a model that is gone still reads as something. The session identifier
+// never reaches the line: it names the session file rather than the
+// conversation. The picker over the models writes the reference with that
+// description, so choosing what the conversation runs reads what a selection
+// would run before the choice is made.
 // The manual compaction is offered only when the branch still holds something
 // to summarize and no run is in flight, and it shares the code path, the prompt
 // and the events of an automatic one. A command the interface cannot run stays

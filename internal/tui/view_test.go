@@ -210,7 +210,7 @@ func TestView(t *testing.T) {
 		require.Contains(
 			t,
 			view,
-			brand+" · "+brandVersion()+" · coder · fake/test-model · session-1",
+			brand+" · "+brandVersion()+" · coder · fake/test-model",
 		)
 		require.Contains(t, view, "You")
 		require.Contains(t, view, "hello")
@@ -860,59 +860,90 @@ func TestView(t *testing.T) {
 
 // TestChatIdentity verifies the identity line of the conversation.
 func TestChatIdentity(t *testing.T) {
-	t.Run("shows the agent, the model reference and the session id", func(t *testing.T) {
+	t.Run("shows the agent and the model of the branch", func(t *testing.T) {
 		m, _ := chatModel(t)
 		update(t, m, windowMsg(80, 24))
 
-		require.Contains(t, plain(m.render()), "coder · fake/test-model · session-1")
+		require.Contains(t, plain(m.render()), "coder · fake/test-model")
 	})
 
-	t.Run("reads the thinking level of the model from the session", func(t *testing.T) {
-		scripted := newFakeSession()
-		scripted.thinking = "max"
-
-		require.Equal(t, "max", identityFrom(scripted).thinking)
-	})
-
-	t.Run("keeps the thinking level out of the header", func(t *testing.T) {
-		m, scripted := chatModel(t)
+	t.Run("never shows the session id", func(t *testing.T) {
+		m, _ := chatModel(t)
 		update(t, m, windowMsg(80, 24))
 
-		// The level reads from the model reference the user names, so the
-		// header never repeats it beside the reference.
-		scripted.thinking = "max"
+		// The identifier names the session file rather than the conversation,
+		// so the header leaves it out and keeps the agent, the model and the
+		// name the user gave.
+		require.NotContains(t, plain(m.render()), "session-1")
+	})
+
+	t.Run("names the model by its identifier and thinking level", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.modelInfo = map[string]engine.ModelInfo{
+			"fake/test-model": {ID: "deepseek-v4.1", ThinkingLevel: "max"},
+		}
+		update(t, m, windowMsg(80, 24))
+
 		m.identity = identityFrom(scripted)
 
 		view := plain(m.render())
-		require.Contains(t, view, "fake/test-model · session-1")
-		require.NotContains(t, view, "max")
+		require.Contains(t, view, "coder · deepseek-v4.1 max")
+		require.NotContains(t, view, "fake/test-model", "the reference never reaches the header")
 	})
 
-	t.Run("shows the model reference and never the wire identifier", func(t *testing.T) {
-		m, _ := chatModel(t)
+	t.Run(
+		"falls back to the reference for a model the configuration does not hold",
+		func(t *testing.T) {
+			m, scripted := chatModel(t)
+			scripted.modelInfo = nil
+			update(t, m, windowMsg(80, 24))
+
+			m.identity = identityFrom(scripted)
+
+			require.Contains(
+				t,
+				plain(m.render()),
+				"coder · fake/test-model",
+				"a model with nothing to name it reads as the reference",
+			)
+		},
+	)
+
+	t.Run("keeps the identity of the run out of the header", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.modelInfo = map[string]engine.ModelInfo{
+			"fake/test-model": {ID: "deepseek-v4.1"},
+		}
 		update(t, m, windowMsg(120, 24))
+		m.identity = identityFrom(scripted)
 
 		m.input.SetValue("hello")
 		update(t, m, pressEnter)
 
-		// A run reports the wire identifier its provider receives, which is
-		// not the reference the session stores. The header shows the
-		// configured provider/model reference throughout the run, so it never
-		// flips to the wire identifier the moment the run opens.
+		// A run reports the agent and the wire model identifier it opens with,
+		// which the header shows from the configuration and never from the
+		// event: the header reads what the branch runs, so it never flips to
+		// what a single run sent.
 		sendEvent(t, m, engine.Event{
 			Type:    engine.EventRunStart,
-			AgentID: "coder",
-			ModelID: "gpt-test",
+			AgentID: "leaked-agent",
+			ModelID: "leaked-model",
 		})
 		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "hi"})
 
-		require.Contains(t, plain(m.render()), "fake/test-model")
+		view := plain(m.render())
+		require.Contains(t, view, "deepseek-v4.1")
+		require.NotContains(t, view, "leaked-agent")
+		require.NotContains(t, view, "leaked-model")
 
 		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
 
-		view := plain(m.render())
-		require.Contains(t, view, "fake/test-model", "the header keeps the reference after the run")
-		require.NotContains(t, view, "gpt-test", "the wire identifier never reaches the header")
+		require.Contains(
+			t,
+			plain(m.render()),
+			"deepseek-v4.1",
+			"the header keeps the branch identity after the run",
+		)
 	})
 }
 

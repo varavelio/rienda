@@ -166,12 +166,14 @@ func (s *Session) ActiveModel() string {
 	return s.store.ActiveModel()
 }
 
-// ThinkingLevel returns the extended thinking level the configuration declares
-// for the model the branch of the session runs, empty when it declares none.
-// The level is a generation setting of the model, never part of the session, so
-// it is read from the configuration instead of the stored conversation.
-func (s *Session) ThinkingLevel() string {
-	return s.resolver.ThinkingLevel(s.store.ActiveModel())
+// ModelInfo returns how a model reference is described beyond the reference
+// itself: the wire identifier the provider receives and the extended thinking
+// level the configuration declares. Both are generation settings of the model,
+// never part of the session, so they are read from the configuration instead of
+// the stored conversation, and a reference the configuration no longer holds
+// describes nothing.
+func (s *Session) ModelInfo(ref string) engine.ModelInfo {
+	return s.resolver.Info(ref)
 }
 
 // Models returns the provider/model references the session may run, sorted,

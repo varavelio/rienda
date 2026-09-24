@@ -377,13 +377,19 @@ func (m *model) pickerTitle() string {
 
 // pickerLine renders one row of the picker. The entry the conversation already
 // runs is marked, so changing what it runs shows where the session stands
-// before the user moves the highlight. Only the agents carry a description of
-// their own, which the row shows beside the identifier.
+// before the user moves the highlight. An agent carries a description of its
+// own and a model the one the configuration declares for it, so the reader sees
+// what a model is before switching to it.
 func (m *model) pickerLine(position int) string {
 	index := m.picker.shown[position]
 	entry := m.roster()[index]
 
-	line := m.row(position == m.picker.cursor, entry)
+	label := entry
+	if m.pickerMode == pickerModel && m.session != nil {
+		label = modelLabel(entry, m.session.ModelInfo(entry))
+	}
+
+	line := m.row(position == m.picker.cursor, label)
 	if m.pickerMode != pickerNewAgent && m.session != nil && entry == m.activeRef() {
 		line += "  " + m.styles.on.Render("current")
 	}
@@ -395,6 +401,47 @@ func (m *model) pickerLine(position int) string {
 		}
 	}
 	return m.clip(line)
+}
+
+// modelName returns the name the interface shows a model by on its own, without
+// the reference that addresses it: the wire identifier the provider receives,
+// which is the real model, together with the extended thinking level the
+// configuration declares, as in "deepseek-v4.1 max". A reference the
+// configuration no longer holds falls back to the reference itself, so a model
+// that is gone still reads as something.
+func modelName(ref string, info engine.ModelInfo) string {
+	if description := modelDescription(info); description != "" {
+		return description
+	}
+	return ref
+}
+
+// modelLabel renders a model reference with the description the configuration
+// declares for it, as in "customprovider/mymodel: deepseek-v4.1 max", which is
+// what the picker shows so a selection reads what it would run. A model the
+// configuration describes with nothing beyond the reference reads as the
+// reference alone.
+func modelLabel(ref string, info engine.ModelInfo) string {
+	if description := modelDescription(info); description != "" {
+		return ref + ": " + description
+	}
+	return ref
+}
+
+// modelDescription returns what describes a model beyond the reference that
+// addresses it: the wire identifier the provider receives and the extended
+// thinking level, joined by a space, as in "deepseek-v4.1 max". It is empty when
+// the configuration no longer holds the reference, so a caller falls back to the
+// reference rather than showing a bare separator.
+func modelDescription(info engine.ModelInfo) string {
+	parts := make([]string, 0, 2)
+	if info.ID != "" {
+		parts = append(parts, info.ID)
+	}
+	if info.ThinkingLevel != "" {
+		parts = append(parts, info.ThinkingLevel)
+	}
+	return strings.Join(parts, " ")
 }
 
 // viewSettings renders the command center: the screens it opens, the options
@@ -842,27 +889,19 @@ func (m *model) mentionList(rows int) string {
 	return strings.Join(lines, "\n")
 }
 
-// identity is what the chat header shows of the open session: the agent and
-// the model the branch runs, the identifier and, when the user named it, the
-// name. It is a value the interface caches, so the header renders without
-// reading the session, which a run holds while it works.
+// identity is what the chat header shows of the open session: the agent the
+// branch runs, the model it runs and, when the user named it, the name. It is a
+// value the interface caches, so the header renders without reading the session,
+// which a run holds while it works.
 type identity struct {
 	// agent is the agent the branch runs.
 	agent string
 
-	// model is the provider/model reference the branch runs.
+	// model names the model the branch runs: its wire identifier, which is the
+	// real model the provider receives, with the extended thinking level the
+	// configuration declares, as in "deepseek-v4.1 max", or the reference that
+	// addresses it when the configuration no longer holds one.
 	model string
-
-	// thinking is the extended thinking level the configuration declares for
-	// the model the branch runs, empty when it declares none. The header does
-	// not show it: the level reads from the model reference itself, which the
-	// user is free to name, and a duplicate beside it only adds noise. It is
-	// kept in the identity so a screen that needs the level has it cached with
-	// the rest of what it shows, without reading the session.
-	thinking string
-
-	// id is the session identifier.
-	id string
 
 	// named reports that the user named the session, so title is the name the
 	// user chose rather than the one derived from the first message.
@@ -877,25 +916,21 @@ type identity struct {
 // store serializes the read, so it is safe even while a run is in flight.
 func identityFrom(s Session) identity {
 	info := s.Info()
+	ref := s.ActiveModel()
 	return identity{
-		agent:    s.ActiveAgent(),
-		model:    s.ActiveModel(),
-		thinking: s.ThinkingLevel(),
-		id:       info.ID,
-		named:    info.Named,
-		title:    info.Title,
+		agent: s.ActiveAgent(),
+		model: modelName(ref, s.ModelInfo(ref)),
+		named: info.Named,
+		title: info.Title,
 	}
 }
 
 // chatIdentity renders the identity of the session: the brand followed by the
-// agent, the model, the session id and, when the user named it, the name,
-// which closes the line so the reader sees the name the session is found under
-// in the list. It renders the cached identity, so it never reads the session.
+// agent, the model and, when the user named it, the name, which closes the line
+// so the reader sees the name the session is found under in the list. It renders
+// the cached identity, so it never reads the session.
 func (m *model) chatIdentity() string {
 	parts := []string{m.identity.agent, m.identity.model}
-	if m.identity.id != "" {
-		parts = append(parts, m.identity.id)
-	}
 	if m.identity.named {
 		parts = append(parts, m.identity.title)
 	}

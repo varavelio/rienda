@@ -40,7 +40,7 @@ type fakeSession struct {
 	modelRefs    []string
 	models       []string
 	activeModel  string
-	thinking     string
+	modelInfo    map[string]engine.ModelInfo
 	agentErr     error
 	modelErr     error
 	leafErr      error
@@ -152,9 +152,8 @@ func (s *fakeSession) SetAgent(_ context.Context, id string) error {
 // ActiveModel returns the scripted model the session runs.
 func (s *fakeSession) ActiveModel() string { return s.activeModel }
 
-// ThinkingLevel returns the scripted thinking level of the model the session
-// runs.
-func (s *fakeSession) ThinkingLevel() string { return s.thinking }
+// ModelInfo returns the scripted description of a model reference.
+func (s *fakeSession) ModelInfo(ref string) engine.ModelInfo { return s.modelInfo[ref] }
 
 // Models returns the scripted model roster of the session.
 func (s *fakeSession) Models() []string { return s.models }
@@ -221,7 +220,7 @@ type storeSession struct {
 	events    chan engine.Event
 	prompts   []string
 	modelRefs []string
-	thinking  string
+	modelInfo map[string]engine.ModelInfo
 }
 
 // newStoreSession opens a session whose store holds the given messages, linked
@@ -307,10 +306,10 @@ func (s *storeSession) ActiveAgent() string { return s.store.ActiveAgent() }
 // ActiveModel reports the model the active branch of the store runs.
 func (s *storeSession) ActiveModel() string { return s.store.ActiveModel() }
 
-// ThinkingLevel reports the scripted thinking level of the model the active
-// branch runs. A store-backed session never declares one, so tests that need a
-// level set it on the model.
-func (s *storeSession) ThinkingLevel() string { return s.thinking }
+// ModelInfo reports the scripted description of a model reference. A
+// store-backed session never declares one, so tests that need one set it on the
+// model.
+func (s *storeSession) ModelInfo(ref string) engine.ModelInfo { return s.modelInfo[ref] }
 
 // Models reports the models a store-backed session may run. The store itself
 // holds no roster, so the interface tests that need one set it on the model.
@@ -2846,7 +2845,7 @@ func TestRenameSession(t *testing.T) {
 		update(t, m, pressEscape)
 
 		require.Equal(t, phaseChat, m.phase)
-		require.Contains(t, plain(m.render()), "session-1 · Fix the parser")
+		require.Contains(t, plain(m.render()), "fake/test-model · Fix the parser")
 	})
 
 	t.Run("names the session of the store from an empty input", func(t *testing.T) {
@@ -3079,6 +3078,32 @@ func TestSwitchModel(t *testing.T) {
 		require.NotContains(t, view, "A test agent", "the model rows carry no description")
 	})
 
+	t.Run("describes every model with its identifier and thinking level", func(t *testing.T) {
+		m, stored := modelChat(t)
+		stored.modelInfo = map[string]engine.ModelInfo{
+			"fake/test-model":  {ID: "deepseek-v4.1", ThinkingLevel: "max"},
+			"fake/other-model": {ID: "kimi-k2", ThinkingLevel: "low"},
+		}
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+
+		view := plain(m.render())
+		require.Contains(t, view, "fake/test-model: deepseek-v4.1 max")
+		require.Contains(t, view, "fake/other-model: kimi-k2 low")
+	})
+
+	t.Run("keeps the reference alone for a model with nothing to describe it", func(t *testing.T) {
+		m, _ := modelChat(t)
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+
+		view := plain(m.render())
+		require.Contains(t, view, "fake/test-model")
+		require.NotContains(t, view, "fake/test-model:", "a bare reference carries no separator")
+	})
+
 	t.Run("opens on the model the conversation runs", func(t *testing.T) {
 		m, _ := modelChat(t)
 
@@ -3236,11 +3261,10 @@ func (s *readCountingSession) ActiveModel() string {
 	return s.Session.ActiveModel()
 }
 
-// ThinkingLevel records the read of the thinking level of the model the branch
-// runs.
-func (s *readCountingSession) ThinkingLevel() string {
-	s.count("ThinkingLevel")
-	return s.Session.ThinkingLevel()
+// ModelInfo records the read of the description of a model reference.
+func (s *readCountingSession) ModelInfo(ref string) engine.ModelInfo {
+	s.count("ModelInfo")
+	return s.Session.ModelInfo(ref)
 }
 
 // Models records the read of the model roster.

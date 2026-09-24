@@ -13,6 +13,10 @@
 // Every client it hands out carries the identity of the session, so every call
 // identifies itself with it, a summarization as much as a conversation turn,
 // and a provider that routes by session never refuses one of them.
+// The model of a branch is described to a front end through ModelInfo, which
+// reports the wire identifier a reference resolves to and the extended thinking
+// level the configuration declares for it.
+//
 // That is what lets a conversation switch agent through SetAgent, or model
 // through SetModel, without a new session, a new engine or a rewritten file:
 // the selection is appended to the branch that wrote it, so another branch of

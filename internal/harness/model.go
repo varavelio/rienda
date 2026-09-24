@@ -83,23 +83,17 @@ func (r *modelResolver) Refs() []string {
 	return r.cfg.ModelRefs()
 }
 
-// ThinkingLevel returns the extended thinking level the configuration declares
-// for a model reference, empty when it declares none or names no model. It
-// reads the cached model when the reference was already resolved and falls back
-// to the configuration otherwise, so a caller that only displays the level
-// never builds a provider client.
-func (r *modelResolver) ThinkingLevel(ref string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if cached, found := r.cache[ref]; found {
-		return cached.model.Thinking.Level
-	}
+// Info returns how a model reference is described beyond the reference itself:
+// the wire identifier the provider receives and the extended thinking level the
+// configuration declares. A reference the configuration does not hold describes
+// nothing. It reads the configuration alone, which is immutable, so a caller
+// that only displays the description never builds a provider client.
+func (r *modelResolver) Info(ref string) engine.ModelInfo {
 	resolved, err := r.cfg.Resolve(ref)
 	if err != nil {
-		return ""
+		return engine.ModelInfo{}
 	}
-	return resolved.ThinkingLevel
+	return engine.ModelInfo{ID: resolved.ModelID, ThinkingLevel: resolved.ThinkingLevel}
 }
 
 // newModelResolver builds the resolver of a session from the configuration of
