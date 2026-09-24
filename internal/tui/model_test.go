@@ -3248,8 +3248,9 @@ func TestRunReadsNoSession(t *testing.T) {
 		m.input.SetValue("go")
 		require.NotNil(t, update(t, m, pressEnter))
 
-		// The run reports what it opens with, so the header follows the agent
-		// and the model of the run without reading the session.
+		// The header is rendered from the identity the interface cached when
+		// the branch changed, so even a run start event that carries the agent
+		// and the model never reaches the session.
 		counting.counting = true
 		sendEvent(t, m, engine.Event{
 			Type:    engine.EventRunStart,

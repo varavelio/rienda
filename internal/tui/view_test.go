@@ -913,6 +913,33 @@ func TestChatIdentity(t *testing.T) {
 
 		require.Contains(t, plain(m.render()), "fake/test-model · session-1")
 	})
+
+	t.Run("shows the model reference and never the wire identifier", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(120, 24))
+
+		m.input.SetValue("hello")
+		update(t, m, pressEnter)
+
+		// A run reports the wire identifier its provider receives, which is
+		// not the reference the session stores. The header shows the
+		// configured provider/model reference throughout the run, so it never
+		// flips to the wire identifier the moment the run opens.
+		sendEvent(t, m, engine.Event{
+			Type:    engine.EventRunStart,
+			AgentID: "coder",
+			ModelID: "gpt-test",
+		})
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "hi"})
+
+		require.Contains(t, plain(m.render()), "fake/test-model")
+
+		sendEvent(t, m, engine.Event{Type: engine.EventRunEnd, Reason: engine.EndReasonTurn})
+
+		view := plain(m.render())
+		require.Contains(t, view, "fake/test-model", "the header keeps the reference after the run")
+		require.NotContains(t, view, "gpt-test", "the wire identifier never reaches the header")
+	})
 }
 
 // TestTailPreview verifies the preview of the trailing rows a collapsed block

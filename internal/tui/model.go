@@ -612,8 +612,10 @@ type model struct {
 	// It is cached rather than read from the session because a run holds the
 	// session while it works, so the header must render without touching it.
 	// It is refreshed whenever the branch the interface shows changes, which
-	// is the same moment the transcript is rebuilt, and from the run start
-	// event while a run is in flight (see applyEvent).
+	// is the same moment the transcript is rebuilt. The run start event is
+	// deliberately not used to refresh it: that event reports the wire model
+	// identifier the provider receives, while the header shows the configured
+	// provider/model reference the session stores.
 	identity identity
 
 	// context is the last measurement of the active branch, shown by the chat
@@ -1924,12 +1926,6 @@ func (m *model) applyEvent(event engine.Event) {
 	m.trackActivity(event)
 
 	switch event.Type {
-	case engine.EventRunStart:
-		// The run reports the agent and the model it opened with, so the
-		// header follows a selection that was written before it started
-		// without the interface ever reading the session it is not holding.
-		m.identity.agent = event.AgentID
-		m.identity.model = event.ModelID
 	case engine.EventContext:
 		// The engine measured the request the next turn would send once the
 		// conversation changed, so the footer follows the run as it grows
