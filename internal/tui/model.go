@@ -412,6 +412,12 @@ type Session interface {
 	// model the session was created with.
 	ActiveModel() string
 
+	// ThinkingLevel returns the extended thinking level the configuration
+	// declares for the model the branch of the session runs, empty when it
+	// declares none. It is a generation setting of the model rather than part
+	// of the conversation, so the header shows it beside the model.
+	ThinkingLevel() string
+
 	// Models returns the provider/model references the session may run, which
 	// is the roster the picker offers.
 	Models() []string

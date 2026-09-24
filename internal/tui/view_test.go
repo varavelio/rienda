@@ -815,6 +815,29 @@ func TestView(t *testing.T) {
 		require.Contains(t, plain(menu.render()), identity)
 	})
 
+	t.Run("shows the thinking level beside the model", func(t *testing.T) {
+		scripted := newFakeSession()
+		scripted.thinking = "high"
+		m := newTestModel(
+			t,
+			[]agent.Agent{{ID: "coder", Description: "A test agent"}},
+			0,
+			func(string) (Session, error) { return scripted, nil },
+		)
+
+		cmd := m.Init()
+		require.NotNil(t, cmd)
+		run(t, m, cmd)
+		update(t, m, windowMsg(80, 24))
+
+		require.Contains(
+			t,
+			plain(m.render()),
+			"coder · fake/test-model high · session-1",
+			"the thinking level of the model reads right after its reference",
+		)
+	})
+
 	t.Run("renders the alternate screen and reports the wheel", func(t *testing.T) {
 		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, -1, nil)
 
@@ -855,6 +878,40 @@ func TestView(t *testing.T) {
 		view = plain(m.render())
 		require.Contains(t, view, "session 19")
 		require.NotContains(t, view, "session 0")
+	})
+}
+
+// TestChatIdentity verifies the identity line of the conversation, in
+// particular how it places the thinking level of the model beside its
+// reference.
+func TestChatIdentity(t *testing.T) {
+	t.Run("reads the thinking level from the session", func(t *testing.T) {
+		scripted := newFakeSession()
+		scripted.thinking = "max"
+
+		require.Equal(t, "max", identityFrom(scripted).thinking)
+	})
+
+	t.Run("writes the level beside the model and before the session id", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		update(t, m, windowMsg(80, 24))
+
+		scripted.thinking = "max"
+		m.identity = identityFrom(scripted)
+
+		require.Contains(
+			t,
+			plain(m.render()),
+			"fake/test-model max · session-1",
+			"the level sits between the model and the session id",
+		)
+	})
+
+	t.Run("leaves the model alone when no level is declared", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(80, 24))
+
+		require.Contains(t, plain(m.render()), "fake/test-model · session-1")
 	})
 }
 

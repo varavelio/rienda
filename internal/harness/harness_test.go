@@ -936,6 +936,73 @@ func writeCompactionConfig(t *testing.T, env *testEnvironment, compactionBlock s
 	require.NoError(t, os.WriteFile(env.configPath, []byte(configuration), 0o600))
 }
 
+// TestThinkingLevel verifies the thinking level the session reports for the
+// model its branch runs, which the interface shows beside the model.
+func TestThinkingLevel(t *testing.T) {
+	t.Run("reports the level the configuration declares", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		writeThinkingConfig(t, env, "high", "")
+
+		require.Equal(t, "high", env.prepare(t).ThinkingLevel())
+	})
+
+	t.Run("reports nothing when the model declares no level", func(t *testing.T) {
+		env := newTestEnvironment(t)
+
+		require.Empty(t, env.prepare(t).ThinkingLevel())
+	})
+
+	t.Run("follows the model the branch selects", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		writeThinkingConfig(t, env, "high", "low")
+
+		prepared := env.prepare(t)
+		require.Equal(t, "high", prepared.ThinkingLevel())
+
+		// The level belongs to the model the branch runs, so selecting another
+		// model moves the level the session reports with it.
+		require.NoError(t, prepared.SetModel(t.Context(), "fake/second-model"))
+
+		require.Equal(t, "low", prepared.ThinkingLevel())
+	})
+
+	t.Run("reports nothing for a model the configuration does not hold", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		writeThinkingConfig(t, env, "high", "")
+
+		prepared := env.prepare(t)
+		require.NoError(t, prepared.store.SetModel(t.Context(), "fake/ghost"))
+
+		require.Empty(t, prepared.ThinkingLevel())
+	})
+}
+
+// writeThinkingConfig rewrites the configuration of an environment, declaring a
+// thinking level for the default model and, when second is not empty, a second
+// model with a level of its own, so a test can switch the model of a session
+// and see the level follow.
+func writeThinkingConfig(t *testing.T, env *testEnvironment, first, second string) {
+	t.Helper()
+
+	configuration := "providers:\n" +
+		"  fake:\n" +
+		"    protocol: openai_chat_completions\n" +
+		"    base_url: " + env.provider.server.URL + "\n" +
+		"    api_key: test-key\n" +
+		"    models:\n" +
+		"      test-model:\n" +
+		"        id: gpt-test\n"
+	if first != "" {
+		configuration += "        thinking_level: " + first + "\n"
+	}
+	if second != "" {
+		configuration += "      second-model:\n" +
+			"        id: gpt-test\n" +
+			"        thinking_level: " + second + "\n"
+	}
+	require.NoError(t, os.WriteFile(env.configPath, []byte(configuration), 0o600))
+}
+
 // TestCompaction verifies the compaction wiring of the harness.
 func TestCompaction(t *testing.T) {
 	t.Run("reaches the engine and can compact", func(t *testing.T) {

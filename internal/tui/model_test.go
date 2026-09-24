@@ -40,6 +40,7 @@ type fakeSession struct {
 	modelRefs    []string
 	models       []string
 	activeModel  string
+	thinking     string
 	agentErr     error
 	modelErr     error
 	leafErr      error
@@ -146,6 +147,10 @@ func (s *fakeSession) SetAgent(_ context.Context, id string) error {
 // ActiveModel returns the scripted model the session runs.
 func (s *fakeSession) ActiveModel() string { return s.activeModel }
 
+// ThinkingLevel returns the scripted thinking level of the model the session
+// runs.
+func (s *fakeSession) ThinkingLevel() string { return s.thinking }
+
 // Models returns the scripted model roster of the session.
 func (s *fakeSession) Models() []string { return s.models }
 
@@ -211,6 +216,7 @@ type storeSession struct {
 	events    chan engine.Event
 	prompts   []string
 	modelRefs []string
+	thinking  string
 }
 
 // newStoreSession opens a session whose store holds the given messages, linked
@@ -287,6 +293,11 @@ func (s *storeSession) ActiveAgent() string { return s.store.ActiveAgent() }
 
 // ActiveModel reports the model the active branch of the store runs.
 func (s *storeSession) ActiveModel() string { return s.store.ActiveModel() }
+
+// ThinkingLevel reports the scripted thinking level of the model the active
+// branch runs. A store-backed session never declares one, so tests that need a
+// level set it on the model.
+func (s *storeSession) ThinkingLevel() string { return s.thinking }
 
 // Models reports the models a store-backed session may run. The store itself
 // holds no roster, so the interface tests that need one set it on the model.
@@ -3204,6 +3215,13 @@ func (s *readCountingSession) ActiveAgent() string {
 func (s *readCountingSession) ActiveModel() string {
 	s.count("ActiveModel")
 	return s.Session.ActiveModel()
+}
+
+// ThinkingLevel records the read of the thinking level of the model the branch
+// runs.
+func (s *readCountingSession) ThinkingLevel() string {
+	s.count("ThinkingLevel")
+	return s.Session.ThinkingLevel()
 }
 
 // Models records the read of the model roster.

@@ -64,6 +64,12 @@ type Options struct {
 type Session struct {
 	store  *session.Store
 	engine *engine.Engine
+
+	// resolver resolves the model references of the branch against the
+	// configuration. It is kept so the session can report settings that are
+	// declared in the configuration and never stored, such as the extended
+	// thinking level of the model it runs.
+	resolver *modelResolver
 }
 
 // Branch returns the entries of the active branch in conversation order, which
@@ -158,6 +164,14 @@ func (s *Session) SetAgent(ctx context.Context, id string) error {
 // session was created with.
 func (s *Session) ActiveModel() string {
 	return s.store.ActiveModel()
+}
+
+// ThinkingLevel returns the extended thinking level the configuration declares
+// for the model the branch of the session runs, empty when it declares none.
+// The level is a generation setting of the model, never part of the session, so
+// it is read from the configuration instead of the stored conversation.
+func (s *Session) ThinkingLevel() string {
+	return s.resolver.ThinkingLevel(s.store.ActiveModel())
 }
 
 // Models returns the provider/model references the session may run, sorted,
@@ -285,7 +299,7 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, fmt.Errorf("harness: build engine: %w", err)
 	}
 
-	return &Session{store: store, engine: runner}, nil
+	return &Session{store: store, engine: runner, resolver: resolver}, nil
 }
 
 // sessionDir gathers where a session lives and what it may run, so the

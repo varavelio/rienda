@@ -83,11 +83,30 @@ func (r *modelResolver) Refs() []string {
 	return r.cfg.ModelRefs()
 }
 
+// ThinkingLevel returns the extended thinking level the configuration declares
+// for a model reference, empty when it declares none or names no model. It
+// reads the cached model when the reference was already resolved and falls back
+// to the configuration otherwise, so a caller that only displays the level
+// never builds a provider client.
+func (r *modelResolver) ThinkingLevel(ref string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if cached, found := r.cache[ref]; found {
+		return cached.model.Thinking.Level
+	}
+	resolved, err := r.cfg.Resolve(ref)
+	if err != nil {
+		return ""
+	}
+	return resolved.ThinkingLevel
+}
+
 // newModelResolver builds the resolver of a session from the configuration of
 // the user and the identifier of the session, which every client it hands out
 // identifies itself with: every reference a session selects is resolved
 // against it.
-func newModelResolver(cfg *config.Config, sessionID string) engine.Resolver {
+func newModelResolver(cfg *config.Config, sessionID string) *modelResolver {
 	return &modelResolver{
 		cfg:       cfg,
 		sessionID: sessionID,

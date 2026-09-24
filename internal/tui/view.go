@@ -806,6 +806,12 @@ type identity struct {
 	// model is the provider/model reference the branch runs.
 	model string
 
+	// thinking is the extended thinking level the configuration declares for
+	// the model the branch runs, empty when it declares none. It is shown
+	// beside the model, because it is a setting of that model rather than a
+	// part of the reference.
+	thinking string
+
 	// id is the session identifier.
 	id string
 
@@ -823,11 +829,12 @@ type identity struct {
 func identityFrom(s Session) identity {
 	info := s.Info()
 	return identity{
-		agent: s.ActiveAgent(),
-		model: s.ActiveModel(),
-		id:    info.ID,
-		named: info.Named,
-		title: info.Title,
+		agent:    s.ActiveAgent(),
+		model:    s.ActiveModel(),
+		thinking: s.ThinkingLevel(),
+		id:       info.ID,
+		named:    info.Named,
+		title:    info.Title,
 	}
 }
 
@@ -836,7 +843,13 @@ func identityFrom(s Session) identity {
 // which closes the line so the reader sees the name the session is found under
 // in the list. It renders the cached identity, so it never reads the session.
 func (m *model) chatIdentity() string {
-	parts := []string{m.identity.agent, m.identity.model}
+	// The thinking level belongs to the model, so it is written right after the
+	// reference and never takes a separator of its own.
+	model := m.identity.model
+	if m.identity.thinking != "" {
+		model += " " + m.identity.thinking
+	}
+	parts := []string{m.identity.agent, model}
 	if m.identity.id != "" {
 		parts = append(parts, m.identity.id)
 	}
