@@ -3428,8 +3428,8 @@ func TestStoppedBranch(t *testing.T) {
 	t.Run("says what is missing in the status line", func(t *testing.T) {
 		m, _ := resumedAgentModel(t)
 
-		require.Contains(t, plain(m.render()), "the agent coder is gone")
-		require.Contains(t, plain(m.render()), "select a running one to send")
+		require.Contains(t, plain(m.render()), "the coder agent is gone")
+		require.Contains(t, plain(m.render()), "pick other before continuing the conversation")
 		require.Equal(t, noticeRows, m.activityHeight(), "the notice breathes like a branch one")
 	})
 
@@ -3466,11 +3466,11 @@ func TestStoppedBranch(t *testing.T) {
 		view := plain(m.render())
 
 		require.Contains(t, view, "old")
-		require.Contains(t, view, "agent missing")
+		require.Contains(t, view, "missing agent")
 		require.NotContains(
 			t,
 			lineOf(view, "current"),
-			"agent missing",
+			"missing agent",
 			"a session whose agent exists is offered unmarked",
 		)
 	})
@@ -3491,7 +3491,7 @@ func TestStoppedBranch(t *testing.T) {
 		run(t, m, m.Init())
 		update(t, m, windowMsg(80, 24))
 
-		require.Contains(t, plain(m.render()), "the model fake/old-model is gone")
+		require.Contains(t, plain(m.render()), "the fake/old-model model is gone")
 	})
 }
 

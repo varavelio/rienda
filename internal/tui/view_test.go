@@ -2071,6 +2071,6 @@ func TestChatStopped(t *testing.T) {
 
 		require.Contains(t, view, "@ files")
 		require.Contains(t, view, "enter send")
-		require.Contains(t, view, "select a running one to send")
+		require.Contains(t, view, "pick other before continuing the conversation")
 	})
 }

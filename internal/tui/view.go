@@ -212,7 +212,7 @@ func (m *model) startLine(position int) string {
 	details := m.styles.dim.Render(agent + " · " + formatAge(info.UpdatedAt))
 	line := m.row(position == m.start.cursor, sessionTitle(info)) + "  " + details
 	if !m.knowsAgent(agent) {
-		line += "  " + m.styles.notice.Render("agent missing")
+		line += "  " + m.styles.notice.Render("missing agent")
 	}
 	return m.clip(line)
 }
@@ -822,7 +822,7 @@ func (m *model) activityLine() string {
 		switch {
 		case m.runnable != nil:
 			return m.clip(m.styles.notice.Render(
-				"⏸ " + m.stoppedLabel() + " · select a running one to send",
+				"⚠ " + m.stoppedLabel() + " · pick other before continuing the conversation",
 			))
 		case m.rewound && m.fork:
 			return m.clip(m.styles.notice.Render(
@@ -855,9 +855,9 @@ func (m *model) activityLine() string {
 func (m *model) stoppedLabel() string {
 	switch m.runnable.Kind {
 	case engine.RunnableUnknownModel:
-		return "the model " + m.runnable.ID + " is gone"
+		return "the " + m.runnable.ID + " model is gone"
 	default:
-		return "the agent " + m.runnable.ID + " is gone"
+		return "the " + m.runnable.ID + " agent is gone"
 	}
 }
 
