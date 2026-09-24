@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/varavelio/rienda/internal/llm"
@@ -66,9 +67,23 @@ type Info struct {
 	UpdatedAt time.Time
 }
 
-// Store gives access to one session tree. A Store is not safe for concurrent
-// use: callers serialize access when needed.
+// Store gives access to one session tree. Every method is safe for concurrent
+// use, so a run that appends to a session and a front end that reads it never
+// race.
+//
+// The lock is a RWMutex because reading a session is far more frequent than
+// writing it: a front end renders the branch, the metadata and the active
+// selection of the session on every frame while a run holds it, and only the
+// appends and the markers of a turn write. Concurrent readers therefore never
+// block each other, and a write is the only exclusive step.
+//
+// The exported methods are the ones that take the lock, and the unexported
+// helpers assume their caller already holds it, so a public method that needs
+// another one never locks twice.
 type Store struct {
+	// mu guards every field below.
+	mu sync.RWMutex
+
 	path      string
 	file      *os.File
 	generator IDGenerator
@@ -240,11 +255,15 @@ func List(dir string) ([]Info, error) {
 
 // ID returns the session identifier.
 func (s *Store) ID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.info.ID
 }
 
 // Info returns the session metadata.
 func (s *Store) Info() Info {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.info
 }
 
@@ -252,12 +271,16 @@ func (s *Store) Info() Info {
 // which is what lets a caller walk the whole conversation, branches included.
 // Entries share their content with the store and must not be mutated.
 func (s *Store) Entries() []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return slices.Clone(s.entries)
 }
 
 // Leaf returns the ID of the active leaf, empty when the session has no
 // messages or when the leaf was moved before the first one.
 func (s *Store) Leaf() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.leaf
 }
 
@@ -268,7 +291,15 @@ func (s *Store) Leaf() string {
 // implement with another, and returning to a turn before a selection runs on
 // the agent that was in effect there.
 func (s *Store) ActiveAgent() string {
-	for _, entry := range slices.Backward(s.Branch()) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeAgent()
+}
+
+// activeAgent resolves the agent the session runs at its active leaf. It
+// assumes the caller already holds the lock.
+func (s *Store) activeAgent() string {
+	for _, entry := range slices.Backward(s.branch()) {
 		if entry.Kind == KindAgent {
 			return entry.AgentID
 		}
@@ -282,7 +313,15 @@ func (s *Store) ActiveAgent() string {
 // reference is what a caller resolves against the configuration, so a session
 // never stores the credentials a model resolves to.
 func (s *Store) ActiveModel() string {
-	for _, entry := range slices.Backward(s.Branch()) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeModel()
+}
+
+// activeModel resolves the model the session runs at its active leaf. It
+// assumes the caller already holds the lock.
+func (s *Store) activeModel() string {
+	for _, entry := range slices.Backward(s.branch()) {
 		if entry.Kind == KindModel {
 			return entry.ModelRef
 		}
@@ -293,6 +332,9 @@ func (s *Store) ActiveModel() string {
 // Path returns the entries from the root of the tree down to the entry
 // identified by id.
 func (s *Store) Path(id string) ([]Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	index, found := s.index[id]
 	if !found {
 		return nil, fmt.Errorf("session: unknown entry %q", id)
@@ -305,6 +347,14 @@ func (s *Store) Path(id string) ([]Entry, error) {
 // session holds no message. The returned entries share their content with the
 // store and must not be mutated.
 func (s *Store) Branch() []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.branch()
+}
+
+// branch returns the entries of the active branch. It assumes the caller
+// already holds the lock.
+func (s *Store) branch() []Entry {
 	if s.leaf == "" {
 		return nil
 	}
@@ -321,7 +371,15 @@ func (s *Store) Branch() []Entry {
 // of the turns it replaced. The returned entries share their content with the
 // store and must not be mutated.
 func (s *Store) DisplayedBranch() []Entry {
-	branch := s.Branch()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.displayedBranch()
+}
+
+// displayedBranch returns the entries the user reads. It assumes the caller
+// already holds the lock.
+func (s *Store) displayedBranch() []Entry {
+	branch := s.branch()
 	index, found := newestCompaction(branch)
 	if !found {
 		return branch
@@ -348,7 +406,15 @@ func (s *Store) DisplayedBranch() []Entry {
 // The system prompt is never part of the checkpoint: it is rebuilt on every
 // turn from its own sources.
 func (s *Store) History() []llm.Message {
-	displayed := s.DisplayedBranch()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.history()
+}
+
+// history returns the messages of the active branch. It assumes the caller
+// already holds the lock.
+func (s *Store) history() []llm.Message {
+	displayed := s.displayedBranch()
 	if len(displayed) == 0 {
 		return nil
 	}
@@ -409,7 +475,7 @@ func keptFrom(branch []Entry, keptID string) ([]Entry, bool) {
 }
 
 // walk returns the entries from the root of the tree down to the entry at
-// index, in conversation order.
+// index, in conversation order. It assumes the caller already holds the lock.
 func (s *Store) walk(index int) []Entry {
 	path := make([]Entry, 0, index+1)
 	for {
@@ -431,6 +497,9 @@ func (s *Store) walk(index int) []Entry {
 // generator, and the returned entry carries it together with the parent and the
 // creation time.
 func (s *Store) Append(ctx context.Context, entry Entry) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.file == nil {
 		return Entry{}, errors.New("session: the store is closed")
 	}
@@ -506,6 +575,9 @@ func (s *Store) AppendCompaction(
 	model string,
 	usage llm.Usage,
 ) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.file == nil {
 		return Entry{}, errors.New("session: the store is closed")
 	}
@@ -571,6 +643,9 @@ func (s *Store) AppendCompaction(
 // keeps a session that returns to where it stands from writing markers it does
 // not need.
 func (s *Store) SetLeaf(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.file == nil {
 		return errors.New("session: the store is closed")
 	}
@@ -615,7 +690,11 @@ func (s *Store) SetAgent(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("session: the agent id must not be empty")
 	}
-	previous := s.ActiveAgent()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	previous := s.activeAgent()
 	if previous == id {
 		return nil
 	}
@@ -653,7 +732,11 @@ func (s *Store) SetModel(ctx context.Context, ref string) error {
 	if ref == "" {
 		return errors.New("session: the model reference must not be empty")
 	}
-	previous := s.ActiveModel()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	previous := s.activeModel()
 	if previous == ref {
 		return nil
 	}
@@ -683,7 +766,8 @@ func (s *Store) SetModel(ctx context.Context, ref string) error {
 // how they are validated, identified, written or indexed.
 //
 // The caller validates what the selection means, such as refusing an empty one
-// or the one the branch already holds; this helper owns the write itself.
+// or the one the branch already holds, and holds the write lock; this helper
+// owns the write itself.
 func appendSelection[T any](
 	s *Store,
 	ctx context.Context,
@@ -728,6 +812,9 @@ func appendSelection[T any](
 //
 // Setting the tag the entry already carries changes nothing.
 func (s *Store) SetTag(id, tag string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.file == nil {
 		return errors.New("session: the store is closed")
 	}
@@ -765,6 +852,9 @@ func (s *Store) SetTag(id, tag string) error {
 //
 // Setting the title the session already carries changes nothing.
 func (s *Store) SetTitle(title string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.file == nil {
 		return errors.New("session: the store is closed")
 	}
@@ -797,6 +887,9 @@ func (s *Store) SetTitle(title string) error {
 
 // Close releases the session file. It is safe to call more than once.
 func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.file == nil {
 		return nil
 	}
@@ -809,7 +902,8 @@ func (s *Store) Close() error {
 	return nil
 }
 
-// known reports whether id identifies an entry of the tree.
+// known reports whether id identifies an entry of the tree. It assumes the
+// caller already holds the lock.
 func (s *Store) known(id string) bool {
 	_, found := s.index[id]
 	return found

@@ -12,8 +12,8 @@ import (
 )
 
 // errRunInFlight reports a manual compaction asked for while another run or
-// compaction is in flight. A store is not safe for concurrent use, so the
-// engine refuses instead of racing.
+// compaction is in flight. The engine drives one conversation at a time, so it
+// refuses instead of interleaving two of them.
 var errRunInFlight = errors.New("engine: a run is already in flight")
 
 // Compactor summarizes the branch of a session into a checkpoint. The harness

@@ -601,6 +601,15 @@ type model struct {
 	running bool
 	fatal   error
 
+	// identity is the identity of the open session: the agent, the model, the
+	// identifier and, when the user named it, the name the chat header shows.
+	// It is cached rather than read from the session because a run holds the
+	// session while it works, so the header must render without touching it.
+	// It is refreshed whenever the branch the interface shows changes, which
+	// is the same moment the transcript is rebuilt, and from the run start
+	// event while a run is in flight (see applyEvent).
+	identity identity
+
 	// context is the last measurement of the active branch, shown by the chat
 	// footer. It is cached because building the request it measures reads the
 	// project instructions from disk, which must never happen once per frame.
@@ -1006,8 +1015,8 @@ func (m *model) handleLeaderKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 
 // openSwitchPicker opens the picker over the roster of what the conversation
 // runs, which is where the leader chords and the command center lead. It needs
-// an open session whose run is not in flight, because a store is not safe for
-// concurrent use and a selection moves the branch a run appends to.
+// an open session whose run is not in flight, because a selection moves the
+// branch the run is appending to.
 func (m *model) openSwitchPicker(mode pickerMode) tea.Cmd {
 	if !m.switchReady() {
 		return nil
@@ -1296,8 +1305,8 @@ func (m *model) treeReady() bool {
 }
 
 // compactReady reports whether the conversation can be compacted on demand: it
-// needs an open session, no run in flight, because a store is not safe for
-// concurrent use, and something left to summarize.
+// needs an open session, no run in flight, because the checkpoint replaces the
+// branch the run is appending to, and something left to summarize.
 func (m *model) compactReady() bool {
 	if m.session == nil || m.running {
 		return false
@@ -1368,8 +1377,8 @@ func (m *model) compactContext() tea.Cmd {
 }
 
 // renameReady reports whether the session can be named: it needs an open
-// session whose run is not in flight, because a store is not safe for
-// concurrent use.
+// session whose run is not in flight, because the name belongs to the
+// conversation the run is writing.
 func (m *model) renameReady() bool {
 	return m.session != nil && !m.running
 }
@@ -1391,8 +1400,8 @@ func (m *model) renameNote() string {
 }
 
 // switchReady reports whether the agent of the session can be changed: it
-// needs an open session whose run is not in flight, because a store is not
-// safe for concurrent use.
+// needs an open session whose run is not in flight, because the selection
+// moves the branch the run is appending to.
 func (m *model) switchReady() bool {
 	return m.session != nil && !m.running
 }
@@ -1458,6 +1467,9 @@ func (m *model) saveRename() tea.Cmd {
 		return nil
 	}
 
+	// The header names the session from the identity it caches, so it is
+	// refreshed here, where the name changes.
+	m.identity = identityFrom(m.session)
 	m.clearRename()
 	return m.commands.focus()
 }
@@ -1906,6 +1918,12 @@ func (m *model) applyEvent(event engine.Event) {
 	m.trackActivity(event)
 
 	switch event.Type {
+	case engine.EventRunStart:
+		// The run reports the agent and the model it opened with, so the
+		// header follows a selection that was written before it started
+		// without the interface ever reading the session it is not holding.
+		m.identity.agent = event.AgentID
+		m.identity.model = event.ModelID
 	case engine.EventContext:
 		// The engine measured the request the next turn would send once the
 		// conversation changed, so the footer follows the run as it grows
@@ -1914,6 +1932,8 @@ func (m *model) applyEvent(event engine.Event) {
 	case engine.EventCompactionEnd:
 		// The conversation the user reads changed: the summarized turns are
 		// replaced by the checkpoint, which is what DisplayedBranch returns.
+		// The store serializes the read, so rebuilding it here is safe even
+		// though the run that wrote the checkpoint is still in flight.
 		m.reloadTranscript()
 	case engine.EventRunEnd:
 		m.finishRun(event.Reason)
@@ -2216,8 +2236,13 @@ func (m *model) applyContext(info *engine.ContextInfo) {
 
 // reloadTranscript rebuilds the conversation from the active branch of the
 // session, used whenever the branch the interface shows changes: a session that
-// was opened and a session the user returned to an earlier turn.
+// was opened, a session the user returned to an earlier turn, and a run that
+// wrote a checkpoint. It also refreshes the identity the header shows, because
+// both read the same session and change at the same moments, which keeps the
+// two from ever disagreeing. The store serializes the read, so the one call
+// made while a run is in flight is safe.
 func (m *model) reloadTranscript() {
+	m.identity = identityFrom(m.session)
 	m.transcript = transcript{}
 	m.transcript.load(m.session.DisplayedBranch(), m.session.Info().Agent)
 	m.invalidateTranscript()

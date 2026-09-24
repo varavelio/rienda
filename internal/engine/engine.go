@@ -99,8 +99,8 @@ type Config struct {
 // resolver it was given is the only collaborator that may hold a cache, and it
 // is the caller's business to make that cache safe for concurrent use.
 //
-// An Engine is not safe for concurrent use: runs append to a session store,
-// which callers serialize.
+// An Engine is not safe for concurrent use: it drives one conversation at a
+// time, which callers serialize.
 type Engine struct {
 	store      *session.Store
 	agents     map[string]agent.Agent
@@ -110,8 +110,8 @@ type Engine struct {
 	compactor  Compactor
 	compaction Compaction
 
-	// busy guards the store against concurrent use: a run and a manual
-	// compaction both append to it, so only one may be in flight.
+	// busy admits one run at a time: a run and a manual compaction both
+	// append to the store, so only one of them may be in flight.
 	busy atomic.Bool
 }
 

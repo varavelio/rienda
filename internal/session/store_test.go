@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1579,4 +1580,56 @@ func TestCompactionBranches(t *testing.T) {
 			require.Equal(t, compaction.ID, displayed[len(displayed)-1].ID)
 		},
 	)
+}
+
+// TestStoreConcurrency verifies that a store serves readers while a writer
+// appends to it, which is what a run and the interface that watches it do at
+// once. Every read a front end makes on every frame is exercised, because the
+// walk of the branch follows the index the writer rewrites. Run under -race,
+// which is how the task test target runs it, the test fails when the store
+// stops serializing access to its own state.
+func TestStoreConcurrency(t *testing.T) {
+	store := newTestStore(t)
+
+	// The readers hammer the store until the writer is done, so a read always
+	// overlaps a write and the window the race needs never closes.
+	var writing sync.WaitGroup
+	written := make(chan struct{})
+	writing.Go(func() {
+		defer close(written)
+
+		for range 400 {
+			entry, err := store.Append(t.Context(), textEntry(llm.RoleUser, "turn"))
+			if err != nil {
+				return
+			}
+			_, _ = store.AppendCompaction(t.Context(), "summary", entry.ID, 1, "m", llm.Usage{})
+		}
+	})
+
+	var reading sync.WaitGroup
+	for range 4 {
+		reading.Go(func() {
+			for {
+				select {
+				case <-written:
+					return
+				default:
+				}
+
+				_ = store.ID()
+				_ = store.Info()
+				_ = store.Leaf()
+				_ = store.Entries()
+				_ = store.Branch()
+				_ = store.DisplayedBranch()
+				_ = store.History()
+				_ = store.ActiveAgent()
+				_ = store.ActiveModel()
+			}
+		})
+	}
+
+	writing.Wait()
+	reading.Wait()
 }

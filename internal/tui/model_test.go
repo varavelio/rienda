@@ -2803,12 +2803,21 @@ func TestRenameSession(t *testing.T) {
 	})
 
 	t.Run("shows the name in the identity of the session", func(t *testing.T) {
-		m, scripted := chatModel(t)
+		m, _ := chatModel(t)
 		require.NotContains(t, plain(m.render()), "Fix the parser")
 
-		scripted.info.Title = "Fix the parser"
-		scripted.info.Named = true
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Rename session")
+		update(t, m, pressEnter)
+		typeName(t, m, "Fix the parser")
+		update(t, m, pressEnter)
+		// The first escape clears the query of the command center and the
+		// second one returns to the conversation, which is where the header
+		// shows the name.
+		update(t, m, pressEscape)
+		update(t, m, pressEscape)
 
+		require.Equal(t, phaseChat, m.phase)
 		require.Contains(t, plain(m.render()), "session-1 · Fix the parser")
 	})
 
@@ -3117,5 +3126,179 @@ func TestSwitchModel(t *testing.T) {
 		update(t, m, pressCtrlP)
 		typeFilter(t, m, "Switch model")
 		require.Contains(t, plain(m.render()), "a run is in flight")
+	})
+}
+
+// readCountingSession wraps a session and records every read the interface
+// makes of it while a run is in flight. The interface renders the conversation
+// from what it caches and from what the run reports, so a frame never touches
+// the session the run owns; the single deliberate exception is the reload of
+// the conversation when the run writes a checkpoint.
+type readCountingSession struct {
+	Session
+
+	// reads collects the name of every method called while counting is on.
+	reads []string
+
+	// counting reports whether the calls are recorded, so the reads the
+	// interface makes around a run are not mistaken for reads during one.
+	counting bool
+}
+
+// count records the name of a read method when counting is on.
+func (s *readCountingSession) count(name string) {
+	if s.counting {
+		s.reads = append(s.reads, name)
+	}
+}
+
+// Info records the read of the session metadata.
+func (s *readCountingSession) Info() session.Info {
+	s.count("Info")
+	return s.Session.Info()
+}
+
+// Branch records the read of the active branch.
+func (s *readCountingSession) Branch() []session.Entry {
+	s.count("Branch")
+	return s.Session.Branch()
+}
+
+// DisplayedBranch records the read of the conversation the user reads.
+func (s *readCountingSession) DisplayedBranch() []session.Entry {
+	s.count("DisplayedBranch")
+	return s.Session.DisplayedBranch()
+}
+
+// Context records the read of the context measurement.
+//
+//nolint:wrapcheck // the session reports the failure of the store as it is.
+func (s *readCountingSession) Context() (tokens.Report, error) {
+	s.count("Context")
+	return s.Session.Context()
+}
+
+// CompactRefusal records the read of the refusal of the manual compaction.
+func (s *readCountingSession) CompactRefusal() (compaction.Refusal, bool) {
+	s.count("CompactRefusal")
+	return s.Session.CompactRefusal()
+}
+
+// Tree records the read of the whole tree.
+func (s *readCountingSession) Tree() []session.Entry {
+	s.count("Tree")
+	return s.Session.Tree()
+}
+
+// ActiveAgent records the read of the agent the branch runs.
+func (s *readCountingSession) ActiveAgent() string {
+	s.count("ActiveAgent")
+	return s.Session.ActiveAgent()
+}
+
+// ActiveModel records the read of the model the branch runs.
+func (s *readCountingSession) ActiveModel() string {
+	s.count("ActiveModel")
+	return s.Session.ActiveModel()
+}
+
+// Models records the read of the model roster.
+func (s *readCountingSession) Models() []string {
+	s.count("Models")
+	return s.Session.Models()
+}
+
+// TestRunReadsNoSession verifies that rendering the interface while a run is
+// in flight never reads the session. The run owns the session from the moment
+// it starts until it ends, so the header, the footer, the conversation and the
+// command center all render from what the interface caches and from what the
+// run reports, never from the session itself. This is what keeps a frame from
+// racing the run that is appending to the store.
+func TestRunReadsNoSession(t *testing.T) {
+	t.Run("renders the conversation without reading the session", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		counting := &readCountingSession{Session: stored}
+		m.session = counting
+
+		m.input.SetValue("go")
+		require.NotNil(t, update(t, m, pressEnter))
+
+		// The run reports what it opens with, so the header follows the agent
+		// and the model of the run without reading the session.
+		counting.counting = true
+		sendEvent(t, m, engine.Event{
+			Type:    engine.EventRunStart,
+			AgentID: "coder",
+			ModelID: "fake/test-model",
+		})
+		sendEvent(t, m, engine.Event{Type: engine.EventTextDelta, Text: "working"})
+		require.True(t, m.running)
+
+		// Every screen the user can reach while the run works must render from
+		// what the interface caches: the conversation, the command center and
+		// the picker it offers.
+		require.NotEmpty(t, m.render())
+		update(t, m, pressCtrlP)
+		require.NotEmpty(t, m.render())
+		require.Contains(t, plain(m.render()), "a run is in flight")
+		update(t, m, pressEscape)
+		require.Equal(t, phaseChat, m.phase)
+		require.NotEmpty(t, m.render())
+
+		require.Empty(t, counting.reads, "no read reaches the session while the run works")
+	})
+
+	t.Run("reloads the conversation when the run writes a checkpoint", func(t *testing.T) {
+		m, stored := storeChat(t, textMessage(llm.RoleUser, "hello"))
+		counting := &readCountingSession{Session: stored}
+		m.session = counting
+
+		m.input.SetValue("go")
+		require.NotNil(t, update(t, m, pressEnter))
+		require.True(t, m.running)
+
+		first := stored.store.Branch()[0]
+		_, err := stored.store.AppendCompaction(
+			t.Context(),
+			"the summary",
+			first.ID,
+			1,
+			"m",
+			llm.Usage{},
+		)
+		require.NoError(t, err)
+
+		// The checkpoint replaces the turns the user reads, so the conversation
+		// is rebuilt while the run is still in flight. This is the one read of
+		// the session the interface makes during a run, and it is safe because
+		// the store serializes it.
+		counting.counting = true
+		sendEvent(t, m, engine.Event{Type: engine.EventCompactionEnd})
+		require.True(t, m.running)
+		require.Contains(t, counting.reads, "DisplayedBranch")
+		require.Contains(t, plain(m.render()), "Compaction")
+	})
+
+	t.Run("reads the session again once the run ends", func(t *testing.T) {
+		m, stored := storeChat(t, textMessage(llm.RoleUser, "hello"))
+		counting := &readCountingSession{Session: stored}
+		m.session = counting
+
+		m.input.SetValue("go")
+		require.NotNil(t, update(t, m, pressEnter))
+
+		counting.counting = true
+		sendEvent(t, m, engine.Event{
+			Type:   engine.EventRunEnd,
+			Reason: engine.EndReasonTurn,
+		})
+		require.False(t, m.running)
+
+		// The run is over, so the interface may measure the branch again and
+		// the footer follows it.
+		require.Contains(t, counting.reads, "Context")
 	})
 }

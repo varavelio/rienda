@@ -745,18 +745,53 @@ func (m *model) mentionList(rows int) string {
 	return strings.Join(lines, "\n")
 }
 
+// identity is what the chat header shows of the open session: the agent and
+// the model the branch runs, the identifier and, when the user named it, the
+// name. It is a value the interface caches, so the header renders without
+// reading the session, which a run holds while it works.
+type identity struct {
+	// agent is the agent the branch runs.
+	agent string
+
+	// model is the provider/model reference the branch runs.
+	model string
+
+	// id is the session identifier.
+	id string
+
+	// named reports that the user named the session, so title is the name the
+	// user chose rather than the one derived from the first message.
+	named bool
+
+	// title is the name of the session, meaningful when named is set.
+	title string
+}
+
+// identityFrom reads the identity of a session, called from the moments the
+// identity changes: the transcript is rebuilt and the session is named. The
+// store serializes the read, so it is safe even while a run is in flight.
+func identityFrom(s Session) identity {
+	info := s.Info()
+	return identity{
+		agent: s.ActiveAgent(),
+		model: s.ActiveModel(),
+		id:    info.ID,
+		named: info.Named,
+		title: info.Title,
+	}
+}
+
 // chatIdentity renders the identity of the session: the brand followed by the
 // agent, the model, the session id and, when the user named it, the name,
 // which closes the line so the reader sees the name the session is found under
-// in the list.
+// in the list. It renders the cached identity, so it never reads the session.
 func (m *model) chatIdentity() string {
-	info := m.session.Info()
-	parts := []string{m.session.ActiveAgent(), m.session.ActiveModel()}
-	if info.ID != "" {
-		parts = append(parts, info.ID)
+	parts := []string{m.identity.agent, m.identity.model}
+	if m.identity.id != "" {
+		parts = append(parts, m.identity.id)
 	}
-	if info.Named {
-		parts = append(parts, info.Title)
+	if m.identity.named {
+		parts = append(parts, m.identity.title)
 	}
 	return m.brandIdentity() + m.styles.header.Render(" · "+strings.Join(parts, " · "))
 }
