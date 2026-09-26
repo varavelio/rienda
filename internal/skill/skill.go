@@ -71,7 +71,7 @@ func Discover(workdir string) Result {
 		// A project without skills is the common case and is not a problem.
 		return Result{}
 	case err != nil:
-		return Result{Diagnostics: []string{skillsLocation + ": " + err.Error()}}
+		return Result{Diagnostics: []string{"skill " + skillsLocation + ": " + err.Error()}}
 	}
 
 	// The order is Rienda's and not the file system's, so the catalog reads the
@@ -195,8 +195,10 @@ func locationOf(dir string) string {
 	return locationPrefix + dir + "/" + skillFile
 }
 
-// diagnose builds one diagnostic: the location of the file the user has to fix,
-// followed by the problems found, joined into a single line.
+// diagnose builds one diagnostic: the kind that produced it, the location of
+// the file the user has to fix, and the problems found, joined into a single
+// line. The kind prefix lets a renderer print a diagnostic verbatim instead of
+// guessing where it came from.
 func diagnose(location string, problems ...string) string {
-	return location + ": " + strings.Join(problems, "; ")
+	return "skill " + location + ": " + strings.Join(problems, "; ")
 }

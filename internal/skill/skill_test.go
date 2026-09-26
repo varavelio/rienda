@@ -120,7 +120,7 @@ func TestDiscover(t *testing.T) {
 		require.Len(t, result.Diagnostics, 3)
 		require.Equal(
 			t,
-			"./.agents/skills/alpha/SKILL.md: shadowed by ./.agents/skills/beta/SKILL.md",
+			"skill ./.agents/skills/alpha/SKILL.md: shadowed by ./.agents/skills/beta/SKILL.md",
 			result.Diagnostics[0],
 			"the shadowed skill is reported",
 		)
@@ -136,7 +136,7 @@ func TestDiscover(t *testing.T) {
 		require.Contains(t, result.Section, "<name>good</name>")
 		require.NotContains(t, result.Section, "broken")
 		require.Equal(t, []string{
-			"./.agents/skills/broken/SKILL.md: the description is missing or empty",
+			"skill ./.agents/skills/broken/SKILL.md: the description is missing or empty",
 		}, result.Diagnostics)
 	})
 
@@ -149,8 +149,8 @@ func TestDiscover(t *testing.T) {
 		result := Discover(workdir)
 
 		require.Equal(t, []string{
-			"./.agents/skills/first/SKILL.md: the description is missing or empty",
-			"./.agents/skills/second/SKILL.md: the frontmatter is missing its opening ---",
+			"skill ./.agents/skills/first/SKILL.md: the description is missing or empty",
+			"skill ./.agents/skills/second/SKILL.md: the frontmatter is missing its opening ---",
 		}, result.Diagnostics)
 	})
 
@@ -162,7 +162,7 @@ func TestDiscover(t *testing.T) {
 
 		require.Contains(t, result.Section, "<name>PDF_Handler</name>")
 		require.Equal(t, []string{
-			"./.agents/skills/PDF_Handler/SKILL.md: " +
+			"skill ./.agents/skills/PDF_Handler/SKILL.md: " +
 				"the name uses characters outside lowercase letters, digits and hyphens",
 		}, result.Diagnostics)
 	})
@@ -180,7 +180,7 @@ func TestDiscover(t *testing.T) {
 
 		require.Empty(t, result.Section)
 		require.Len(t, result.Diagnostics, 1)
-		require.Contains(t, result.Diagnostics[0], "./.agents/skills/dangling/SKILL.md")
+		require.Contains(t, result.Diagnostics[0], "skill ./.agents/skills/dangling/SKILL.md")
 	})
 
 	t.Run("follows a symlinked skill directory", func(t *testing.T) {

@@ -102,7 +102,7 @@ func TestLocationOf(t *testing.T) {
 func TestDiagnose(t *testing.T) {
 	t.Run("joins the problems of a skill into one line", func(t *testing.T) {
 		require.Equal(t,
-			"./.agents/skills/pdfs/SKILL.md: first; second",
+			"skill ./.agents/skills/pdfs/SKILL.md: first; second",
 			diagnose(locationOf("pdfs"), "first", "second"),
 		)
 	})
