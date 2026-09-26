@@ -71,6 +71,8 @@ Flags of the interactive interface:
   -a, --agent     Agent to run, skipping the start list and the agent picker
   -C, --workdir   Directory sessions run in
       --config    Path of the configuration file
+  -y, --auto-approve
+                  Answer every confirmation without asking
 
 Environment:
   RIENDA_CONFIG   Path of the configuration file when --config is not set
