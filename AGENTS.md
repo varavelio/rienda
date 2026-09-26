@@ -11,6 +11,11 @@ dispatches to them: the interactive interface in `internal/tui` (the default
 mode), the non-interactive commands in `internal/cli`, and the protocol server
 in `internal/rpc`. Every mode drives sessions through `internal/harness`.
 
+Users extend Rienda without touching Go: JavaScript tools in
+`~/.rienda/tools` and hooks in `~/.rienda/hooks`, executed by the embedded
+goja runtime in `internal/jsruntime` and wired through `internal/tool`,
+`internal/hook` and `internal/engine`.
+
 ## Release
 
 Releases are published only through the GitHub release workflow in
