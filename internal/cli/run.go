@@ -27,6 +27,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	flags.Usage = func() { runUsage(stderr) }
 
 	var agentID, modelRef, sessionID, prompt, configPath, workdir string
+	var autoApprove bool
 	flags.StringVar(&agentID, "agent", "", "agent definition to run")
 	flags.StringVar(&agentID, "a", "", "shorthand for --agent")
 	flags.StringVar(&modelRef, "model", "", "model reference to run")
@@ -38,6 +39,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	flags.StringVar(&configPath, "config", "", "path of the configuration file")
 	flags.StringVar(&workdir, "workdir", "", "directory the session runs in")
 	flags.StringVar(&workdir, "C", "", "shorthand for --workdir")
+	flags.BoolVar(&autoApprove, "auto-approve", false, "answer every confirmation without asking")
+	flags.BoolVar(&autoApprove, "y", false, "shorthand for --auto-approve")
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -67,11 +70,12 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	session, err := harness.Prepare(ctx, harness.Options{
-		AgentID:    agentID,
-		ModelRef:   modelRef,
-		SessionID:  sessionID,
-		Workdir:    workdir,
-		ConfigPath: configPath,
+		AgentID:     agentID,
+		ModelRef:    modelRef,
+		SessionID:   sessionID,
+		Workdir:     workdir,
+		ConfigPath:  configPath,
+		AutoApprove: autoApprove,
 	})
 	if err != nil {
 		return fmt.Errorf("run: prepare session: %w", err)
@@ -96,5 +100,7 @@ Flags:
   -p, --prompt    Prompt to send to the agent (required)
       --config    Path of the configuration file
   -C, --workdir   Directory the session runs in
+  -y, --auto-approve
+                  Answer every confirmation without asking
 `)
 }

@@ -23,6 +23,8 @@ func render(events <-chan engine.Event, stdout, stderr io.Writer) error {
 	pending := false
 	var attempt strings.Builder
 	var failure error
+	var endReason engine.EndReason
+	ended := false
 
 	flush := func() error {
 		if attempt.Len() == 0 {
@@ -65,6 +67,10 @@ func render(events <-chan engine.Event, stdout, stderr io.Writer) error {
 			if err := renderDiagnostics(stderr, event); err != nil {
 				return err
 			}
+		case engine.EventNotice:
+			if _, err := fmt.Fprintln(stderr, event.Text); err != nil {
+				return fmt.Errorf("render: write notice: %w", err)
+			}
 		case engine.EventMessageEnd:
 			if err := flush(); err != nil {
 				return err
@@ -92,10 +98,22 @@ func render(events <-chan engine.Event, stdout, stderr io.Writer) error {
 			if err := flushLine(stdout, &pending); err != nil {
 				return err
 			}
-			return runError(event.Reason, failure)
+			// The run ended but the channel stays open until the engine
+			// finishes: hooks run after the end event and may still report,
+			// so the consumer keeps receiving until the close.
+			endReason, ended = event.Reason, true
 		}
 	}
-	return nil
+	if !ended {
+		return nil
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	if err := flushLine(stdout, &pending); err != nil {
+		return err
+	}
+	return runError(endReason, failure)
 }
 
 // runError translates the end reason of a run into the command error.
@@ -138,7 +156,7 @@ func renderToolResult(w io.Writer, event engine.Event, streamed bool) error {
 // model. Standard output stays the answer and nothing else.
 func renderDiagnostics(w io.Writer, event engine.Event) error {
 	for _, diagnostic := range event.Diagnostics {
-		if _, err := fmt.Fprintln(w, "skill "+diagnostic); err != nil {
+		if _, err := fmt.Fprintln(w, diagnostic); err != nil {
 			return fmt.Errorf("render: write skill diagnostic: %w", err)
 		}
 	}

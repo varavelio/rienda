@@ -73,6 +73,28 @@ func TestRun(t *testing.T) {
 		require.Contains(t, stderr.String(), "Usage:")
 	})
 
+	t.Run("accepts auto approve with its alias", func(t *testing.T) {
+		for _, flag := range []string{"--auto-approve", "-y"} {
+			stdout, stderr := &strings.Builder{}, &strings.Builder{}
+			configPath := filepath.Join(t.TempDir(), "missing.yaml")
+
+			err := Run(
+				[]string{"-a", "coder", "-p", "hi", "--config", configPath, flag},
+				stdout,
+				stderr,
+			)
+
+			require.ErrorContains(t, err, "does not exist", flag)
+		}
+	})
+
+	t.Run("documents auto approve in the usage", func(t *testing.T) {
+		stdout, stderr := &strings.Builder{}, &strings.Builder{}
+
+		require.NoError(t, Run([]string{"-h"}, stdout, stderr))
+		require.Contains(t, stderr.String(), "--auto-approve")
+	})
+
 	t.Run("reports preparation failures", func(t *testing.T) {
 		stdout, stderr := &strings.Builder{}, &strings.Builder{}
 		configPath := filepath.Join(t.TempDir(), "missing.yaml")
