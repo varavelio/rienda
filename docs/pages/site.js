@@ -1,22 +1,31 @@
-// Pages are plain JavaScript. Docs: https://veta.varavel.com/pages
-// You can access environment, data, local files and remote sources
-// using the destructured context.
-export default function({ data, files, httpClient, parse }) {
-  const home = parse.markdown("<note>A tiny site generated with **Veta**.</note>");
-  const about = parse.markdown("This page was generated from `pages/site.js`.");
+export default function({ data, files, parse }) {
+  let pages = [];
 
-  return [
-    {
-      permalink: "/",
-      template: "base",
-      title: "Home",
-      content: parse.renderComponents(home.html),
-    },
-    {
-      permalink: "/about/",
-      template: "base",
-      title: "About",
-      content: about.html,
-    },
-  ];
+  const homePageRaw = files.readFile("content/index.md");
+  const homePageMd = parse.markdown(homePageRaw);
+  const homePageContent = parse.renderComponents(homePageMd.html);
+
+  pages.push({
+    permalink: "/",
+    template: "vara-landing",
+    title: homePageMd.frontmatter.title || data.site.title,
+    description: homePageMd.frontmatter.description || data.site.description,
+    content: homePageContent,
+  });
+
+  pages.push({
+    permalink: "/404.html",
+    template: "vara-404",
+    title: "Page not found",
+    description: "The requested page could not be found.",
+    sitemap: false,
+    content: "",
+  });
+
+  pages.push({
+    permalink: "/sitemap.xml",
+    template: "vara-sitemap-xml",
+  });
+
+  return pages;
 }

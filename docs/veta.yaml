@@ -2,21 +2,22 @@
 # Read more: https://veta.varavel.com/config
 
 build:
-  output: dist # Directory where Veta writes the generated site.
-  clean: true # Remove the output directory before each build.
+  output: dist
+  clean: true
 
 dev:
-  host: 127.0.0.1 # Local development server host.
-  port: 3000 # Local development server port.
-  watch: [] # Additional project-relative files or directories to watch.
+  host: 127.0.0.1
+  port: 3000
+  watch:
+    - content
 
 html:
-  minify: true # Minify generated .html files.
+  minify: true
 
 tailwindcss:
   stylesheets:
-    - styles.css # Compile public/styles.css into dist/styles.css (add more if you want).
-  minify: true # Minify the generated stylesheet.
+    - styles.css
+  minify: true
 
-# theme:
-#   source: "" # Local theme path or GitHub source. Docs: https://veta.varavel.com/themes
+theme:
+  source: "varavelio/veta-theme-vara@v1.0.4"

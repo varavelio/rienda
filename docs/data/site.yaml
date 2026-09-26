@@ -1,2 +1,8 @@
-name: Veta Starter
-description: A tiny site generated with Veta.
+title: "Rienda"
+description: "A simple, multi agent LLM harness"
+site_url: "https://rienda.varavel.com"
+# favicon: "https://cdn.jsdelivr.net/gh/varavelio/zen-idp@v0.1.0-alpha.6/assets/icon.svg"
+# logo_light: "https://cdn.jsdelivr.net/gh/varavelio/zen-idp@v0.1.0-alpha.6/assets/logo-black.svg"
+# logo_dark: "https://cdn.jsdelivr.net/gh/varavelio/zen-idp@v0.1.0-alpha.6/assets/logo-white.svg"
+
+docs_github_repo: "varavelio/rienda"
