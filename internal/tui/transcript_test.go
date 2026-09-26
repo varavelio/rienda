@@ -288,8 +288,8 @@ func TestTranscript(t *testing.T) {
 		conversation.apply(engine.Event{
 			Type: engine.EventRunStart,
 			Diagnostics: []string{
-				"./.agents/skills/broken/SKILL.md: the description is missing or empty",
-				"./.agents/skills/other/SKILL.md: the name is missing or empty",
+				"skill ./.agents/skills/broken/SKILL.md: the description is missing or empty",
+				"skill ./.agents/skills/other/SKILL.md: the name is missing or empty",
 			},
 		})
 

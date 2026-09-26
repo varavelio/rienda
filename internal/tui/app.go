@@ -56,11 +56,12 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 
 	prepare := func(sessionID, agentID string) (Session, error) {
 		return harness.Prepare(context.Background(), harness.Options{
-			AgentID:    agentID,
-			SessionID:  sessionID,
-			AgentsDir:  agentsDir,
-			Workdir:    opts.Workdir,
-			ConfigPath: opts.ConfigPath,
+			AgentID:     agentID,
+			SessionID:   sessionID,
+			AgentsDir:   agentsDir,
+			Workdir:     opts.Workdir,
+			ConfigPath:  opts.ConfigPath,
+			AutoApprove: opts.AutoApprove,
 		})
 	}
 

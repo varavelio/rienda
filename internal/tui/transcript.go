@@ -358,8 +358,10 @@ func (t *transcript) apply(event engine.Event) {
 		t.finishTool(event.ToolCallID, event.IsError, event.Text)
 	case engine.EventRunStart:
 		for _, diagnostic := range event.Diagnostics {
-			t.addNotice("skill " + diagnostic)
+			t.addNotice(diagnostic)
 		}
+	case engine.EventNotice:
+		t.addNotice(event.Text)
 	case engine.EventRetry:
 		if event.Discard {
 			t.discard()

@@ -36,6 +36,18 @@ func TestParseOptions(t *testing.T) {
 		require.Equal(t, "/work", parsed.Workdir)
 	})
 
+	t.Run("parses auto approve with its alias", func(t *testing.T) {
+		parsed, err := parseOptions([]string{"--auto-approve"})
+
+		require.NoError(t, err)
+		require.True(t, parsed.AutoApprove)
+
+		parsed, err = parseOptions([]string{"-y"})
+
+		require.NoError(t, err)
+		require.True(t, parsed.AutoApprove)
+	})
+
 	t.Run("trims the values", func(t *testing.T) {
 		parsed, err := parseOptions([]string{"-a", "  coder  "})
 

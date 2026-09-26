@@ -22,6 +22,9 @@ type options struct {
 
 	// ConfigPath overrides the path of the configuration file.
 	ConfigPath string
+
+	// AutoApprove answers every confirmation without asking.
+	AutoApprove bool
 }
 
 // parseOptions parses the arguments of the interactive interface. It returns
@@ -37,6 +40,13 @@ func parseOptions(args []string) (options, error) {
 	flags.StringVar(&parsed.Workdir, "workdir", "", "directory sessions run in")
 	flags.StringVar(&parsed.Workdir, "C", "", "shorthand for --workdir")
 	flags.StringVar(&parsed.ConfigPath, "config", "", "path of the configuration file")
+	flags.BoolVar(
+		&parsed.AutoApprove,
+		"auto-approve",
+		false,
+		"answer every confirmation without asking",
+	)
+	flags.BoolVar(&parsed.AutoApprove, "y", false, "shorthand for --auto-approve")
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -63,5 +73,7 @@ Flags:
   -a, --agent     Agent to run, skipping the start list and the agent picker
   -C, --workdir   Directory sessions run in
       --config    Path of the configuration file
+  -y, --auto-approve
+                  Answer every confirmation without asking
 `)
 }
