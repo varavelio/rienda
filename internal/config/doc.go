@@ -31,5 +31,7 @@
 // inherited name and setting it to an empty value disables it.
 //
 // Decoding is strict: an unknown key is an error, so typos never pass
-// unnoticed.
+// unnoticed. The single exception is the free config block, a map of
+// maps for extension settings that scripts read as ctx.config.config; Data
+// returns the file as plain data for those readers.
 package config

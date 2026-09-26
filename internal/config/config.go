@@ -22,6 +22,21 @@ type Config struct {
 	// Compaction configures how a conversation is summarized when it grows too
 	// large for the context window of its model.
 	Compaction Compaction `yaml:"compaction"`
+
+	// Config holds free-form extension settings, keyed by extension name. It
+	// is nil when the file declares none.
+	Config map[string]map[string]any `yaml:"-"`
+
+	// raw holds the file as declared, for Data.
+	raw map[string]any `yaml:"-"`
+}
+
+// strictConfig decodes the file with strict keys, accepting any value under
+// config for later validation.
+type strictConfig struct {
+	Providers  map[string]Provider `yaml:"providers"`
+	Compaction Compaction          `yaml:"compaction"`
+	Config     any                 `yaml:"config"`
 }
 
 // Compaction declares the settings of the conversation compaction. Parse fills
@@ -157,10 +172,10 @@ func DefaultPath() (string, error) {
 func Parse(data []byte) (*Config, error) {
 	// The defaults are in place before the file is decoded, so a key the file
 	// omits keeps the documented value and a key it declares overrides it.
-	cfg := Config{Compaction: defaultCompaction()}
+	strict := strictConfig{Compaction: defaultCompaction()}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	if err := decoder.Decode(&cfg); err != nil {
+	if err := decoder.Decode(&strict); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, errors.New("config: file is empty")
 		}
@@ -169,6 +184,20 @@ func Parse(data []byte) (*Config, error) {
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("config: file must hold a single YAML document")
+	}
+	config, err := normalizeConfig(strict.Config)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("config: invalid configuration: %w", err)
+	}
+	cfg := Config{
+		Providers:  strict.Providers,
+		Compaction: strict.Compaction,
+		Config:     config,
+		raw:        raw,
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -194,6 +223,73 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// normalizeConfig validates the free config block: absent stays absent, and a
+// present one must be a map of maps.
+func normalizeConfig(raw any) (map[string]map[string]any, error) {
+	if raw == nil {
+		//nolint:nilnil // an absent block stays absent by contract.
+		return nil, nil
+	}
+	outer, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("config: config must be an object of objects")
+	}
+	config := make(map[string]map[string]any, len(outer))
+	for name, values := range outer {
+		inner, ok := values.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("config: config %q must be an object", name)
+		}
+		config[name] = inner
+	}
+	return config, nil
+}
+
+// Data returns the whole file as plain data, with the snake_case keys of the
+// file and the config block included, for readers that treat the configuration
+// as a document. It reflects what the file declared, not the resolved defaults,
+// and the returned map is independent of the Config.
+func (c *Config) Data() map[string]any {
+	return deepCopy(c.raw)
+}
+
+// deepCopy clones plain YAML data so a caller cannot corrupt the parsed
+// configuration through the returned map.
+func deepCopy(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for k, v := range value {
+		out[k] = deepValue(v)
+	}
+	return out
+}
+
+// deepValue clones one plain YAML value.
+func deepValue(v any) any {
+	switch value := v.(type) {
+	case map[string]any:
+		return deepCopy(value)
+	case map[any]any:
+		out := make(map[string]any, len(value))
+		for k, val := range value {
+			if name, ok := k.(string); ok {
+				out[name] = deepValue(val)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(value))
+		for i, item := range value {
+			out[i] = deepValue(item)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // ProviderNames returns the configured provider names in sorted order.

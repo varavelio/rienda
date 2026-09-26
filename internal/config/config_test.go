@@ -383,3 +383,80 @@ providers:
 		require.Equal(t, []string{"alpha", "middle", "zeta"}, cfg.ProviderNames())
 	})
 }
+
+func TestParseConfigBlock(t *testing.T) {
+	t.Run("parses a valid block", func(t *testing.T) {
+		cfg := mustParse(
+			t,
+			"providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig:\n  guard:\n    level: strict\n",
+		)
+		require.Equal(t, map[string]map[string]any{
+			"guard": {"level": "strict"},
+		}, cfg.Config)
+	})
+
+	t.Run("defaults to absent", func(t *testing.T) {
+		cfg := mustParse(t, "providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\n")
+		require.Nil(t, cfg.Config)
+	})
+
+	t.Run("rejects a scalar", func(t *testing.T) {
+		_, err := Parse(
+			[]byte("providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig: foo\n"),
+		)
+		require.ErrorContains(t, err, "config")
+	})
+
+	t.Run("rejects a list", func(t *testing.T) {
+		_, err := Parse(
+			[]byte(
+				"providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig:\n  - a\n",
+			),
+		)
+		require.ErrorContains(t, err, "config")
+	})
+
+	t.Run("rejects a nested scalar", func(t *testing.T) {
+		_, err := Parse(
+			[]byte(
+				"providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig:\n  guard: strict\n",
+			),
+		)
+		require.ErrorContains(t, err, `config "guard"`)
+	})
+
+	t.Run("data returns the declared document", func(t *testing.T) {
+		cfg := mustParse(
+			t,
+			"providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig:\n  guard:\n    level: strict\n",
+		)
+		data := cfg.Data()
+		require.Equal(t, "strict", nested(t, data, "config", "guard", "level"))
+		require.Equal(t, "ollama", nested(t, data, "providers", "p", "preset"))
+		requireObjectAt(t, data, "config")["guard"] = nil
+		require.Equal(t, "strict", cfg.Config["guard"]["level"])
+	})
+}
+
+// requireObjectAt returns the plain object at the given top-level field.
+func requireObjectAt(t *testing.T, data map[string]any, field string) map[string]any {
+	t.Helper()
+	table, ok := data[field].(map[string]any)
+	require.True(t, ok, "expected an object at %q", field)
+	return table
+}
+
+// nested reads a nested string field of plain data.
+func nested(t *testing.T, data map[string]any, fields ...string) string {
+	t.Helper()
+	var current any = data
+	for _, field := range fields {
+		table, ok := current.(map[string]any)
+		require.True(t, ok, "expected an object at %q", field)
+		current, ok = table[field]
+		require.True(t, ok, "expected a field %q", field)
+	}
+	text, ok := current.(string)
+	require.True(t, ok, "expected a string")
+	return text
+}
