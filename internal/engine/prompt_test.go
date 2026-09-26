@@ -232,7 +232,7 @@ func TestSystemPromptSkills(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, []string{
-			"./.agents/skills/broken/SKILL.md: the description is missing or empty",
+			"skill ./.agents/skills/broken/SKILL.md: the description is missing or empty",
 		}, diagnostics)
 	})
 

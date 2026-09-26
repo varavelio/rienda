@@ -609,7 +609,7 @@ func TestRun(t *testing.T) {
 		require.Len(t, reported, 1, "a run reports its diagnostics exactly once")
 		require.Equal(t, EventRunStart, reported[0].Type)
 		require.Equal(t, []string{
-			"./.agents/skills/broken/SKILL.md: the description is missing or empty",
+			"skill ./.agents/skills/broken/SKILL.md: the description is missing or empty",
 		}, reported[0].Diagnostics)
 
 		require.Greater(

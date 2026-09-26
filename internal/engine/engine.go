@@ -89,6 +89,14 @@ type Config struct {
 	// agent declares tools.
 	Registry *tool.Registry
 
+	// Hooks resolves the hook extensions the agent declares. It is optional;
+	// nil means no hooks.
+	Hooks HookResolver
+
+	// Diagnostics holds what the harness found while loading the extensions.
+	// The run that opens reports them once, after the skill diagnostics.
+	Diagnostics []string
+
 	// Compactor summarizes the branch when the context grows too large. It is
 	// nil when the session compacts nothing, which the manual command and the
 	// automatic threshold both honor.
@@ -115,13 +123,15 @@ type Config struct {
 // An Engine is not safe for concurrent use: it drives one conversation at a
 // time, which callers serialize.
 type Engine struct {
-	store      *session.Store
-	agents     map[string]agent.Agent
-	resolver   Resolver
-	registry   *tool.Registry
-	workdir    string
-	compactor  Compactor
-	compaction Compaction
+	store       *session.Store
+	agents      map[string]agent.Agent
+	resolver    Resolver
+	registry    *tool.Registry
+	hooks       HookResolver
+	diagnostics []string
+	workdir     string
+	compactor   Compactor
+	compaction  Compaction
 
 	// busy admits one run at a time: a run and a manual compaction both
 	// append to the store, so only one of them may be in flight.
@@ -175,13 +185,15 @@ func New(cfg Config) (*Engine, error) {
 	}
 
 	return &Engine{
-		store:      cfg.Store,
-		agents:     agents,
-		resolver:   cfg.Resolver,
-		registry:   cfg.Registry,
-		workdir:    cfg.Workdir,
-		compactor:  cfg.Compactor,
-		compaction: cfg.Compaction,
+		store:       cfg.Store,
+		agents:      agents,
+		resolver:    cfg.Resolver,
+		registry:    cfg.Registry,
+		hooks:       cfg.Hooks,
+		diagnostics: slices.Clone(cfg.Diagnostics),
+		workdir:     cfg.Workdir,
+		compactor:   cfg.Compactor,
+		compaction:  cfg.Compaction,
 	}, nil
 }
 
@@ -260,6 +272,9 @@ type turnPlan struct {
 	// skills of the workspace. The run that opens reports them; a context
 	// measurement ignores them, so measuring a branch never reports anything.
 	diagnostics []string
+
+	// hooks runs the hook extensions the agent of the turn declares.
+	hooks Hooks
 }
 
 // withSystem returns the plan of a turn of a run, sending the system prompt the
@@ -305,6 +320,11 @@ func (e *Engine) plan() (turnPlan, error) {
 		return turnPlan{}, err
 	}
 
+	hooks, err := resolveHooks(e.hooks, definition.Hooks)
+	if err != nil {
+		return turnPlan{}, err
+	}
+
 	return turnPlan{
 		agent:  definition,
 		model:  model,
@@ -320,7 +340,8 @@ func (e *Engine) plan() (turnPlan, error) {
 			Thinking:    thinking(model),
 		},
 		tools:       tools,
-		diagnostics: diagnostics,
+		hooks:       hooks,
+		diagnostics: append(slices.Clone(diagnostics), e.diagnostics...),
 	}, nil
 }
 

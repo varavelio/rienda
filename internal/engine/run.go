@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,10 @@ import (
 
 // errNothingToContinue reports a run asked to continue an empty session.
 var errNothingToContinue = errors.New("engine: there is no conversation to continue")
+
+// errEmptyResponse reports a model response left with no content after the
+// hooks rewrote it, refused exactly like a response that streamed nothing.
+var errEmptyResponse = errors.New("engine: the model returned an empty response")
 
 // Texts of the synthetic results persisted when a run is interrupted while
 // tools are running. They keep the history valid for the next provider call
@@ -50,6 +55,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	if e.workdir != "" {
 		ctx = tool.WithWorkdir(ctx, e.workdir)
 	}
+	baseCtx := ctx
 
 	// The plan of the first turn names the agent and the model of the run, which
 	// the start event reports. Building it here also fails the run before the
@@ -93,54 +99,92 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	emit(events, start)
 	e.emitContext(events)
 
+	// The run is open: afterRun runs exactly once from here on, on every exit
+	// path, through finish and failRun. The hooks and the decorated context
+	// follow the plan of the latest turn, so a session that switched agent
+	// closes with the hooks it runs.
+	runCtx := e.attachRun(baseCtx, plan, events)
+	hooks := plan.hooks
+	hooks.BeforeRun(runCtx, BeforeRunHook{
+		SessionID: e.store.ID(),
+		AgentID:   plan.agent.ID,
+		ModelID:   plan.model.ID,
+	})
+	finish := func(reason EndReason) {
+		emit(events, Event{Type: EventRunEnd, Reason: reason})
+		hooks.AfterRun(runCtx, AfterRunHook{Reason: reason})
+	}
+	failRun := func(err error) {
+		emit(events, Event{Type: EventError, Error: err.Error()})
+		finish(EndReasonError)
+	}
+
 	// At most one automatic compaction happens per run: without the guard a
 	// stubborn threshold would turn into a loop.
 	compacted := false
+	// Persisting a complete response is not cancelable, so the context of the
+	// writes is built once, outside the loop.
+	persistCtx := context.WithoutCancel(ctx)
 	for {
 		if ctx.Err() != nil {
-			emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})
+			finish(EndReasonInterrupted)
 			return
 		}
 
 		plan, err = e.plan()
 		if err != nil {
-			fail(events, err)
+			failRun(err)
 			return
 		}
 		plan = plan.withSystem(system)
+		//nolint:fatcontext // the run identity follows the agent of the turn.
+		runCtx = e.attachRun(baseCtx, plan, events)
+		hooks = plan.hooks
 		if !compacted && e.shouldCompact(plan) {
 			compacted = true
 			if err := e.compactBranch(ctx, events); err != nil {
 				if ctx.Err() != nil {
-					emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})
+					finish(EndReasonInterrupted)
 					return
 				}
-				fail(events, err)
+				failRun(err)
 				return
 			}
 			// The branch changed under the run: the compaction appended a
 			// checkpoint, so the plan is rebuilt from the branch as it stands
 			// and pinned to the system prompt the run opened with.
 			if plan, err = e.plan(); err != nil {
-				fail(events, err)
+				failRun(err)
 				return
 			}
 			plan = plan.withSystem(system)
+			runCtx = e.attachRun(baseCtx, plan, events)
+			hooks = plan.hooks
+		}
+
+		if rewritten, ok := e.beforeModelRequest(runCtx, plan); ok {
+			plan.request.System = rewritten
 		}
 
 		response, err := e.generate(ctx, events, plan)
 		if err != nil {
 			if ctx.Err() != nil {
-				emit(events, Event{Type: EventRunEnd, Reason: EndReasonInterrupted})
+				finish(EndReasonInterrupted)
 				return
 			}
-			fail(events, err)
+			failRun(err)
+			return
+		}
+
+		response = e.afterModelResponse(runCtx, plan, response)
+		if len(response.toolCalls()) == 0 && responseProseEmpty(response.blocks) {
+			failRun(errEmptyResponse)
 			return
 		}
 
 		// Persisting a complete response is not cancelable: the work is done,
 		// so it must survive an interrupt that arrives right now.
-		entry, err := e.store.Append(context.WithoutCancel(ctx), session.Entry{
+		entry, err := e.store.Append(persistCtx, session.Entry{
 			Message: llm.Message{
 				Role:   llm.RoleAssistant,
 				Blocks: response.blocks,
@@ -151,7 +195,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			ResponseUsage:      response.usage,
 		})
 		if err != nil {
-			fail(events, err)
+			failRun(err)
 			return
 		}
 		emit(events, Event{
@@ -164,43 +208,86 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 
 		calls := response.toolCalls()
 		if len(calls) == 0 {
-			emit(events, Event{Type: EventRunEnd, Reason: EndReasonTurn})
+			finish(EndReasonTurn)
 			return
 		}
 
-		results := e.executeTools(ctx, plan.tools, response.argumentErrors, calls, events)
-		if _, err := e.store.Append(context.WithoutCancel(ctx), session.Entry{
+		results := e.executeTools(runCtx, plan, response.argumentErrors, calls, events)
+		if _, err := e.store.Append(persistCtx, session.Entry{
 			Message: llm.Message{Role: llm.RoleUser, Blocks: results},
 		}); err != nil {
-			fail(events, err)
+			failRun(err)
 			return
 		}
 		e.emitContext(events)
 	}
 }
 
+// beforeModelRequest runs the beforeModelRequest hooks of the turn, returning
+// the replacement system prompt when a hook rewrote it.
+func (e *Engine) beforeModelRequest(ctx context.Context, plan turnPlan) (string, bool) {
+	result := plan.hooks.BeforeModelRequest(ctx, BeforeModelRequestHook{
+		System:   plan.request.System,
+		Model:    plan.request.Model,
+		Messages: hookMessages(plan.request.Messages),
+	})
+	if !result.Set {
+		return "", false
+	}
+	return result.System, true
+}
+
+// afterModelResponse runs the afterModelResponse hooks of the turn, rewriting
+// the assistant prose they return.
+func (e *Engine) afterModelResponse(ctx context.Context, plan turnPlan, response turn) turn {
+	hookCalls := hookToolCalls(response.toolCalls(), response.argumentErrors)
+	var text strings.Builder
+	var thinking strings.Builder
+	for _, block := range response.blocks {
+		switch block.Type {
+		case llm.BlockText:
+			text.WriteString(block.Text)
+		case llm.BlockThinking:
+			thinking.WriteString(block.Thinking)
+		}
+	}
+	result := plan.hooks.AfterModelResponse(ctx, AfterModelResponseHook{
+		Text:      text.String(),
+		Thinking:  thinking.String(),
+		ToolCalls: hookCalls,
+	})
+	response.blocks = applyModelResponseRewrite(response.blocks, result)
+	return response
+}
+
 // executeTools runs the tool calls of a response in request order and returns
 // the tool result blocks to persist.
 func (e *Engine) executeTools(
 	ctx context.Context,
-	tools turnTools,
+	plan turnPlan,
 	argumentErrors map[string]error,
 	calls []llm.Block,
 	events chan<- Event,
 ) []llm.Block {
+	// A hook that repairs malformed arguments legitimizes the call: the
+	// replacement is a re-serialized object, well formed by construction.
+	errors := make(map[string]error, len(argumentErrors))
+	maps.Copy(errors, argumentErrors)
 	results := make([]llm.Block, 0, len(calls))
 	for _, call := range calls {
-		results = append(results, e.executeTool(ctx, tools, argumentErrors, call, events))
+		results = append(results, e.executeTool(ctx, plan, errors, call, events))
 	}
 	return results
 }
 
 // executeTool runs one tool call and returns its result block. It never fails:
 // calls that cannot run are reported to the model as error results, so the
-// conversation stays valid.
+// conversation stays valid. The hooks run for every call the model requested,
+// in request order, before the engine's own checks, so a hook never misses a
+// call because the tool is unknown or its arguments arrived malformed.
 func (e *Engine) executeTool(
 	ctx context.Context,
-	tools turnTools,
+	plan turnPlan,
 	argumentErrors map[string]error,
 	call llm.Block,
 	events chan<- Event,
@@ -215,15 +302,40 @@ func (e *Engine) executeTool(
 	if ctx.Err() != nil {
 		return reportResult(call, tool.ErrorResult(interruptedBeforeTool), events)
 	}
-	if err := argumentErrors[call.ToolCallID]; err != nil {
-		result := tool.ErrorResult("the tool was not executed: " + err.Error())
-		return reportResult(call, result, events)
+
+	hookCall := HookToolCall{
+		ID:        call.ToolCallID,
+		Name:      call.ToolCallName,
+		Arguments: call.ToolCallArguments,
+	}
+	before := plan.hooks.BeforeToolExecute(ctx, BeforeToolExecuteHook(hookCall))
+	if len(before.Arguments) > 0 {
+		hookCall.Arguments = before.Arguments
+		call.ToolCallArguments = before.Arguments
+		delete(argumentErrors, call.ToolCallID)
+	}
+	if before.Allow != nil && !*before.Allow {
+		reason := before.Reason
+		if reason == "" {
+			reason = "the call was refused by a hook"
+		}
+		refused := tool.ErrorResult(reason)
+		after := plan.hooks.AfterToolExecute(ctx, AfterToolExecuteHook{
+			Call:   hookCall,
+			Result: HookResult{Text: resultText(refused.Blocks), IsError: true},
+		})
+		return reportResult(call, applyToolRewrite(refused, after), events)
 	}
 
-	executor, found := tools.executors[call.ToolCallName]
+	if err := argumentErrors[call.ToolCallID]; err != nil {
+		result := tool.ErrorResult("the tool was not executed: " + err.Error())
+		return e.afterTool(ctx, plan, hookCall, call, result, events)
+	}
+
+	executor, found := plan.tools.executors[call.ToolCallName]
 	if !found {
 		result := tool.ErrorResult("unknown tool " + strconv.Quote(call.ToolCallName))
-		return reportResult(call, result, events)
+		return e.afterTool(ctx, plan, hookCall, call, result, events)
 	}
 
 	result, err := executor.Execute(ctx, tool.Call{
@@ -244,7 +356,43 @@ func (e *Engine) executeTool(
 	case len(result.Blocks) == 0:
 		result = tool.TextResult("(no output)")
 	}
-	return reportResult(call, result, events)
+	return e.afterTool(ctx, plan, hookCall, call, result, events)
+}
+
+// afterTool runs the afterToolExecute hooks and returns the block to persist.
+func (e *Engine) afterTool(
+	ctx context.Context,
+	plan turnPlan,
+	hookCall HookToolCall,
+	call llm.Block,
+	result tool.Result,
+	events chan<- Event,
+) llm.Block {
+	after := plan.hooks.AfterToolExecute(ctx, AfterToolExecuteHook{
+		Call:   hookCall,
+		Result: HookResult{Text: resultText(result.Blocks), IsError: result.IsError},
+	})
+	return reportResult(call, applyToolRewrite(result, after), events)
+}
+
+// applyToolRewrite replaces the result text and error flag the hook returned,
+// leaving each untouched field as the tool reported it.
+func applyToolRewrite(result tool.Result, after AfterToolExecuteResult) tool.Result {
+	if !after.TextSet && after.IsError == nil {
+		return result
+	}
+	text := resultText(result.Blocks)
+	isError := result.IsError
+	if after.TextSet {
+		text = after.Text
+	}
+	if after.IsError != nil {
+		isError = *after.IsError
+	}
+	if isError {
+		return tool.ErrorResult(text)
+	}
+	return tool.TextResult(text)
 }
 
 // reportResult emits a tool result and returns the block to persist.

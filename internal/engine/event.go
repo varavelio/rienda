@@ -46,6 +46,11 @@ const (
 	// of a tool batch and a checkpoint — so a front end shows a live context
 	// figure while a run is in flight instead of only when it ends.
 	EventContext EventType = "context"
+	// EventNotice carries what an extension said while it ran: the log output
+	// of a hook and the run-time diagnostics its execution produced, in Text.
+	// It is emitted only when hooks are installed, so a run with no hooks
+	// produces no extra events.
+	EventNotice EventType = "notice"
 	// EventRunEnd closes a run. It is the last event of every channel.
 	EventRunEnd EventType = "run_end"
 	// EventError reports the failure that ended a run.
@@ -156,16 +161,17 @@ type Event struct {
 	// message in EventRunStart and the assistant message in EventMessageEnd.
 	EntryID string `json:"entryId,omitempty"`
 
-	// Diagnostics lists the non-fatal problems found while discovering the
-	// skills of the workspace, one entry per skill, identified by the relative
-	// path of its SKILL.md. It is only meaningful in EventRunStart, which
-	// already opens a run exactly once: the diagnostics are therefore reported
-	// once per run, never by a context measurement and never by a compaction,
-	// and nothing has to remember that they were reported.
+	// Diagnostics lists the non-fatal problems found while preparing the run:
+	// the workspace skills first, then the extension diagnostics the harness
+	// handed over. It is only meaningful in EventRunStart, which already opens
+	// a run exactly once: the diagnostics are therefore reported once per run,
+	// never by a context measurement and never by a compaction, and nothing
+	// has to remember that they were reported.
 	Diagnostics []string `json:"diagnostics,omitempty"`
 
 	// Text carries incremental text in EventTextDelta, incremental reasoning
-	// in EventThinkingDelta and the result text in EventToolResult.
+	// in EventThinkingDelta, the result text in EventToolResult and the notice
+	// text in EventNotice.
 	Text string `json:"text,omitempty"`
 
 	// ToolCallID, ToolName and Arguments identify the invocation in
