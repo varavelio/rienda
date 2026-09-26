@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/varavelio/rienda/internal/llm"
+	"github.com/varavelio/rienda/internal/workdir"
 )
 
 // Tool is a capability the model can invoke during a conversation.
@@ -78,20 +79,13 @@ type Sink interface {
 	Emit(stream Stream, data []byte)
 }
 
-// workdirKey is the context key carrying the working directory of an invocation.
-type workdirKey struct{}
-
 // WithWorkdir attaches dir as the working directory of the tools invoked with
 // ctx. Tools fall back to their configured directory when it is absent.
 func WithWorkdir(ctx context.Context, dir string) context.Context {
-	return context.WithValue(ctx, workdirKey{}, dir)
+	return workdir.WithWorkdir(ctx, dir)
 }
 
 // WorkdirFromContext returns the working directory attached to ctx, if any.
 func WorkdirFromContext(ctx context.Context) (string, bool) {
-	dir, ok := ctx.Value(workdirKey{}).(string)
-	if !ok || dir == "" {
-		return "", false
-	}
-	return dir, true
+	return workdir.FromContext(ctx)
 }

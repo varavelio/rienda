@@ -9,13 +9,15 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/varavelio/rienda/internal/command"
+	"github.com/varavelio/rienda/internal/workdir"
 
 	"github.com/varavelio/rienda/internal/llm"
 )
@@ -28,11 +30,6 @@ const (
 	defaultShellMaxTimeout  = 30 * time.Minute
 	defaultShellMaxOutput   = 256 << 10
 )
-
-// waitDelay bounds how long a finished invocation may keep its output streams
-// open, for example through a background process, before the tool stops
-// waiting for it.
-const waitDelay = 5 * time.Second
 
 // defaultShellDescription describes the local shell tool to the model.
 const defaultShellDescription = "Runs a single shell command on the host and returns its output. Every invocation starts a fresh process, so the working directory, exported variables and any other shell state do not persist between calls."
@@ -149,26 +146,40 @@ func (t *shellTool) Execute(ctx context.Context, call Call, out Sink) (Result, e
 	}
 
 	timeout := t.effectiveTimeout(args.TimeoutMS)
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	binary, extraArgs := argv[0], argv[1:]
-	cmd := exec.CommandContext(runCtx, binary, extraArgs...) //nolint:gosec // expected here.
-	cmd.Dir = workdir
-	cmd.WaitDelay = waitDelay
-	configureProcessGroup(cmd)
-	cmd.Cancel = func() error { return killProcessGroup(cmd) }
-
 	stdout := newLimitedBuffer(t.maxOutput)
 	stderr := newLimitedBuffer(t.maxOutput)
-	cmd.Stdout = t.outputWriter(out, StreamStdout, stdout)
-	cmd.Stderr = t.outputWriter(out, StreamStderr, stderr)
-
-	if err := cmd.Start(); err != nil {
-		return Result{}, fmt.Errorf("tool: start command: %w", err)
+	stream := &forwardStream{tool: t, sink: out, stdout: stdout, stderr: stderr}
+	outcome, err := command.Run(ctx, command.Request{
+		Argv: argv, Dir: workdir, Timeout: timeout, MaxOutput: t.maxOutput, Stream: stream,
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("tool: %w", err)
 	}
+	return t.commandResult(ctx, outcome, timeout)
+}
 
-	return t.commandResult(ctx, runCtx, cmd, cmd.Wait(), stdout, stderr, timeout)
+// forwardStream forwards command output to the sink and keeps a capped copy.
+type forwardStream struct {
+	tool           *shellTool
+	sink           Sink
+	stdout, stderr *limitedBuffer
+}
+
+// Emit reports one chunk of output.
+func (s *forwardStream) Emit(name string, data []byte) {
+	var buf *limitedBuffer
+	var stream Stream
+	if name == "stderr" {
+		buf, stream = s.stderr, StreamStderr
+	} else {
+		buf, stream = s.stdout, StreamStdout
+	}
+	_, _ = buf.Write(data)
+	if s.sink != nil {
+		s.tool.sinkMu.Lock()
+		s.sink.Emit(stream, data)
+		s.tool.sinkMu.Unlock()
+	}
 }
 
 // parseArguments decodes and validates the shared shell arguments. Tools that
@@ -200,34 +211,36 @@ func (t *shellTool) parseArguments(raw json.RawMessage) (shellArguments, error) 
 // request wins over the context directory, which wins over the configured
 // directory and the process working directory.
 func (t *shellTool) resolveWorkdir(ctx context.Context, requested string) (string, error) {
-	base := t.defaultWorkdir
-	if dir, ok := WorkdirFromContext(ctx); ok {
-		base = dir
-	}
-	if base == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("tool: locate process working directory: %w", err)
-		}
-		base = cwd
-	}
-
-	if requested != "" {
-		if filepath.IsAbs(requested) {
-			base = filepath.Clean(requested)
-		} else {
-			base = filepath.Join(base, requested)
-		}
-	}
-
-	info, err := os.Stat(base)
+	base, err := workdir.Base(ctx, t.defaultWorkdir)
 	if err != nil {
-		return "", fmt.Errorf("tool: working directory %s: %w", base, err)
+		if _, ok := errors.AsType[*workdir.NotDirError](err); ok {
+			return "", fmt.Errorf(
+				"tool: working directory %s is not a directory",
+				requestedOrBase(requested, base),
+			)
+		}
+		return "", fmt.Errorf(
+			"tool: working directory %s: %w",
+			requestedOrBase(requested, base),
+			err,
+		)
+	}
+	resolved := workdir.Resolve(base, requested)
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("tool: working directory %s: %w", resolved, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("tool: working directory %s is not a directory", base)
+		return "", fmt.Errorf("tool: working directory %s is not a directory", resolved)
 	}
-	return base, nil
+	return resolved, nil
+}
+
+func requestedOrBase(requested, base string) string {
+	if requested != "" {
+		return requested
+	}
+	return base
 }
 
 // effectiveTimeout resolves the timeout of an invocation, capping requests
@@ -245,66 +258,28 @@ func (t *shellTool) effectiveTimeout(timeoutMS int) time.Duration {
 
 // commandResult renders the outcome of a finished command invocation.
 func (t *shellTool) commandResult(
-	ctx, runCtx context.Context,
-	cmd *exec.Cmd,
-	waitErr error,
-	stdout, stderr *limitedBuffer,
+	ctx context.Context,
+	outcome command.Outcome,
 	timeout time.Duration,
 ) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, fmt.Errorf("tool: command canceled: %w", err)
 	}
-
-	outcome := commandOutcome{
-		stdout:    stdout,
-		stderr:    stderr,
-		timedOut:  runCtx.Err() != nil,
-		timeout:   timeout,
-		maxOutput: t.maxOutput,
+	co := commandOutcome{
+		stdout:     newLimitedBuffer(t.maxOutput),
+		stderr:     newLimitedBuffer(t.maxOutput),
+		exitCode:   outcome.ExitCode,
+		timedOut:   outcome.TimedOut,
+		timeout:    timeout,
+		maxOutput:  t.maxOutput,
+		background: outcome.Background,
 	}
-	if state := cmd.ProcessState; state != nil {
-		outcome.exitCode = state.ExitCode()
+	_, _ = co.stdout.Write([]byte(outcome.Stdout))
+	_, _ = co.stderr.Write([]byte(outcome.Stderr))
+	if outcome.Truncated {
+		co.stdout.cut = true
 	}
-
-	var exitErr *exec.ExitError
-	switch {
-	case waitErr == nil:
-	case outcome.timedOut:
-		outcome.exitCode = 0
-	case errors.As(waitErr, &exitErr):
-		outcome.exitCode = exitErr.ExitCode()
-	case errors.Is(waitErr, exec.ErrWaitDelay):
-		outcome.background = true
-	default:
-		return Result{}, fmt.Errorf("tool: wait for command: %w", waitErr)
-	}
-
-	return renderResult(outcome), nil
-}
-
-// outputWriter returns an io.Writer that forwards output to the sink and keeps
-// a capped copy for the model result.
-func (t *shellTool) outputWriter(out Sink, stream Stream, buffer *limitedBuffer) io.Writer {
-	return &sinkWriter{tool: t, sink: out, stream: stream, buffer: buffer}
-}
-
-// sinkWriter forwards command output to the incremental sink.
-type sinkWriter struct {
-	tool   *shellTool
-	sink   Sink
-	stream Stream
-	buffer *limitedBuffer
-}
-
-// Write keeps a capped copy of p and emits it to the sink.
-func (w *sinkWriter) Write(p []byte) (int, error) {
-	_, _ = w.buffer.Write(p)
-	if w.sink != nil {
-		w.tool.sinkMu.Lock()
-		w.sink.Emit(w.stream, p)
-		w.tool.sinkMu.Unlock()
-	}
-	return len(p), nil
+	return renderResult(co), nil
 }
 
 // commandOutcome carries everything needed to render a command result.

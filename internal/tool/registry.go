@@ -34,22 +34,9 @@ func NewRegistry(tools ...Tool) (*Registry, error) {
 // Register adds a tool to the registry. It fails when the tool is nil, when
 // its name is not a valid tool name or when another tool already uses it.
 func (r *Registry) Register(t Tool) error {
-	if t == nil {
-		return errors.New("tool: cannot register a nil tool")
-	}
-
-	definition := t.Definition()
-	if !ValidName(definition.Name) {
-		return fmt.Errorf(
-			"tool: invalid tool name %q: names are 1 to 64 characters of letters, digits, underscores or hyphens",
-			definition.Name,
-		)
-	}
-	if len(definition.Parameters) == 0 || !json.Valid(definition.Parameters) {
-		return fmt.Errorf(
-			"tool: tool %q must declare a valid JSON Schema in Parameters",
-			definition.Name,
-		)
+	definition, err := checkDefinition(t)
+	if err != nil {
+		return err
 	}
 
 	r.mu.Lock()
@@ -59,6 +46,43 @@ func (r *Registry) Register(t Tool) error {
 	}
 	r.tools[definition.Name] = t
 	return nil
+}
+
+// Override registers t, replacing any tool already registered under the same
+// name, and behaves like Register when the name is free. It is how a user tool
+// shadows a built-in.
+func (r *Registry) Override(t Tool) error {
+	definition, err := checkDefinition(t)
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools[definition.Name] = t
+	return nil
+}
+
+// checkDefinition validates the definition of a tool.
+func checkDefinition(t Tool) (llm.Tool, error) {
+	if t == nil {
+		return llm.Tool{}, errors.New("tool: cannot register a nil tool")
+	}
+
+	definition := t.Definition()
+	if !ValidName(definition.Name) {
+		return llm.Tool{}, fmt.Errorf(
+			"tool: invalid tool name %q: names are 1 to 64 characters of letters, digits, underscores or hyphens",
+			definition.Name,
+		)
+	}
+	if len(definition.Parameters) == 0 || !json.Valid(definition.Parameters) {
+		return llm.Tool{}, fmt.Errorf(
+			"tool: tool %q must declare a valid JSON Schema in Parameters",
+			definition.Name,
+		)
+	}
+	return definition, nil
 }
 
 // Lookup returns the tool registered under name.

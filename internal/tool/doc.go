@@ -20,4 +20,12 @@
 // Tools resolve their working directory from the invocation context (see
 // WithWorkdir), from their configuration, or from the process working
 // directory, in that order.
+//
+// Users extend the registry without touching Go: a script tool is a directory
+// with an index.js file under the global tools directory, exporting a
+// description, a JSON Schema of parameters and an execute function (see
+// NewScriptTool). Discovery compiles every extension once (see
+// DiscoverScripts); the harness registers the user tools over the built-ins,
+// so a user tool with the name of a built-in replaces both its definition and
+// its execution.
 package tool
