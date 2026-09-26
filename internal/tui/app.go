@@ -54,6 +54,11 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		go facts.Run(catalogCtx)
 	}
 
+	// The interactor answers the questions the extensions of a run ask the
+	// user and shows their notices. It attaches to the program once it
+	// exists; with auto-approve the harness answers without asking.
+	interactor := &Interactor{}
+
 	prepare := func(sessionID, agentID string) (Session, error) {
 		return harness.Prepare(context.Background(), harness.Options{
 			AgentID:     agentID,
@@ -62,14 +67,16 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 			Workdir:     opts.Workdir,
 			ConfigPath:  opts.ConfigPath,
 			AutoApprove: opts.AutoApprove,
+			Interactor:  interactor,
 		})
 	}
 
 	app := newModel(modelConfig{
-		agents:    definitions,
-		selected:  selected,
-		requested: opts.AgentID != "",
-		sessions:  listSessions(opts),
+		interactor: interactor,
+		agents:     definitions,
+		selected:   selected,
+		requested:  opts.AgentID != "",
+		sessions:   listSessions(opts),
 		scanSessions: func() []session.Info {
 			return listSessions(opts)
 		},
@@ -87,6 +94,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 	defer app.Close()
 
 	program := tea.NewProgram(app, tea.WithInput(stdin), tea.WithOutput(stdout))
+	interactor.Attach(program.Send)
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("tui: run interface: %w", err)
 	}

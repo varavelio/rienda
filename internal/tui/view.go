@@ -100,6 +100,8 @@ func (m *model) renderPhase() string {
 		return m.viewSettings()
 	case m.phase == phaseTree:
 		return m.viewTree()
+	case m.phase == phaseConfirm:
+		return m.viewConfirm()
 	case m.phase == phasePreparing:
 		return m.viewPreparing()
 	default:
@@ -935,6 +937,31 @@ func (m *model) chatIdentity() string {
 		parts = append(parts, m.identity.title)
 	}
 	return m.brandIdentity() + m.styles.header.Render(" · "+strings.Join(parts, " · "))
+}
+
+// viewConfirm renders the question an extension asked: what asks, what it
+// wants and the choices, which the user moves through with the arrows and
+// answers with enter. It is a screen of its own rather than a dialog over the
+// chat, so the answer is deliberate and the run visibly waits.
+func (m *model) viewConfirm() string {
+	rows := m.headerRows(m.confirmIdentity())
+	rows = append(rows, m.confirmScreen.title, "")
+	for line := range strings.SplitSeq(wrap(m.confirmScreen.body, max(1, m.width-2)), "\n") {
+		rows = append(rows, m.clip(line))
+	}
+	rows = append(rows, "")
+
+	for index, choice := range confirmChoices {
+		rows = append(rows, m.row(index == m.confirmScreen.cursor, choice))
+	}
+
+	rows = append(rows, m.footerRows("↑/↓ move · enter select · esc deny · ctrl+c quit")...)
+	return strings.Join(rows, "\n")
+}
+
+// confirmIdentity renders the identity of the question screen.
+func (m *model) confirmIdentity() string {
+	return m.brandIdentity() + m.styles.header.Render(" · confirm")
 }
 
 // viewInput renders the prompt input inside a box.

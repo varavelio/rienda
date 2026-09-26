@@ -482,6 +482,10 @@ const (
 	// phaseTree shows the tree of the session, where the user walks the turns
 	// of the conversation and returns to an earlier one.
 	phaseTree
+	// phaseConfirm shows the question an extension asked the user, which the
+	// run waits on. It takes over the whole screen so the answer is deliberate
+	// and never typed into the prompt by reflex.
+	phaseConfirm
 )
 
 // startItem is one entry of the start list: the offer to begin a new session,
@@ -560,6 +564,11 @@ type modelConfig struct {
 	// scanSessions reads the sessions of the workspace again whenever the
 	// start list opens, or nil when the interface never re-reads them.
 	scanSessions sessionScanner
+
+	// interactor answers the questions the extensions of a run ask the user
+	// and shows their notices. It is never nil: newModel installs a detached
+	// one when the configuration holds none, which denies every question.
+	interactor *Interactor
 
 	// newSession prepares a new session for an agent.
 	newSession sessionFactory
@@ -692,6 +701,16 @@ type model struct {
 	// against, read again whenever a mention opens.
 	candidates []filecomplete.Suggestion
 
+	// interactor answers the questions the extensions of a run ask the user
+	// and shows their notices. A question moves the interface to its own
+	// screen; a notice lands in the transcript.
+	interactor *Interactor
+
+	// confirmScreen holds the question shown by the confirm phase, its title,
+	// its body and the choices the user moves through. It is only meaningful
+	// while the phase is phaseConfirm.
+	confirmScreen confirmScreen
+
 	width     int
 	height    int
 	hasDarkBG bool
@@ -742,6 +761,7 @@ func newModel(cfg modelConfig) *model {
 		scanFiles:     cfg.scanFiles,
 		scanSessions:  cfg.scanSessions,
 		styles:        styles,
+		interactor:    cfg.interactorOrDetached(),
 	}
 	built.tree = newTreeScreen(built.treeText, styles, defaultDarkBackground)
 	built.buildLists(cfg.sessions)
@@ -911,6 +931,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshTranscript()
 		}
 		return m, nil
+	case extensionConfirmMsg:
+		return m, m.applyExtensionQuestion()
+	case extensionNoticeMsg:
+		m.transcript.addNotice(msg.text)
+		m.refreshTranscript()
+		return m, nil
 	case spinnerStartMsg:
 		if !m.busy() {
 			return m, nil
@@ -976,6 +1002,16 @@ func (m *model) applyBackground(isDark bool) {
 // read first, because its chord belongs to the interface rather than to the
 // phase that holds the keys.
 func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
+	// The question screen owns the keys while a question waits: every other
+	// phase would hide it and leave the run waiting with no way to answer.
+	// Quitting stays reachable, because a stuck run must not trap the
+	// interface.
+	if m.phase == phaseConfirm {
+		if key.String() == "ctrl+c" {
+			return m.requestConfirm(confirmQuit, key.String())
+		}
+		return m.handleConfirmKey(key)
+	}
 	if cmd, handled := m.handleLeaderKey(key); handled {
 		return cmd
 	}
@@ -1009,6 +1045,8 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		return m.handleSettingsKey(key)
 	case phaseTree:
 		return m.handleTreeKey(key)
+	case phaseConfirm:
+		return m.handleConfirmKey(key)
 	default:
 		return m.handleChatKey(key)
 	}
