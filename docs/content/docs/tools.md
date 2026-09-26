@@ -69,14 +69,20 @@ a diagnostic. It never crashes a run.
 (see [The context](#the-context)) and `args`, the arguments the model sent,
 already decoded from JSON into a plain object that matches `parameters`.
 
-It returns one of:
+It must return one of two shapes:
 
 | Return                                | Result the model reads                            |
 | ------------------------------------- | ------------------------------------------------- |
 | a string                              | that text, as a successful result                 |
 | `{ text: string, isError?: boolean }` | `text`, marked as an error when `isError` is true |
-| any other value                       | the value serialized as JSON                      |
-| `throw`                               | the message of the error, as a failed result      |
+
+Anything else (a number, a boolean, an array, `null`, an object without a `text`
+string) is treated as an error, so a mistake is reported instead of reaching the
+model as a surprising value. To return structured data, serialize it yourself:
+
+```js
+return JSON.stringify({ count: words, file: args.path });
+```
 
 A `throw` fails the invocation, never the run: the model receives the error text
 and the conversation continues.
@@ -195,6 +201,8 @@ module.exports = {
 - **Live output.** Output written with `ctx.log` and everything a `ctx.system.exec`
   command prints reaches the front end while the tool runs, so a long tool shows
   progress instead of looking frozen.
+- **Typed returns.** `execute` must return a string or `{ text, isError }`;
+  anything else becomes an error result. There is no implicit serialization.
 - **Output cap.** The text `execute` returns is capped (256 KiB, cut on a rune
   boundary). Streamed output is never capped.
 - **No timeout.** A tool runs until it returns or the run is interrupted.
