@@ -101,8 +101,8 @@ namespaces and exposes a few top-level values.
 | `ctx.agent`                    | object  | The running agent: `name` (its id) plus its whole frontmatter (`description`, `model`, `tools`, `hooks`, `config`) and `systemPrompt` (the Markdown body). Per-agent settings live under `ctx.agent.config`. |
 | `ctx.config`                   | object  | The global `config.yaml`, read-only. Put custom settings under its `config` block, keyed by tool or hook name.                                                                                               |
 | `ctx.log(text)`                |         | Streams `text` to the front end. Not capped.                                                                                                                                                                 |
-| `ctx.sleep(ms)`                |         | Sleeps for `ms` milliseconds.                                                                                                                                                                                |
-| `ctx.confirm({ title, body })` | boolean | Asks the user a yes/no question. Blocks until they answer; returns `true` on approval.                                                                                                                       |
+| `ctx.sleep(ms)`                |         | Sleeps for `ms` milliseconds, or returns early when the run is interrupted.                                                                                                                                  |
+| `ctx.confirm({ title, body })` | boolean | Asks the user a yes/no question. Blocks until they answer; returns `true` on approval, `false` on refusal.                                                                                                   |
 | `ctx.notify({ title, body })`  |         | Shows a non-blocking notice to the user.                                                                                                                                                                     |
 
 ### `ctx.file`
@@ -111,29 +111,29 @@ Reads and writes the file system. Relative paths resolve against `ctx.workdir`.
 
 | Member                              | Description                                                                                                                                                                                   |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ctx.file.read(path, opts?)`        | Returns the file content. `opts = { encoding? }`.                                                                                                                                             |
-| `ctx.file.write(path, data, opts?)` | Writes `data`. `opts = { append? }`.                                                                                                                                                          |
-| `ctx.file.exists(path)`             | Returns whether the path exists.                                                                                                                                                              |
+| `ctx.file.read(path, opts?)`        | Returns the file content as text. `opts = { encoding? }` (only `"utf8"` for now). Invalid UTF-8 is replaced, never raised.                                                                    |
+| `ctx.file.write(path, data, opts?)` | Writes `data`, creating parent directories. `opts = { append? }`: by default the file is truncated.                                                                                           |
+| `ctx.file.exists(path)`             | Returns whether the path exists, file or directory.                                                                                                                                           |
 | `ctx.file.list(path, opts?)`        | Lists a directory as `[{ name, path, isDir }]`. `opts = { recursive?, respectIgnoreFiles? }`, both `true` by default. `respectIgnoreFiles` honors the `.gitignore` and `.ignore` of the tree. |
 
 ### `ctx.env`
 
-| Member              | Description                                   |
-| ------------------- | --------------------------------------------- |
-| `ctx.env.get(name)` | Returns the value of an environment variable. |
+| Member              | Description                                                               |
+| ------------------- | ------------------------------------------------------------------------- |
+| `ctx.env.get(name)` | Returns the value of an environment variable, or `null` when it is unset. |
 
 ### `ctx.http`
 
-| Member                       | Description                                                                                                                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ctx.http.fetch(url, opts?)` | Sends an HTTP request and returns `{ status, headers, body }`. `opts = { method?, headers?, body?, timeout_ms? }`. The response is returned whatever the status, so you decide how to handle it. |
+| Member                       | Description                                                                                                                                                                                                                                                     |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ctx.http.fetch(url, opts?)` | Sends an HTTP request and returns `{ status, headers, body }`. `opts = { method?, headers?, body?, timeout_ms? }`. The response is returned whatever the status, so you decide how to handle it. `headers` is a flat string map and `body` a string sent as-is. |
 
 ### `ctx.system`
 
-| Member                            | Description                                                                                                                                                                           |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ctx.system.exec(command, opts?)` | Runs `command` through the shell. `opts = { cwd?, timeout_ms?, env? }`. Returns `{ code, stdout, stderr }`. Output is streamed to the front end live, like the built-in `shell` tool. |
-| `ctx.system.which(name)`          | Returns the absolute path of an executable, or `null` when it is not on `PATH`.                                                                                                       |
+| Member                            | Description                                                                                                                                                                                                                             |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ctx.system.exec(command, opts?)` | Runs `command` through the shell. `opts = { cwd?, timeout_ms?, env? }`. Returns `{ code, stdout, stderr }` (`code` is `-1` when a signal killed the process). Output is streamed to the front end live, like the built-in `shell` tool. |
+| `ctx.system.which(name)`          | Returns the absolute path of an executable, or `null` when it is not on `PATH`.                                                                                                                                                         |
 
 ## Examples
 

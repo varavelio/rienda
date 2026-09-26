@@ -72,7 +72,7 @@ changes nothing.
 | -------------------- | -------------------------------------------------------- | --------------------------------------------------- | --------------------------------- |
 | `beforeRun`          | Once, at the start of a run.                             | `{ sessionId, agentId, modelId }`                   | nothing                           |
 | `afterRun`           | Once, when the run ends, for any reason.                 | `{ reason }` (`end_turn`, `interrupted` or `error`) | nothing                           |
-| `beforeModelRequest` | Every turn, just before the provider call.               | `{ system, model, messages }`                       | `{ system?, context? }`           |
+| `beforeModelRequest` | Every turn, just before the provider call.               | `{ system, model, messages }`                       | `{ system? }`                     |
 | `afterModelResponse` | Every turn, after the model answers, before it is saved. | `{ text, thinking, toolCalls }`                     | `{ text?, thinking? }`            |
 | `beforeToolExecute`  | Before a tool runs, once per call.                       | `{ id, name, arguments }`                           | `{ allow?, reason?, arguments? }` |
 | `afterToolExecute`   | After a tool returns, once per call.                     | `{ id, name, arguments }` and `{ text, isError }`   | `{ text?, isError? }`             |
@@ -86,15 +86,21 @@ today.
 
 The common use is adding context to the system prompt.
 
-- `system` replaces the system prompt for this turn only. It is not saved and
-  does not carry over to the next turn.
-- `context` is appended as an extra section of the system prompt.
+`system` replaces the system prompt for this turn only. It is not saved and does
+not carry over to the next turn, so a hook that injects a date injects it again
+on every turn and the prompt the model finally sees is always the current one.
+Build it from `request.system` to add to what the agent already declares.
 
 ```js
 beforeModelRequest: function (ctx, request) {
-  return { context: "Today is " + new Date().toISOString().slice(0, 10) + "." };
+  const today = new Date().toISOString().slice(0, 10);
+  return { system: request.system + "\n\nToday is " + today + "." };
 }
 ```
+
+`request.messages` is a read-only snapshot of the conversation
+(`[{ role, text }]`), useful to decide what to inject without reading the
+session file.
 
 ### `afterModelResponse`
 
@@ -112,7 +118,8 @@ afterModelResponse: function (ctx, response) {
 Gates a call, rewrites its arguments, or both.
 
 - `allow: false` refuses the call. The model receives an error result carrying
-  `reason`, and no tool runs.
+  `reason`, and no tool runs. The remaining hooks are not consulted for that
+  call.
 - `arguments` replaces the arguments the next hook and the tool see.
 
 ```js
@@ -137,6 +144,8 @@ afterToolExecute: function (ctx, call, result) {
 - Hooks run in the order their extensions are listed in the agent.
 - Within a point, one hook's output is the next hook's input: a rewrite chains,
   and the last writer wins.
+- Every field you return is optional and replaces only itself. A field you leave
+  out, or return as `undefined` or `null`, keeps its current value.
 - `beforeToolExecute`: on the first `allow: false`, the call is refused and no
   further hook is consulted for that call.
 - A hook that throws is reported as a diagnostic and skipped. It never crashes
@@ -158,5 +167,8 @@ the run's auto-approve setting.
 - **No timeout.** A hook runs until it returns or the run is interrupted.
 - **Fresh state.** Every invocation runs in a fresh runtime, so nothing persists
   in memory between calls. To remember something, write a file.
-- **Errors are non-fatal.** A broken hook or a throwing handler is reported as a
-  diagnostic and never fails the run.
+- **Errors are non-fatal.** A broken hook is reported as a diagnostic when the
+  extension is loaded, and a throwing handler is reported as a notice while the
+  run continues as if the hook had returned nothing. Neither fails the run.
+- **Live output.** `ctx.log` reaches the front end while the hook runs, so a
+  hook that does something slow can say what it is doing.
