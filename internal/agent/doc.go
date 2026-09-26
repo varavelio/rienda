@@ -9,6 +9,9 @@
 //	description: Writes and reviews Go code
 //	model: openrouter/kimi-k2
 //	tools: [read, edit]
+//	hooks: [approve, notify]
+//	config:
+//		foo: true
 //	---
 //
 //	You are a senior Go engineer.
@@ -17,6 +20,10 @@
 // every generation setting of the run, such as the token limit, the sampling
 // parameters or the thinking level, comes from that model in the
 // configuration; agents never declare them.
+//
+// The frontmatter also declares the extensions of the agent: the ordered hook
+// names in Hooks and the per-extension settings in Config, a map of maps that
+// scripts read as ctx.agent.config.
 //
 // Decoding is strict: an unknown frontmatter key is an error, so typos never
 // pass unnoticed.

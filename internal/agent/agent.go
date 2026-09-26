@@ -35,6 +35,14 @@ type Agent struct {
 	// list means the agent cannot use any tool.
 	Tools []string
 
+	// Hooks lists the names of the hook extensions that run for the agent, in
+	// execution order. An empty list means the agent runs with no hooks.
+	Hooks []string
+
+	// Config parameterizes the extensions the agent declares, keyed by
+	// extension name. It is nil when the definition declares none.
+	Config map[string]map[string]any
+
 	// SystemPrompt is the Markdown body of the definition.
 	SystemPrompt string
 }

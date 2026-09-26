@@ -163,3 +163,62 @@ You are a senior Go engineer.
 		}
 	})
 }
+
+func TestParseHooksConfig(t *testing.T) {
+	t.Run("parses hooks and config", func(t *testing.T) {
+		loaded, err := Parse("guarded", []byte(`---
+description: A careful agent
+model: openai/gpt-4o
+tools:
+  - shell
+hooks:
+  - guard
+  - audit
+config:
+  guard:
+    level: strict
+---
+
+Prompt.
+`))
+
+		require.NoError(t, err)
+		require.Equal(t, []string{"guard", "audit"}, loaded.Hooks)
+		require.Equal(t, map[string]map[string]any{
+			"guard": {"level": "strict"},
+		}, loaded.Config)
+	})
+
+	t.Run("defaults to absent", func(t *testing.T) {
+		loaded, err := Parse("plain", []byte("---\ndescription: A\nmodel: a/b\n---\n"))
+		require.NoError(t, err)
+		require.Empty(t, loaded.Hooks)
+		require.Nil(t, loaded.Config)
+	})
+
+	t.Run("rejects an empty hook name", func(t *testing.T) {
+		_, err := Parse(
+			"bad",
+			[]byte("---\ndescription: A\nmodel: a/b\nhooks:\n  - ok\n  - '  '\n---\n"),
+		)
+		require.ErrorContains(t, err, "hooks must not contain empty names")
+	})
+
+	t.Run("rejects a scalar config", func(t *testing.T) {
+		_, err := Parse("bad", []byte("---\ndescription: A\nmodel: a/b\nconfig: foo\n---\n"))
+		require.ErrorContains(t, err, "config")
+	})
+
+	t.Run("rejects a list config", func(t *testing.T) {
+		_, err := Parse("bad", []byte("---\ndescription: A\nmodel: a/b\nconfig:\n  - a\n---\n"))
+		require.ErrorContains(t, err, "config")
+	})
+
+	t.Run("rejects a scalar config value", func(t *testing.T) {
+		_, err := Parse(
+			"bad",
+			[]byte("---\ndescription: A\nmodel: a/b\nconfig:\n  guard: strict\n---\n"),
+		)
+		require.ErrorContains(t, err, `config "guard"`)
+	})
+}

@@ -18,6 +18,8 @@ type frontmatter struct {
 	Description string   `yaml:"description"`
 	Model       string   `yaml:"model"`
 	Tools       []string `yaml:"tools"`
+	Hooks       []string `yaml:"hooks"`
+	Config      any      `yaml:"config"`
 }
 
 // Parse validates and converts the raw contents of an agent definition into an
@@ -47,6 +49,10 @@ func Parse(id string, data []byte) (Agent, error) {
 		return Agent{}, fmt.Errorf("agent %q: frontmatter must hold a single YAML document", id)
 	}
 
+	config, err := normalizeConfig(meta.Config)
+	if err != nil {
+		return Agent{}, fmt.Errorf("agent %q: %w", id, err)
+	}
 	if err := meta.normalize(); err != nil {
 		return Agent{}, fmt.Errorf("agent %q: %w", id, err)
 	}
@@ -56,8 +62,32 @@ func Parse(id string, data []byte) (Agent, error) {
 		Description:  meta.Description,
 		Model:        meta.Model,
 		Tools:        meta.Tools,
+		Hooks:        meta.Hooks,
+		Config:       config,
 		SystemPrompt: strings.TrimSpace(string(body)),
 	}, nil
+}
+
+// normalizeConfig validates the free config block of an agent definition: an
+// absent block stays absent, and a present one must be a map of maps.
+func normalizeConfig(raw any) (map[string]map[string]any, error) {
+	if raw == nil {
+		//nolint:nilnil // an absent block stays absent by contract.
+		return nil, nil
+	}
+	outer, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("config must be an object of objects")
+	}
+	config := make(map[string]map[string]any, len(outer))
+	for name, values := range outer {
+		inner, ok := values.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("config %q must be an object", name)
+		}
+		config[name] = inner
+	}
+	return config, nil
 }
 
 // splitFrontmatter separates the YAML frontmatter of an agent definition from
@@ -105,6 +135,13 @@ func (m *frontmatter) normalize() error {
 		m.Tools[i] = strings.TrimSpace(tool)
 		if m.Tools[i] == "" {
 			return errors.New("tools must not contain empty names")
+		}
+	}
+
+	for i, hook := range m.Hooks {
+		m.Hooks[i] = strings.TrimSpace(hook)
+		if m.Hooks[i] == "" {
+			return errors.New("hooks must not contain empty names")
 		}
 	}
 	return nil
