@@ -28,6 +28,47 @@ type Entry struct {
 	IsDir bool
 }
 
+// Options selects what a listing walks.
+type Options struct {
+	// Recursive walks the whole tree; false lists one level.
+	Recursive bool
+	// RespectIgnoreFiles honors the .gitignore and .ignore rules of the tree.
+	RespectIgnoreFiles bool
+}
+
+// Entries lists the entries of the tree rooted at root, relative to it with
+// slash separators and sorted by path, honoring opts.
+func Entries(root string, opts Options) ([]Entry, error) {
+	l := New(root)
+	if err := l.checkRoot(); err != nil {
+		return nil, err
+	}
+	locations, err := l.walk(opts)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]Entry, 0, len(locations))
+	directories := make(map[string]bool)
+	for _, location := range locations {
+		path, ok := l.relative(location)
+		if !ok {
+			continue
+		}
+		entries = append(entries, Entry{Path: path})
+		for dir := parentDir(path); dir != ""; dir = parentDir(dir) {
+			directories[dir] = true
+		}
+	}
+	for dir := range directories {
+		entries = append(entries, Entry{Path: dir, IsDir: true})
+	}
+	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Path, b.Path) })
+	if !opts.Recursive {
+		entries = topLevel(entries)
+	}
+	return entries, nil
+}
+
 // Lister lists the entries of a project rooted at a directory.
 type Lister struct {
 	root string
@@ -48,33 +89,19 @@ func New(root string) *Lister {
 // filesystem on every call, so a caller that lists the same project
 // repeatedly caches the result itself.
 func (l *Lister) Entries() ([]Entry, error) {
-	if err := l.checkRoot(); err != nil {
-		return nil, err
-	}
+	return Entries(l.root, Options{Recursive: true, RespectIgnoreFiles: true})
+}
 
-	locations, err := l.walk()
-	if err != nil {
-		return nil, err
-	}
-
-	entries := make([]Entry, 0, len(locations))
-	directories := make(map[string]bool)
-	for _, location := range locations {
-		path, ok := l.relative(location)
-		if !ok {
-			continue
-		}
-		entries = append(entries, Entry{Path: path})
-		for dir := parentDir(path); dir != ""; dir = parentDir(dir) {
-			directories[dir] = true
+// topLevel keeps the direct children of the root: entries with no slash, plus
+// nothing else. Directories appear because the walk synthesized them.
+func topLevel(entries []Entry) []Entry {
+	kept := entries[:0]
+	for _, e := range entries {
+		if !strings.Contains(e.Path, "/") {
+			kept = append(kept, e)
 		}
 	}
-	for dir := range directories {
-		entries = append(entries, Entry{Path: dir, IsDir: true})
-	}
-
-	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Path, b.Path) })
-	return entries, nil
+	return kept
 }
 
 // checkRoot reports whether the project root is a directory that can be read.
@@ -93,11 +120,13 @@ func (l *Lister) checkRoot() error {
 // ignore rules keep. Hidden files are listed, the way git lists them, because
 // a project refers to files such as .gitignore or .github/workflows; the
 // version control directories are neither listed nor descended into.
-func (l *Lister) walk() ([]string, error) {
+func (l *Lister) walk(opts Options) ([]string, error) {
 	queue := make(chan *gocodewalker.File, walkQueueSize)
 	walker := gocodewalker.NewFileWalker(l.root, queue)
 	walker.IncludeHidden = true
 	walker.ExcludeDirectory = vcsDirectories
+	walker.IgnoreGitIgnore = !opts.RespectIgnoreFiles
+	walker.IgnoreIgnoreFile = !opts.RespectIgnoreFiles
 	// A file or directory that cannot be read never stops the walk; the walk
 	// reports what it could read.
 	walker.SetErrorHandler(func(error) bool { return true })

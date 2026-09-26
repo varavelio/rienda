@@ -123,3 +123,69 @@ func TestLister(t *testing.T) {
 		require.ErrorContains(t, err, "files: list")
 	})
 }
+
+// TestEntries verifies the option matrix of the shared walk.
+func TestEntries(t *testing.T) {
+	pathsOf := func(entries []Entry) []string {
+		paths := make([]string, 0, len(entries))
+		for _, e := range entries {
+			paths = append(paths, e.Path)
+		}
+		return paths
+	}
+
+	t.Run("recursive with ignores matches the lister", func(t *testing.T) {
+		root := project(t)
+		want, err := New(root).Entries()
+		require.NoError(t, err)
+		got, err := Entries(root, Options{Recursive: true, RespectIgnoreFiles: true})
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	})
+
+	t.Run("recursive without ignores lists everything but vcs", func(t *testing.T) {
+		got, err := Entries(project(t), Options{Recursive: true, RespectIgnoreFiles: false})
+		require.NoError(t, err)
+		paths := pathsOf(got)
+		require.Contains(t, paths, "app.log")
+		require.Contains(t, paths, "build/out.bin")
+		require.Contains(t, paths, "sub/ignored.go")
+		require.NotContains(t, paths, ".git/config")
+	})
+
+	t.Run("shallow with ignores lists direct children", func(t *testing.T) {
+		got, err := Entries(project(t), Options{Recursive: false, RespectIgnoreFiles: true})
+		require.NoError(t, err)
+		paths := pathsOf(got)
+		require.Contains(t, paths, "main.go")
+		require.Contains(t, paths, "sub")
+		require.Contains(t, paths, "keep")
+		require.NotContains(t, paths, "app.log")
+		require.NotContains(t, paths, "build")
+		require.NotContains(t, paths, "sub/package.go")
+		for _, p := range paths {
+			require.NotContains(t, p, "/")
+		}
+	})
+
+	t.Run("shallow without ignores lists every child but vcs", func(t *testing.T) {
+		got, err := Entries(project(t), Options{Recursive: false, RespectIgnoreFiles: false})
+		require.NoError(t, err)
+		paths := pathsOf(got)
+		require.Contains(t, paths, "app.log")
+		require.Contains(t, paths, "build")
+		require.Contains(t, paths, "main.go")
+		require.NotContains(t, paths, ".git")
+	})
+
+	t.Run("marks directories", func(t *testing.T) {
+		got, err := Entries(project(t), Options{Recursive: false, RespectIgnoreFiles: true})
+		require.NoError(t, err)
+		byPath := make(map[string]Entry, len(got))
+		for _, e := range got {
+			byPath[e.Path] = e
+		}
+		require.True(t, byPath["sub"].IsDir)
+		require.False(t, byPath["main.go"].IsDir)
+	})
+}
