@@ -148,7 +148,7 @@ afterToolExecute: function (ctx, call, result) {
   out, or return as `undefined` or `null`, keeps its current value.
 - `beforeToolExecute`: on the first `allow: false`, the call is refused and no
   further hook is consulted for that call.
-- A hook that throws is reported as a diagnostic and skipped. It never crashes
+- A hook that throws is reported as a notice and skipped. It never crashes
   the run.
 
 ## The context
@@ -159,8 +159,9 @@ Hooks use the exact same `ctx` as tools: `ctx.workdir`, `ctx.session`,
 [Tools](./tools.md#the-context) for the full list.
 
 `ctx.confirm` is the human-in-the-loop primitive: it blocks until the user
-answers. When a run is non-interactive, it is answered automatically based on
-the run's auto-approve setting.
+answers. In the terminal it opens a prompt; in a non-interactive run it answers
+`false`, unless the run started with `--auto-approve` (`-y`), which answers
+`true` to everything.
 
 ## Behavior and limits
 

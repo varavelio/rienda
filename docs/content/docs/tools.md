@@ -130,10 +130,10 @@ Reads and writes the file system. Relative paths resolve against `ctx.workdir`.
 
 ### `ctx.system`
 
-| Member                            | Description                                                                                                                                                                                                                             |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ctx.system.exec(command, opts?)` | Runs `command` through the shell. `opts = { cwd?, timeout_ms?, env? }`. Returns `{ code, stdout, stderr }` (`code` is `-1` when a signal killed the process). Output is streamed to the front end live, like the built-in `shell` tool. |
-| `ctx.system.which(name)`          | Returns the absolute path of an executable, or `null` when it is not on `PATH`.                                                                                                                                                         |
+| Member                            | Description                                                                                                                                                                                                                                         |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ctx.system.exec(command, opts?)` | Runs `command` through the shell. `opts = { cwd?, timeout_ms?, env? }`. Returns `{ code, stdout, stderr }` (`code` is `-1` when a signal or a timeout ended the process). Output is streamed to the front end live, like the built-in `shell` tool. |
+| `ctx.system.which(name)`          | Returns the absolute path of an executable, or `null` when it is not on `PATH`.                                                                                                                                                                     |
 
 ## Examples
 
@@ -211,3 +211,14 @@ module.exports = {
   in memory between calls. To remember something, write a file.
 - **Name rules.** A tool name is 1 to 64 characters of letters, digits,
   underscores or hyphens.
+- **Strict options.** Every `opts` object rejects a field it does not document,
+  so a typo raises instead of being silently ignored. Fields reserved for the
+  future (`opts.encoding` values beyond `"utf8"`, `opts.onOutput`) raise until
+  they are implemented.
+- **Asking the user.** In the terminal, `ctx.confirm` opens a prompt. In a
+  non-interactive run it answers `false`, unless the run started with
+  `--auto-approve` (`-y`), which answers `true` to everything.
+- **Load problems are diagnostics.** A tool that cannot load is skipped and
+  reported once per run as `tool "<name>": <problem>`, on standard error in the
+  CLI and as a notice in the TUI. An agent that declares a tool that did not
+  load fails the run, the same way an unknown tool does.
