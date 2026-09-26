@@ -39,6 +39,12 @@ type Agent struct {
 	// Tools lists the names of the tools available to the agent.
 	Tools []string
 
+	// Hooks lists the names of the hook extensions that run for the agent.
+	Hooks []string
+
+	// Config parameterizes the extensions the agent declares.
+	Config map[string]map[string]any
+
 	// SystemPrompt is the Markdown body of the definition.
 	SystemPrompt string
 
@@ -71,6 +77,8 @@ func (a Agent) write(t *testing.T, dir string) {
 		Description: a.Description,
 		Model:       a.Model,
 		Tools:       a.Tools,
+		Hooks:       a.Hooks,
+		Config:      a.Config,
 	})
 	if err != nil {
 		t.Fatalf("harness: encode agent %q: %v", a.ID, err)
@@ -83,7 +91,9 @@ func (a Agent) write(t *testing.T, dir string) {
 
 // agentFrontmatter mirrors the YAML frontmatter of an agent definition.
 type agentFrontmatter struct {
-	Description string   `yaml:"description"`
-	Model       string   `yaml:"model"`
-	Tools       []string `yaml:"tools,omitempty"`
+	Description string                    `yaml:"description"`
+	Model       string                    `yaml:"model"`
+	Tools       []string                  `yaml:"tools,omitempty"`
+	Hooks       []string                  `yaml:"hooks,omitempty"`
+	Config      map[string]map[string]any `yaml:"config,omitempty"`
 }

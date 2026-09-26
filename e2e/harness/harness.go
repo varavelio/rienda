@@ -23,6 +23,14 @@ type Options struct {
 	// instance, under .agents/skills.
 	Skills []Skill
 
+	// Tools lists the user tools written into the tools directory of the
+	// instance.
+	Tools []Tool
+
+	// Hooks lists the user hooks written into the hooks directory of the
+	// instance.
+	Hooks []Hook
+
 	// Config overrides the configuration file of the instance. It defaults to
 	// DefaultConfig. Providers that declare no base URL point at the fake
 	// provider of the harness, whichever connection they declare.
@@ -81,6 +89,12 @@ func New(t *testing.T, opts Options) *Harness {
 	}
 	for _, definition := range opts.Skills {
 		definition.write(t, instance.Workdir())
+	}
+	for _, extension := range opts.Tools {
+		extension.write(t, instance.home)
+	}
+	for _, extension := range opts.Hooks {
+		extension.write(t, instance.home)
 	}
 
 	return instance

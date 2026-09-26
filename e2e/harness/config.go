@@ -49,6 +49,9 @@ type Config struct {
 	// Compaction overrides the compaction block of the configuration. A nil
 	// value leaves the block absent, which the binary fills with its defaults.
 	Compaction *Compaction
+
+	// ExtensionConfig writes the free config block for extension settings.
+	ExtensionConfig map[string]map[string]any
 }
 
 // Compaction describes the compaction block of a configuration, written in the
@@ -168,6 +171,7 @@ func (c Config) write(t *testing.T, path, fakeBaseURL string) {
 	document := configDocument{
 		Providers:  make(map[string]providerDocument, len(c.Providers)),
 		Compaction: c.Compaction.document(),
+		Config:     c.ExtensionConfig,
 	}
 	for _, provider := range c.Providers {
 		if provider.Name == "" {
@@ -225,6 +229,7 @@ func (p Provider) document(t *testing.T, fakeBaseURL string) providerDocument {
 type configDocument struct {
 	Providers  map[string]providerDocument `yaml:"providers"`
 	Compaction *compactionDocument         `yaml:"compaction,omitempty"`
+	Config     map[string]map[string]any   `yaml:"config,omitempty"`
 }
 
 // document converts a compaction block into its YAML form, nil when the test
