@@ -13,7 +13,9 @@ import (
 	"github.com/varavelio/rienda/internal/compaction"
 	"github.com/varavelio/rienda/internal/config"
 	"github.com/varavelio/rienda/internal/engine"
+	"github.com/varavelio/rienda/internal/hook"
 	"github.com/varavelio/rienda/internal/id"
+	"github.com/varavelio/rienda/internal/jsruntime"
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
@@ -58,12 +60,30 @@ type Options struct {
 	// SessionsDir overrides the base directory holding the session files. It
 	// defaults to the global sessions directory.
 	SessionsDir string
+
+	// ToolsDir overrides the directory holding the user tool extensions. It
+	// defaults to the global tools directory.
+	ToolsDir string
+
+	// HooksDir overrides the directory holding the user hook extensions. It
+	// defaults to the global hooks directory.
+	HooksDir string
+
+	// Interactor answers the questions extensions ask the user and shows
+	// their notices. It is nil for headless runs, which refuse every
+	// confirmation and drop every notice.
+	Interactor jsruntime.Interactor
+
+	// AutoApprove answers every confirmation without asking, wrapping the
+	// interactor the front end provided.
+	AutoApprove bool
 }
 
 // Session is a prepared agent session ready to run.
 type Session struct {
-	store  *session.Store
-	engine *engine.Engine
+	store      *session.Store
+	engine     *engine.Engine
+	interactor jsruntime.Interactor
 
 	// resolver resolves the model references of the branch against the
 	// configuration. It is kept so the session can report settings that are
@@ -116,7 +136,7 @@ func (s *Session) CanCompact() bool {
 // carrying its events. It ignores the compaction threshold, because the user
 // asked for it, and it refuses to run while another run is in flight.
 func (s *Session) Compact(ctx context.Context) <-chan engine.Event {
-	return s.engine.Compact(ctx)
+	return s.engine.Compact(s.decorate(ctx))
 }
 
 // ActiveAgent returns the identifier of the agent the branch of the session
@@ -282,11 +302,33 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 	// call identifies itself with it, the summarizations included.
 	resolver := newModelResolver(cfg, store.ID())
 
-	registry, err := newTools()
+	toolsDir, err := resolveToolsDir(opts.ToolsDir)
 	if err != nil {
 		closeStore(store)
 		return nil, err
 	}
+	hooksDir, err := resolveHooksDir(opts.HooksDir)
+	if err != nil {
+		closeStore(store)
+		return nil, err
+	}
+
+	//nolint:contextcheck // loading precedes every run; there is no invocation context yet.
+	registry, toolDiagnostics, err := newTools(tool.DiscoverOptions{
+		Dir:     toolsDir,
+		Workdir: workdir,
+		Config:  cfg.Data(),
+	})
+	if err != nil {
+		closeStore(store)
+		return nil, err
+	}
+
+	//nolint:contextcheck // loading precedes every run; there is no invocation context yet.
+	hookRegistry, hookDiagnostics := hook.Discover(hooksDir, jsruntime.Options{
+		Workdir: workdir,
+		Config:  cfg.Data(),
+	})
 
 	summarizer, err := newCompactor(cfg, resolver)
 	if err != nil {
@@ -295,10 +337,15 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 	}
 
 	runner, err := engine.New(engine.Config{
-		Store:     store,
-		Agents:    definitions,
-		Resolver:  resolver,
-		Registry:  registry,
+		Store:    store,
+		Agents:   definitions,
+		Resolver: resolver,
+		Registry: registry,
+		Hooks:    hookResolver{registry: hookRegistry},
+		Diagnostics: append(
+			append([]string{}, toolDiagnostics...),
+			hookDiagnostics...,
+		),
 		Workdir:   workdir,
 		Compactor: summarizer,
 		Compaction: engine.Compaction{
@@ -311,7 +358,26 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, fmt.Errorf("harness: build engine: %w", err)
 	}
 
-	return &Session{store: store, engine: runner, resolver: resolver}, nil
+	interactor := opts.Interactor
+	if opts.AutoApprove {
+		interactor = jsruntime.ApproveAll(interactor)
+	}
+
+	return &Session{store: store, engine: runner, resolver: resolver, interactor: interactor}, nil
+}
+
+// hookResolver adapts a hook registry to the engine contract.
+type hookResolver struct {
+	registry hook.Registry
+}
+
+// Resolve returns the hooks the named extensions install, in order.
+func (r hookResolver) Resolve(names []string) (engine.Hooks, error) {
+	hooks, err := r.registry.Resolve(names)
+	if err != nil {
+		return nil, fmt.Errorf("harness: %w", err)
+	}
+	return hooks, nil
 }
 
 // sessionDir gathers where a session lives and what it may run, so the
@@ -508,7 +574,16 @@ func (s *Session) Info() session.Info {
 // branch when the leaf already has turns after it; an empty prompt continues
 // the conversation from that leaf.
 func (s *Session) Run(ctx context.Context, prompt string) <-chan engine.Event {
-	return s.engine.Run(ctx, prompt)
+	return s.engine.Run(s.decorate(ctx), prompt)
+}
+
+// decorate attaches the interactor of the session to the invocation context,
+// so tools and hooks read the same one.
+func (s *Session) decorate(ctx context.Context) context.Context {
+	if s.interactor == nil {
+		return ctx
+	}
+	return jsruntime.WithInteractor(ctx, s.interactor)
 }
 
 // Close releases the session file.
@@ -519,22 +594,36 @@ func (s *Session) Close() error {
 	return nil
 }
 
-// newTools builds the registry of built-in tools. Every built-in is
-// registered; the agent definition selects the ones its runs may call.
-func newTools() (*tool.Registry, error) {
+// newTools builds the registry of built-in tools and registers the user
+// tools over them, so a user tool with the name of a built-in wins. It
+// returns the registry and one diagnostic per problem found while loading.
+func newTools(opts tool.DiscoverOptions) (*tool.Registry, []string, error) {
 	shell, err := tool.NewShell(tool.ShellOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("harness: build shell tool: %w", err)
+		return nil, nil, fmt.Errorf("harness: build shell tool: %w", err)
 	}
 	devcontainerShell, err := tool.NewDevcontainerShell(tool.DevcontainerShellOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("harness: build devcontainer shell tool: %w", err)
+		return nil, nil, fmt.Errorf("harness: build devcontainer shell tool: %w", err)
 	}
 	registry, err := tool.NewRegistry(shell, devcontainerShell)
 	if err != nil {
-		return nil, fmt.Errorf("harness: build tool registry: %w", err)
+		return nil, nil, fmt.Errorf("harness: build tool registry: %w", err)
 	}
-	return registry, nil
+
+	builtIns := registry.Names()
+	userTools, diagnostics := tool.DiscoverScripts(opts)
+	for _, user := range userTools {
+		name := user.Definition().Name
+		if slices.Contains(builtIns, name) {
+			diagnostics = append(diagnostics, `tool "`+name+`" replaces a built-in tool`)
+		}
+		if err := registry.Override(user); err != nil {
+			diagnostics = append(diagnostics, `tool "`+name+`": `+err.Error())
+		}
+	}
+	slices.Sort(diagnostics)
+	return registry, diagnostics, nil
 }
 
 // projectDir returns the directory holding the sessions of a workspace.
@@ -616,4 +705,30 @@ func resolveSessionsDir(requested string) (string, error) {
 		return "", fmt.Errorf("harness: locate sessions directory: %w", err)
 	}
 	return dir, nil
+}
+
+// resolveToolsDir returns the directory holding the user tool extensions: the
+// requested one, or the global tools directory.
+func resolveToolsDir(requested string) (string, error) {
+	if dir := strings.TrimSpace(requested); dir != "" {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("harness: locate home directory: %w", err)
+	}
+	return filepath.Join(home, ".rienda", "tools"), nil
+}
+
+// resolveHooksDir returns the directory holding the user hook extensions: the
+// requested one, or the global hooks directory.
+func resolveHooksDir(requested string) (string, error) {
+	if dir := strings.TrimSpace(requested); dir != "" {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("harness: locate home directory: %w", err)
+	}
+	return filepath.Join(home, ".rienda", "hooks"), nil
 }
