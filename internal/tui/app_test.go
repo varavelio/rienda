@@ -108,6 +108,30 @@ func TestResumable(t *testing.T) {
 	require.Equal(t, "session-2", kept[1].ID, "a session whose agent is gone is still offered")
 }
 
+// TestWorkspaceName verifies the name of the directory shown by the identity
+// line of every phase.
+func TestWorkspaceName(t *testing.T) {
+	t.Run("names the directory the options request", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "my-project")
+		require.NoError(t, os.Mkdir(dir, 0o750))
+
+		require.Equal(t, "my-project", workspaceName(options{Workdir: dir}))
+	})
+
+	t.Run("falls back to the process working directory", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+
+		require.Equal(t, filepath.Base(dir), workspaceName(options{}))
+	})
+
+	t.Run("leaves the workspace out when the directory is gone", func(t *testing.T) {
+		// A directory the user removed while the interface runs must not make
+		// the identity line name a workspace that no longer exists.
+		require.Empty(t, workspaceName(options{Workdir: filepath.Join(t.TempDir(), "missing")}))
+	})
+}
+
 // TestRun verifies the entry point of the interface.
 func TestRun(t *testing.T) {
 	t.Run("prints the usage for help", func(t *testing.T) {

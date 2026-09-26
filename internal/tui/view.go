@@ -109,16 +109,21 @@ func (m *model) renderPhase() string {
 	}
 }
 
-// brandIdentity renders the logo, the name of the interface and its build
-// version, which open the identity line of every phase. The logo and the
-// version stay static and share the faint color of the header text, so they
-// read as part of the identity rather than drawing the eye, while the name
-// carries the emphasis; the status line carries the only animation of the
-// interface.
+// brandIdentity renders the logo, the name of the interface, its build version
+// and the name of the workspace it runs in, which open the identity line of
+// every phase. The logo, the version and the workspace stay static and share
+// the faint color of the header text, so they read as part of the identity
+// rather than drawing the eye, while the name carries the emphasis; the status
+// line carries the only animation of the interface. The workspace is left out
+// when it could not be located, so the line never carries an empty segment.
 func (m *model) brandIdentity() string {
-	return m.styles.header.Render(varavelLogo+" · ") +
+	line := m.styles.header.Render(varavelLogo+" · ") +
 		m.styles.title.Render(brand) +
 		m.styles.header.Render(" · "+brandVersion())
+	if m.workspace != "" {
+		line += m.styles.header.Render(" · " + m.workspace)
+	}
+	return line
 }
 
 // brandVersion returns the build version that closes the identity of the

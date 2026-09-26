@@ -557,6 +557,12 @@ type modelConfig struct {
 	// which skips the start list and the agent picker.
 	requested bool
 
+	// workspace is the name of the directory sessions run in, shown in the
+	// identity line of every phase so the reader always knows which project
+	// the interface is working on. It is empty when the directory could not be
+	// located.
+	workspace string
+
 	// sessions lists the previous sessions of the workspace, most recently
 	// updated first. It fills the start list when the interface opens.
 	sessions []session.Info
@@ -592,6 +598,11 @@ type model struct {
 	// selected is the index of the chosen agent, or -1 while the user has not
 	// picked one.
 	selected int
+
+	// workspace is the name of the directory sessions run in, shown in the
+	// identity line of every phase. It is empty when the directory could not be
+	// located, in which case the identity line leaves it out.
+	workspace string
 
 	// phase is the screen shown.
 	phase phase
@@ -748,6 +759,7 @@ func newModel(cfg modelConfig) *model {
 	built := &model{
 		agents:        cfg.agents,
 		selected:      cfg.selected,
+		workspace:     cfg.workspace,
 		phase:         startPhase(cfg),
 		preparing:     selectedAgentID(cfg),
 		preferences:   defaultPreferences(),

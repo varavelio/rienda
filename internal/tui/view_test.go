@@ -815,6 +815,41 @@ func TestView(t *testing.T) {
 		require.Contains(t, plain(menu.render()), identity)
 	})
 
+	t.Run("shows the workspace in the identity line of every phase", func(t *testing.T) {
+		m, _ := chatModel(t)
+		m.workspace = "my-project"
+		update(t, m, windowMsg(80, 24))
+
+		require.Contains(t, plain(m.render()), brand+" · "+brandVersion()+" · my-project")
+
+		menu := newTestModelWith(t, modelConfig{
+			agents:    []agent.Agent{{ID: "coder"}},
+			selected:  0,
+			workspace: "my-project",
+			sessions:  []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+		require.Contains(
+			t,
+			plain(menu.render()),
+			"my-project",
+			"the workspace reaches the start list too",
+		)
+	})
+
+	t.Run("leaves the workspace out of the identity line when it is unknown", func(t *testing.T) {
+		// The version closes the identity line when the interface holds no
+		// workspace name, with no empty segment left behind.
+		m := newTestModelWith(t, modelConfig{
+			agents:   []agent.Agent{{ID: "coder"}},
+			selected: 0,
+			sessions: []session.Info{{ID: "session-7", Agent: "coder", Title: "hello"}},
+		})
+		update(t, m, windowMsg(80, 24))
+
+		identity := varavelLogo + " · " + brand + " · " + brandVersion()
+		require.Contains(t, plain(m.render()), identity+"\n", "the line closes at the version")
+	})
+
 	t.Run("renders the alternate screen and reports the wheel", func(t *testing.T) {
 		m := newTestModel(t, []agent.Agent{{ID: "coder"}}, -1, nil)
 

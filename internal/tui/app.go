@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -16,6 +16,7 @@ import (
 	"github.com/varavelio/rienda/internal/files"
 	"github.com/varavelio/rienda/internal/harness"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/workdir"
 )
 
 // Run starts the interactive interface. It parses the options, offers a new
@@ -76,6 +77,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		agents:     definitions,
 		selected:   selected,
 		requested:  opts.AgentID != "",
+		workspace:  workspaceName(opts),
 		sessions:   listSessions(opts),
 		scanSessions: func() []session.Info {
 			return listSessions(opts)
@@ -112,20 +114,33 @@ func listSessions(opts options) []session.Info {
 	return resumable(infos)
 }
 
+// workspaceName returns the name of the directory the interface works in, shown
+// by the identity line of every phase so the reader always knows which project
+// it is on. It is empty when the directory cannot be resolved, so the identity
+// line leaves the workspace out instead of naming one that does not exist,
+// which is the case of a directory the user removed while the interface runs.
+func workspaceName(opts options) string {
+	base, err := workdir.Base(context.Background(), opts.Workdir)
+	if err != nil {
+		return ""
+	}
+	abs, err := filepath.Abs(base)
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(abs)
+}
+
 // newFileScanner returns the read that completes the mentions of the prompt,
 // or nil when the project it would list cannot be located. The interface then
 // runs without file completion instead of refusing to open.
 func newFileScanner(opts options) fileScanner {
-	project := opts.Workdir
-	if project == "" {
-		workdir, err := os.Getwd()
-		if err != nil {
-			return nil
-		}
-		project = workdir
+	base, err := workdir.Base(context.Background(), opts.Workdir)
+	if err != nil {
+		return nil
 	}
 
-	listing := files.New(project)
+	listing := files.New(base)
 	return func() ([]filecomplete.Suggestion, error) {
 		return filecomplete.List(listing)
 	}
