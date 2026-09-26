@@ -602,11 +602,7 @@ func newTools(opts tool.DiscoverOptions) (*tool.Registry, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("harness: build shell tool: %w", err)
 	}
-	devcontainerShell, err := tool.NewDevcontainerShell(tool.DevcontainerShellOptions{})
-	if err != nil {
-		return nil, nil, fmt.Errorf("harness: build devcontainer shell tool: %w", err)
-	}
-	registry, err := tool.NewRegistry(shell, devcontainerShell)
+	registry, err := tool.NewRegistry(shell)
 	if err != nil {
 		return nil, nil, fmt.Errorf("harness: build tool registry: %w", err)
 	}

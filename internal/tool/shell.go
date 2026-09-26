@@ -40,39 +40,20 @@ const defaultShellCommandDescription = "Shell command to run. The command runs i
 // defaultShellWorkdirDescription describes the workdir argument to the model.
 const defaultShellWorkdirDescription = "Directory the command runs in. Relative paths resolve against the session workspace. Defaults to the session workspace."
 
-// shellArguments is the decoded argument object of the built-in shell tools.
+// shellArguments is the decoded argument object of the built-in shell tool.
 type shellArguments struct {
 	Command   string `json:"command"`
 	Workdir   string `json:"workdir"`
 	TimeoutMS int    `json:"timeout_ms"`
 }
 
-// argvBuilder turns a command into the process argv that runs it. It receives
-// the resolved working directory because some tools, like the devcontainer
-// shell, need it to locate their execution target.
-type argvBuilder func(ctx context.Context, workdir, command string) ([]string, error)
-
-// shellConfig holds the validated settings of a shell tool instance.
-type shellConfig struct {
-	name           string
-	description    string
-	parameters     json.RawMessage
-	buildArgv      argvBuilder
-	defaultWorkdir string
-	allowWorkdir   bool
-	timeout        time.Duration
-	maxTimeout     time.Duration
-	maxOutput      int
-}
-
-// shellTool is the one-shot command runner shared by the built-in shell tools.
+// shellTool is the one-shot command runner behind the built-in shell tool.
 type shellTool struct {
 	name           string
 	description    string
 	parameters     json.RawMessage
-	buildArgv      argvBuilder
+	interpreter    string
 	defaultWorkdir string
-	allowWorkdir   bool
 	timeout        time.Duration
 	maxTimeout     time.Duration
 	maxOutput      int
@@ -82,40 +63,45 @@ type shellTool struct {
 	sinkMu sync.Mutex
 }
 
-// newShellTool validates cfg and builds the shared command runner.
-func newShellTool(cfg shellConfig) (*shellTool, error) {
+// newShellTool validates its settings and builds the command runner.
+func newShellTool(
+	name, description string,
+	parameters json.RawMessage,
+	interpreter, defaultWorkdir string,
+	timeout, maxTimeout time.Duration,
+	maxOutput int,
+) (*shellTool, error) {
 	switch {
-	case !ValidName(cfg.name):
-		return nil, fmt.Errorf("tool: invalid tool name %q", cfg.name)
-	case strings.TrimSpace(cfg.description) == "":
-		return nil, fmt.Errorf("tool: tool %q requires a description", cfg.name)
-	case len(cfg.parameters) == 0 || !json.Valid(cfg.parameters):
-		return nil, fmt.Errorf("tool: tool %q requires a valid JSON Schema in Parameters", cfg.name)
-	case cfg.buildArgv == nil:
-		return nil, fmt.Errorf("tool: tool %q requires a command builder", cfg.name)
-	case cfg.timeout <= 0:
-		return nil, fmt.Errorf("tool: tool %q timeout must be positive", cfg.name)
-	case cfg.maxTimeout < cfg.timeout:
+	case !ValidName(name):
+		return nil, fmt.Errorf("tool: invalid tool name %q", name)
+	case strings.TrimSpace(description) == "":
+		return nil, fmt.Errorf("tool: tool %q requires a description", name)
+	case len(parameters) == 0 || !json.Valid(parameters):
+		return nil, fmt.Errorf("tool: tool %q requires a valid JSON Schema in Parameters", name)
+	case strings.TrimSpace(interpreter) == "":
+		return nil, fmt.Errorf("tool: tool %q requires an interpreter", name)
+	case timeout <= 0:
+		return nil, fmt.Errorf("tool: tool %q timeout must be positive", name)
+	case maxTimeout < timeout:
 		return nil, fmt.Errorf(
 			"tool: tool %q max timeout must not be smaller than its timeout",
-			cfg.name,
+			name,
 		)
-	case cfg.maxOutput <= 0:
-		return nil, fmt.Errorf("tool: tool %q max output must be positive", cfg.name)
-	case cfg.defaultWorkdir != "" && !filepath.IsAbs(cfg.defaultWorkdir):
-		return nil, fmt.Errorf("tool: tool %q default workdir must be an absolute path", cfg.name)
+	case maxOutput <= 0:
+		return nil, fmt.Errorf("tool: tool %q max output must be positive", name)
+	case defaultWorkdir != "" && !filepath.IsAbs(defaultWorkdir):
+		return nil, fmt.Errorf("tool: tool %q default workdir must be an absolute path", name)
 	}
 
 	return &shellTool{
-		name:           cfg.name,
-		description:    cfg.description,
-		parameters:     cfg.parameters,
-		buildArgv:      cfg.buildArgv,
-		defaultWorkdir: cfg.defaultWorkdir,
-		allowWorkdir:   cfg.allowWorkdir,
-		timeout:        cfg.timeout,
-		maxTimeout:     cfg.maxTimeout,
-		maxOutput:      cfg.maxOutput,
+		name:           name,
+		description:    description,
+		parameters:     parameters,
+		interpreter:    interpreter,
+		defaultWorkdir: defaultWorkdir,
+		timeout:        timeout,
+		maxTimeout:     maxTimeout,
+		maxOutput:      maxOutput,
 	}, nil
 }
 
@@ -140,17 +126,16 @@ func (t *shellTool) Execute(ctx context.Context, call Call, out Sink) (Result, e
 		return Result{}, err
 	}
 
-	argv, err := t.buildArgv(ctx, workdir, args.Command)
-	if err != nil {
-		return Result{}, err
-	}
-
 	timeout := t.effectiveTimeout(args.TimeoutMS)
 	stdout := newLimitedBuffer(t.maxOutput)
 	stderr := newLimitedBuffer(t.maxOutput)
 	stream := &forwardStream{tool: t, sink: out, stdout: stdout, stderr: stderr}
 	outcome, err := command.Run(ctx, command.Request{
-		Argv: argv, Dir: workdir, Timeout: timeout, MaxOutput: t.maxOutput, Stream: stream,
+		Argv:      []string{t.interpreter, "-c", args.Command},
+		Dir:       workdir,
+		Timeout:   timeout,
+		MaxOutput: t.maxOutput,
+		Stream:    stream,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("tool: %w", err)
@@ -194,12 +179,6 @@ func (t *shellTool) parseArguments(raw json.RawMessage) (shellArguments, error) 
 	args.Command = strings.TrimSpace(args.Command)
 	if args.Command == "" {
 		return shellArguments{}, errors.New(`tool: "command" is required`)
-	}
-	if !t.allowWorkdir && args.Workdir != "" {
-		return shellArguments{}, fmt.Errorf(
-			"tool: %s does not accept a workdir argument",
-			t.name,
-		)
 	}
 	if args.TimeoutMS < 0 {
 		return shellArguments{}, errors.New(`tool: "timeout_ms" must not be negative`)
@@ -406,9 +385,7 @@ func truncateUTF8(s string, maxBytes int) (string, bool) {
 	return s[:cut], true
 }
 
-// shellParametersJSON builds the argument schema shared by the built-in shell
-// tools. The workdir property is included only when its description is not
-// empty, because some tools do not accept a working directory.
+// shellParametersJSON builds the argument schema of the shell tool.
 func shellParametersJSON(
 	command, workdir string,
 	defaultTimeout, maxTimeout time.Duration,
@@ -418,22 +395,17 @@ func shellParametersJSON(
 		" and requests above " + strconv.FormatInt(maxTimeout.Milliseconds(), 10) +
 		" are capped."
 
-	workdirProperty := ""
-	if workdir != "" {
-		workdirProperty = fmt.Sprintf(`,
-    "workdir": {
-      "type": "string",
-      "description": %q
-    }`, workdir)
-	}
-
 	return fmt.Sprintf(`{
   "type": "object",
   "properties": {
     "command": {
       "type": "string",
       "description": %q
-    }%s,
+    },
+    "workdir": {
+      "type": "string",
+      "description": %q
+    },
     "timeout_ms": {
       "type": "integer",
       "description": %q
@@ -441,7 +413,7 @@ func shellParametersJSON(
   },
   "required": ["command"],
   "additionalProperties": false
-}`, command, workdirProperty, timeout)
+}`, command, workdir, timeout)
 }
 
 // Shell is the built-in tool that runs one-shot shell commands on the host.
@@ -490,24 +462,21 @@ func NewShell(options ShellOptions) (*Shell, error) {
 	timeout := cmp.Or(options.Timeout, defaultShellTimeout)
 	maxTimeout := cmp.Or(options.MaxTimeout, defaultShellMaxTimeout)
 
-	core, err := newShellTool(shellConfig{
-		name:        cmp.Or(options.Name, defaultShellName),
-		description: cmp.Or(options.Description, defaultShellDescription),
-		parameters: json.RawMessage(shellParametersJSON(
+	core, err := newShellTool(
+		cmp.Or(options.Name, defaultShellName),
+		cmp.Or(options.Description, defaultShellDescription),
+		json.RawMessage(shellParametersJSON(
 			defaultShellCommandDescription,
 			defaultShellWorkdirDescription,
 			timeout,
 			maxTimeout,
 		)),
-		buildArgv: func(_ context.Context, _, command string) ([]string, error) {
-			return []string{interpreter, "-c", command}, nil
-		},
-		defaultWorkdir: options.Workdir,
-		allowWorkdir:   true,
-		timeout:        timeout,
-		maxTimeout:     maxTimeout,
-		maxOutput:      cmp.Or(options.MaxOutputBytes, defaultShellMaxOutput),
-	})
+		interpreter,
+		options.Workdir,
+		timeout,
+		maxTimeout,
+		cmp.Or(options.MaxOutputBytes, defaultShellMaxOutput),
+	)
 	if err != nil {
 		return nil, err
 	}

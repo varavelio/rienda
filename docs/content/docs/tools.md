@@ -1,7 +1,7 @@
 # Tools
 
 A tool is a capability the model can invoke during a conversation. Rienda ships
-a couple of built-in tools, and you can add your own in JavaScript. A custom
+one built-in tool (`shell`), and you can add your own in JavaScript. A custom
 tool lives in its own directory under `~/.rienda/tools`:
 
 ```

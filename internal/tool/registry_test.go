@@ -120,7 +120,7 @@ func TestRegistryDefinitions(t *testing.T) {
 // TestValidName verifies the tool name charset and length rules.
 func TestValidName(t *testing.T) {
 	t.Run("accepts valid names", func(t *testing.T) {
-		for _, name := range []string{"shell", "dc-shell", "a", "A1_2-3", strings.Repeat("a", 64)} {
+		for _, name := range []string{"shell", "read", "a", "A1_2-3", strings.Repeat("a", 64)} {
 			require.True(t, ValidName(name), "expected %q to be valid", name)
 		}
 	})
