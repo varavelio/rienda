@@ -1,10 +1,17 @@
+---
+title: "Hooks"
+description: "Run your code at fixed points of a run to inspect, gate or change it."
+icon: "webhook"
+weight: 22
+---
+
 # Hooks
 
 A hook runs your code at fixed points of a run, so you can inspect, gate or
 change what happens without touching Rienda's source. A hook lives in its own
 directory under `~/.rienda/hooks`:
 
-```
+```text
 ~/.rienda/hooks/<hook-name>/index.js
 ```
 
@@ -64,7 +71,7 @@ not exist fails the run, the same way an unknown tool does.
 ## The points
 
 Every point is named `<phase><Subject>`, where the phase is `before` or `after`.
-A hook receives `ctx` (identical to the one tools get; see [Tools](./tools.md))
+A hook receives `ctx` (identical to the one tools get; see [Tools](/docs/advanced/tools/))
 and the payload described below. Returning nothing means "no opinion" and
 changes nothing.
 
@@ -156,7 +163,7 @@ afterToolExecute: function (ctx, call, result) {
 Hooks use the exact same `ctx` as tools: `ctx.workdir`, `ctx.session`,
 `ctx.agent`, `ctx.config`, `ctx.file`, `ctx.env`, `ctx.http`, `ctx.system`,
 `ctx.log`, `ctx.confirm` and `ctx.notify`. See
-[Tools](./tools.md#the-context) for the full list.
+[Tools](/docs/advanced/tools/#the-context) for the full list.
 
 `ctx.confirm` is the human-in-the-loop primitive: it blocks until the user
 answers. In the terminal it opens a prompt; in a non-interactive run it answers
