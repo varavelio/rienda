@@ -431,6 +431,7 @@ type openAIChatCompletionsStream struct {
 	failed  error
 	closed  bool
 	tools   map[int]*openAIChatCompletionsStreamTool
+	pending []llm.StreamEvent
 	usage   llm.Usage
 	stop    string
 	id      string
@@ -455,6 +456,14 @@ func (s *openAIChatCompletionsStream) Next() (llm.StreamEvent, error) {
 		return llm.StreamEvent{}, io.EOF
 	}
 	for {
+		if len(s.pending) > 0 {
+			event := s.pending[0]
+			s.pending = s.pending[1:]
+			return event, nil
+		}
+		if s.ended {
+			return llm.StreamEvent{}, io.EOF
+		}
 		raw, err := s.scanner.Next()
 		if err != nil {
 			s.failed = openAIChatCompletionsStreamError(err)
@@ -473,16 +482,13 @@ func (s *openAIChatCompletionsStream) Next() (llm.StreamEvent, error) {
 			s.failed = fmt.Errorf("openai-chat-completions: decode stream chunk: %w", err)
 			return llm.StreamEvent{}, s.failed
 		}
-		event, terminal, err := s.translate(chunk)
+		terminal, err := s.translate(chunk)
 		if err != nil {
 			s.failed = err
 			return llm.StreamEvent{}, s.failed
 		}
 		if terminal {
 			s.ended = true
-		}
-		if event != nil {
-			return *event, nil
 		}
 	}
 }
@@ -511,13 +517,17 @@ func openAIChatCompletionsStreamError(err error) error {
 	return fmt.Errorf("openai-chat-completions: read stream: %w", err)
 }
 
-// translate converts one chunk into a canonical event. It returns a nil event
-// for chunks carrying no consumer-visible update.
+// translate records the updates one chunk carries, queueing them in order, and
+// reports whether the chunk closed the response.
+//
+// Every field of the chunk is consumed instead of the first one that matches,
+// because a chunk may both open the message and carry content or a whole tool
+// call. Chunks carrying no consumer-visible update queue nothing.
 func (s *openAIChatCompletionsStream) translate(
 	chunk openAIChatCompletionsChunk,
-) (*llm.StreamEvent, bool, error) {
+) (bool, error) {
 	if chunk.Error != nil && chunk.Error.Message != "" {
-		return nil, false, newError(
+		return false, newError(
 			openAIChatCompletionsProviderName,
 			0,
 			chunk.Error.Type,
@@ -529,11 +539,11 @@ func (s *openAIChatCompletionsStream) translate(
 		s.started = true
 		s.id = chunk.ID
 		s.model = chunk.Model
-		return &llm.StreamEvent{
+		s.pending = append(s.pending, llm.StreamEvent{
 			Type:  llm.StreamMessageStart,
 			ID:    chunk.ID,
 			Model: chunk.Model,
-		}, false, nil
+		})
 	}
 	if chunk.Usage != nil {
 		s.usage = openAIChatCompletionsUsageTo(*chunk.Usage)
@@ -544,36 +554,40 @@ func (s *openAIChatCompletionsStream) translate(
 		}
 		if choice.FinishReason != "" {
 			s.stop = choice.FinishReason
-			return &llm.StreamEvent{
+			s.pending = append(s.pending, llm.StreamEvent{
 				Type:       llm.StreamMessageEnd,
 				StopReason: openAIChatCompletionsStopReasonTo(s.stop),
 				Usage:      s.usage,
-			}, true, nil
+			})
+			return true, nil
 		}
 		if choice.Delta.Content != "" {
-			return &llm.StreamEvent{
+			s.pending = append(s.pending, llm.StreamEvent{
 				Type: llm.StreamTextDelta,
 				Text: choice.Delta.Content,
-			}, false, nil
+			})
 		}
 		if choice.Delta.ReasoningContent != "" {
-			return &llm.StreamEvent{
+			s.pending = append(s.pending, llm.StreamEvent{
 				Type:     llm.StreamThinkingDelta,
 				Thinking: choice.Delta.ReasoningContent,
-			}, false, nil
+			})
 		}
 		for _, call := range choice.Delta.ToolCalls {
-			return s.translateToolCall(call), false, nil
+			s.translateToolCall(call)
 		}
 	}
-	return nil, false, nil
+	return false, nil
 }
 
-// translateToolCall converts one tool call fragment, emitting a start event on
-// first sight of its index and argument deltas afterwards.
+// translateToolCall records one tool call fragment, queueing a start event on
+// first sight of its index together with the argument fragment the same chunk
+// may already carry, and the argument fragments of later chunks afterwards.
+// Every event is queued so a chunk that updates more than one call, or that
+// both opens a call and carries its arguments, emits each update in order.
 func (s *openAIChatCompletionsStream) translateToolCall(
 	call openAIChatCompletionsChunkToolCall,
-) *llm.StreamEvent {
+) {
 	if s.tools == nil {
 		s.tools = map[int]*openAIChatCompletionsStreamTool{}
 	}
@@ -581,21 +595,24 @@ func (s *openAIChatCompletionsStream) translateToolCall(
 	if !seen {
 		tool = &openAIChatCompletionsStreamTool{id: call.ID, name: call.Function.Name}
 		s.tools[call.Index] = tool
-		return &llm.StreamEvent{
+		s.pending = append(s.pending, llm.StreamEvent{
 			Type:         llm.StreamToolCallStart,
 			ToolCallID:   call.ID,
 			ToolCallName: call.Function.Name,
+		})
+	} else {
+		if tool.id == "" && call.ID != "" {
+			tool.id = call.ID
+		}
+		if tool.name == "" && call.Function.Name != "" {
+			tool.name = call.Function.Name
 		}
 	}
-	if tool.id == "" && call.ID != "" {
-		tool.id = call.ID
-	}
-	if tool.name == "" && call.Function.Name != "" {
-		tool.name = call.Function.Name
-	}
-	return &llm.StreamEvent{
-		Type:              llm.StreamToolCallArgsDelta,
-		ToolCallID:        tool.id,
-		ToolCallArgsDelta: call.Function.Arguments,
+	if call.Function.Arguments != "" {
+		s.pending = append(s.pending, llm.StreamEvent{
+			Type:              llm.StreamToolCallArgsDelta,
+			ToolCallID:        tool.id,
+			ToolCallArgsDelta: call.Function.Arguments,
+		})
 	}
 }

@@ -256,6 +256,76 @@ func TestOpenAIChatStream(t *testing.T) {
 		)
 	})
 
+	t.Run("keeps arguments that arrive in the chunk that opens the call", func(t *testing.T) {
+		fixture := newOpenAIChatTestServer(t)
+		// Several OpenAI-compatible providers send the identifier, the name
+		// and the whole argument object in the same chunk.
+		fixture.streamBody = "data: " +
+			`{"id":"chatcmpl_1","model":"gpt-test","choices":[{"index":0,` +
+			`"delta":{"tool_calls":[{"index":0,"id":"call_1",` +
+			`"function":{"name":"shell","arguments":"{\"command\":\"ls\"}"}}]}}]}` + "\n\n" +
+			"data: " +
+			`{"id":"chatcmpl_1","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+			"data: [DONE]\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "gpt-test"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		events := collect(t, stream)
+
+		require.Equal(t, []llm.StreamEvent{
+			{Type: llm.StreamMessageStart, ID: "chatcmpl_1", Model: "gpt-test"},
+			{Type: llm.StreamToolCallStart, ToolCallID: "call_1", ToolCallName: "shell"},
+			{
+				Type:              llm.StreamToolCallArgsDelta,
+				ToolCallID:        "call_1",
+				ToolCallArgsDelta: `{"command":"ls"}`,
+			},
+			{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonToolUse},
+		}, events)
+	})
+
+	t.Run("interleaves argument fragments of parallel calls in one chunk", func(t *testing.T) {
+		fixture := newOpenAIChatTestServer(t)
+		// A single chunk may open two calls and carry a fragment for each.
+		fixture.streamBody = "data: " +
+			`{"id":"chatcmpl_1","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[` +
+			`{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\"path\":"}},` +
+			`{"index":1,"id":"call_2","function":{"name":"read","arguments":"{\"path\":"}}]}}]}` + "\n\n" +
+			"data: " +
+			`{"id":"chatcmpl_1","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[` +
+			`{"index":0,"function":{"arguments":"\"a\"}"}},` +
+			`{"index":1,"function":{"arguments":"\"b\"}"}}]}}]}` + "\n\n" +
+			"data: " +
+			`{"id":"chatcmpl_1","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+			"data: [DONE]\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "gpt-test"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		events := collect(t, stream)
+
+		args := func(id, fragment string) llm.StreamEvent {
+			return llm.StreamEvent{
+				Type:              llm.StreamToolCallArgsDelta,
+				ToolCallID:        id,
+				ToolCallArgsDelta: fragment,
+			}
+		}
+		require.Equal(t, []llm.StreamEvent{
+			{Type: llm.StreamMessageStart, ID: "chatcmpl_1", Model: "gpt-test"},
+			{Type: llm.StreamToolCallStart, ToolCallID: "call_1", ToolCallName: "read"},
+			args("call_1", `{"path":`),
+			{Type: llm.StreamToolCallStart, ToolCallID: "call_2", ToolCallName: "read"},
+			args("call_2", `{"path":`),
+			args("call_1", `"a"}`),
+			args("call_2", `"b"}`),
+			{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonToolUse},
+		}, events)
+	})
+
 	t.Run("rejects streams ending without a finish reason", func(t *testing.T) {
 		fixture := newOpenAIChatTestServer(t)
 		fixture.streamBody = "data: " +
