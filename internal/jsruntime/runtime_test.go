@@ -114,6 +114,32 @@ func TestRuntime(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("treats a null or undefined export as holding no fields", func(t *testing.T) {
+		// A module that assigns null, or that never assigns module.exports,
+		// must not crash the inspection of its exports.
+		for _, body := range []string{
+			`module.exports = null;`,
+			`module.exports = undefined;`,
+			`module.exports = 42;`,
+		} {
+			module := compileScript(t, body)
+			require.NoError(
+				t,
+				module.Invoke(
+					t.Context(),
+					Options{},
+					nil,
+					func(rt *Runtime, exports *Exports) error {
+						require.Empty(t, exports.Keys())
+						_, ok := exports.Field("anything")
+						require.False(t, ok)
+						return nil
+					},
+				),
+			)
+		}
+	})
+
 	t.Run("streams output with the right stream", func(t *testing.T) {
 		module := compileScript(t, `module.exports = { run: function(ctx) { ctx.log("hello"); } };`)
 		var got []byte

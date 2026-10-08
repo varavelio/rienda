@@ -406,6 +406,31 @@ func TestAnthropicStream(t *testing.T) {
 		require.Equal(t, true, fixture.requestBody["stream"])
 	})
 
+	t.Run("ignores deltas it does not understand", func(t *testing.T) {
+		fixture := newAnthropicTestServer(t)
+		// A content_block_delta of an unknown type carries no consumer-visible
+		// update and must be skipped without breaking the stream.
+		fixture.streamBody = "event: content_block_delta\n" +
+			`data: {"type":"content_block_delta","index":0,` +
+			`"delta":{"type":"something_new","text":"ignored"}}` + "\n\n" +
+			"event: content_block_delta\n" +
+			`data: {"type":"content_block_delta","index":0,` +
+			`"delta":{"type":"text_delta","text":"Hi"}}` + "\n\n" +
+			"event: message_delta\n" +
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}` + "\n\n" +
+			"event: message_stop\n" +
+			`data: {"type":"message_stop"}` + "\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "c"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		require.Equal(t, []llm.StreamEvent{
+			{Type: llm.StreamTextDelta, Text: "Hi"},
+			{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+		}, collect(t, stream))
+	})
+
 	t.Run("surfaces stream error events", func(t *testing.T) {
 		fixture := newAnthropicTestServer(t)
 		fixture.streamBody = "event: error\n" +

@@ -238,15 +238,11 @@ func openAIResponsesRequestFrom(req *llm.Request, stream bool) *openAIResponsesR
 		wire.Input = append(wire.Input, openAIResponsesItemsFrom(message)...)
 	}
 	for _, tool := range req.Tools {
-		schema := tool.Parameters
-		if len(schema) == 0 {
-			schema = emptyJSONObject
-		}
 		wire.Tools = append(wire.Tools, openAIResponsesTool{
 			Type:        wireToolFunction,
 			Name:        tool.Name,
 			Description: tool.Description,
-			Parameters:  schema,
+			Parameters:  toolSchema(tool.Parameters),
 			Strict:      tool.Strict,
 		})
 	}
@@ -307,15 +303,11 @@ func openAIResponsesItemsFrom(message llm.Message) []openAIResponsesInputItem {
 				continue
 			}
 			flush()
-			args := string(block.ToolCallArguments)
-			if args == "" || args == wireJSONNull {
-				args = string(emptyJSONObject)
-			}
 			out = append(out, openAIResponsesInputItem{
 				Type:      wireFunctionCall,
 				CallID:    block.ToolCallID,
 				Name:      block.ToolCallName,
-				Arguments: args,
+				Arguments: string(toolArguments(string(block.ToolCallArguments))),
 			})
 		case llm.BlockToolResult:
 			if assistant {
@@ -384,15 +376,11 @@ func openAIResponsesResponseTo(raw *openAIResponsesResponse) (*llm.Response, err
 				})
 			}
 		case wireFunctionCall:
-			args := item.Arguments
-			if args == "" || args == wireJSONNull {
-				args = string(emptyJSONObject)
-			}
 			resp.Blocks = append(resp.Blocks, llm.Block{
 				Type:              llm.BlockToolCall,
 				ToolCallID:        item.CallID,
 				ToolCallName:      item.Name,
-				ToolCallArguments: json.RawMessage(args),
+				ToolCallArguments: toolArguments(item.Arguments),
 			})
 		}
 	}

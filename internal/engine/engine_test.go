@@ -286,6 +286,14 @@ func TestNew(t *testing.T) {
 		require.False(t, engine.KnowsAgent("ghost"))
 	})
 
+	t.Run("lists the models the resolver accepts", func(t *testing.T) {
+		engine, _ := newTestEngine(t, Config{})
+
+		require.Equal(t, []string{"test/model"}, engine.Models())
+		require.True(t, engine.KnowsModel("test/model"))
+		require.False(t, engine.KnowsModel("test/ghost"))
+	})
+
 	t.Run("opens a branch whose agent is gone", func(t *testing.T) {
 		// A branch names the agent of its header, which the roster no longer
 		// holds: the session still opens so a front end reads the

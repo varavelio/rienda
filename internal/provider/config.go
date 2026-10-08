@@ -53,6 +53,27 @@ var emptyJSONObject = json.RawMessage("{}")
 // the annotations of an output text part.
 var emptyJSONArray = json.RawMessage("[]")
 
+// toolArguments returns the raw JSON arguments of a tool call as the provider
+// APIs require them: an empty or null payload becomes an empty object, because
+// every API expects a JSON object and some providers omit the arguments of a
+// call that takes none.
+func toolArguments(args string) json.RawMessage {
+	if args == "" || args == wireJSONNull {
+		return emptyJSONObject
+	}
+	return json.RawMessage(args)
+}
+
+// toolSchema returns the JSON Schema of a tool as the provider APIs require it:
+// a tool that declares none becomes an empty object, because every API expects
+// an object schema.
+func toolSchema(parameters json.RawMessage) json.RawMessage {
+	if len(parameters) == 0 {
+		return emptyJSONObject
+	}
+	return parameters
+}
+
 // normalizeBaseURL drops any trailing slash so endpoint paths can be
 // appended safely. It applies no default; callers must supply a base URL.
 func normalizeBaseURL(base string) string {

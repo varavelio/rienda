@@ -15,9 +15,10 @@ type Exports struct {
 	value goja.Value
 }
 
-// Keys returns the names of the exported fields, in object order.
+// Keys returns the names of the exported fields, in object order. An export
+// that is null, undefined or not an object holds no fields.
 func (e *Exports) Keys() []string {
-	obj := e.value.ToObject(e.vm)
+	obj := e.object()
 	if obj == nil {
 		return nil
 	}
@@ -27,7 +28,7 @@ func (e *Exports) Keys() []string {
 // Field returns the exported field with the given name, reporting whether it
 // is present. A null or undefined field is reported as absent.
 func (e *Exports) Field(name string) (Value, bool) {
-	obj := e.value.ToObject(e.vm)
+	obj := e.object()
 	if obj == nil {
 		return Value{}, false
 	}
@@ -36,6 +37,16 @@ func (e *Exports) Field(name string) (Value, bool) {
 		return Value{}, false
 	}
 	return Value{vm: e.vm, value: got}, true
+}
+
+// object returns the exports as an object, or nil when the export is null,
+// undefined or otherwise not convertible into one. goja panics on a
+// non-object, so the value is checked before it is converted.
+func (e *Exports) object() *goja.Object {
+	if e.value == nil || goja.IsUndefined(e.value) || goja.IsNull(e.value) {
+		return nil
+	}
+	return e.value.ToObject(e.vm)
 }
 
 // errNotCallable reports a value that cannot be called.

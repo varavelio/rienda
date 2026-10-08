@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -109,5 +110,29 @@ func TestCommand(t *testing.T) {
 		require.Error(t, err)
 		_, err = Run(t.Context(), Request{Argv: []string{"echo"}})
 		require.Error(t, err)
+	})
+}
+
+// TestTruncateUTF8 verifies that output truncation never splits a rune.
+func TestTruncateUTF8(t *testing.T) {
+	t.Run("keeps a string within the budget unchanged", func(t *testing.T) {
+		out, cut := truncateUTF8("hello", 10)
+		require.Equal(t, "hello", out)
+		require.False(t, cut)
+	})
+
+	t.Run("cuts to the budget and reports it", func(t *testing.T) {
+		out, cut := truncateUTF8("hello", 3)
+		require.Equal(t, "hel", out)
+		require.True(t, cut)
+	})
+
+	t.Run("never splits a multibyte rune", func(t *testing.T) {
+		// "á" is two bytes; a budget that lands inside it must back off to a
+		// rune boundary.
+		out, cut := truncateUTF8("aá", 2)
+		require.Equal(t, "a", out)
+		require.True(t, cut)
+		require.True(t, utf8.ValidString(out))
 	})
 }

@@ -213,14 +213,10 @@ func anthropicRequestFrom(req *llm.Request, stream bool) (*anthropicRequest, err
 		}
 	}
 	for _, tool := range req.Tools {
-		schema := tool.Parameters
-		if len(schema) == 0 {
-			schema = emptyJSONObject
-		}
 		wire.Tools = append(wire.Tools, anthropicTool{
 			Name:        tool.Name,
 			Description: tool.Description,
-			InputSchema: schema,
+			InputSchema: toolSchema(tool.Parameters),
 			Strict:      tool.Strict,
 		})
 	}
@@ -294,15 +290,11 @@ func anthropicAssistantBlocks(blocks []llm.Block) []anthropicBlock {
 				Data: block.ThinkingRedactedData,
 			})
 		case llm.BlockToolCall:
-			args := block.ToolCallArguments
-			if len(args) == 0 || string(args) == wireJSONNull {
-				args = emptyJSONObject
-			}
 			out = append(out, anthropicBlock{
 				Type:  wireBlockToolUse,
 				ID:    block.ToolCallID,
 				Name:  block.ToolCallName,
-				Input: args,
+				Input: toolArguments(string(block.ToolCallArguments)),
 			})
 		}
 	}
@@ -364,15 +356,11 @@ func anthropicResponseTo(raw *anthropicResponse) *llm.Response {
 				ThinkingRedactedData: block.Data,
 			})
 		case wireBlockToolUse:
-			args := block.Input
-			if len(args) == 0 || string(args) == wireJSONNull {
-				args = emptyJSONObject
-			}
 			resp.Blocks = append(resp.Blocks, llm.Block{
 				Type:              llm.BlockToolCall,
 				ToolCallID:        block.ID,
 				ToolCallName:      block.Name,
-				ToolCallArguments: args,
+				ToolCallArguments: toolArguments(string(block.Input)),
 			})
 		}
 	}

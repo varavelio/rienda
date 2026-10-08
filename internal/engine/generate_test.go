@@ -88,6 +88,27 @@ func TestGenerate(t *testing.T) {
 		}, events)
 	})
 
+	t.Run("carries the message item and thinking identifiers", func(t *testing.T) {
+		engine, _ := newGenerateTest(t, []llm.StreamEvent{
+			{Type: llm.StreamMessageStart, ID: "resp_1", Model: "m"},
+			{Type: llm.StreamThinkingDelta, Thinking: "plan", ThinkingID: "rs_1"},
+			{Type: llm.StreamTextDelta, Text: "answer"},
+			{
+				Type:       llm.StreamMessageEnd,
+				ItemID:     "msg_1",
+				StopReason: llm.StopReasonEndTurn,
+			},
+		})
+
+		response, _ := generateTurn(t, engine)
+
+		require.Equal(t, "msg_1", response.messageItemID)
+		require.Equal(t, []llm.Block{
+			{Type: llm.BlockThinking, Thinking: "plan", ThinkingID: "rs_1"},
+			{Type: llm.BlockText, Text: "answer"},
+		}, response.blocks)
+	})
+
 	t.Run("falls back to the configured model", func(t *testing.T) {
 		engine, _ := newGenerateTest(t, []llm.StreamEvent{
 			{Type: llm.StreamTextDelta, Text: "hi"},

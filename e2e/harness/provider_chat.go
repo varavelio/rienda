@@ -22,17 +22,21 @@ func chatFinishReason(turn Turn) string {
 // chatStream is the codec of the OpenAI Chat Completions protocol.
 type chatStream struct{}
 
-// payloads turns a scripted turn into the chunks of a streamed completion. The
-// first chunk only opens the message, as every consumer reads the message
-// metadata from it, and the usage chunk precedes the chunk that closes the
-// response.
+// payloads turns a scripted turn into the chunks of a streamed completion,
+// reproducing the order real providers use: the first chunk only opens the
+// message, the finish reason rides on the last content chunk (or a chunk of
+// its own when the turn streamed nothing), and the usage chunk arrives after
+// the finish reason, right before the [DONE] sentinel.
 func (chatStream) payloads(turn Turn, sequence int, model string) ([]string, error) {
 	builder := &payloadBuilder{}
 	id := responseID("chatcmpl", sequence)
 
+	// chunks collects the choice-bearing chunks so the finish reason can be
+	// attached to the last one before they are encoded.
+	var chunks []chatCompletionChunk
 	choice := func(choice chatCompletionChunkChoice) {
 		choice.Index = 0
-		builder.add(chatCompletionChunk{
+		chunks = append(chunks, chatCompletionChunk{
 			ID:      id,
 			Model:   model,
 			Choices: []chatCompletionChunkChoice{choice},
@@ -69,6 +73,22 @@ func (chatStream) payloads(turn Turn, sequence int, model string) ([]string, err
 		}
 	}
 
+	if !turn.Truncate {
+		// The finish reason rides on the last chunk that carried content, or
+		// on a chunk of its own when the turn streamed none, exactly as a
+		// provider that closes the message with the last fragment does.
+		last := len(chunks) - 1
+		if last < 0 {
+			choice(chatCompletionChunkChoice{})
+			last = len(chunks) - 1
+		}
+		chunks[last].Choices[0].FinishReason = chatFinishReason(turn)
+	}
+
+	for _, chunk := range chunks {
+		builder.add(chunk)
+	}
+
 	if turn.Usage != nil {
 		usage := &chatUsage{
 			PromptTokens:     turn.Usage.InputTokens,
@@ -89,8 +109,8 @@ func (chatStream) payloads(turn Turn, sequence int, model string) ([]string, err
 			Usage:   usage,
 		})
 	}
+
 	if !turn.Truncate {
-		choice(chatCompletionChunkChoice{FinishReason: chatFinishReason(turn)})
 		builder.addRaw(chatDone)
 	}
 

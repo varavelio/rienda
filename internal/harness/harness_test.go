@@ -632,6 +632,39 @@ func TestPrepare(t *testing.T) {
 // TestSession verifies the branch, the tree and the labels a front end
 // navigates.
 func TestSession(t *testing.T) {
+	t.Run("lists the stored sessions of the workspace", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("hello"))
+		prepared := env.prepare(t)
+		collectEvents(prepared.Run(t.Context(), "say hello"))
+		require.NoError(t, prepared.Close())
+
+		infos, err := Sessions(env.options())
+
+		require.NoError(t, err)
+		require.Len(t, infos, 1)
+		require.Equal(t, prepared.ID(), infos[0].ID)
+	})
+
+	t.Run("closes the session file", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("hello"))
+		prepared, err := Prepare(t.Context(), env.options())
+		require.NoError(t, err)
+
+		require.NoError(t, prepared.Close())
+	})
+
+	t.Run("reports the context and the displayed branch", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("hello"))
+		prepared := env.prepare(t)
+		collectEvents(prepared.Run(t.Context(), "say hello"))
+
+		report, err := prepared.Context()
+
+		require.NoError(t, err)
+		require.Positive(t, report.Used)
+		require.Equal(t, prepared.Branch(), prepared.DisplayedBranch())
+	})
+
 	t.Run("labels the turns of the tree", func(t *testing.T) {
 		env := newTestEnvironment(t, textScript("hello"))
 		prepared := env.prepare(t)

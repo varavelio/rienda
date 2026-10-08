@@ -86,6 +86,23 @@ func TestChatAssemblesStreamedArguments(t *testing.T) {
 	require.JSONEq(t, `{"command": "printf 'assembled'"}`, string(calls[0].ToolCallArguments))
 }
 
+// TestChatKeepsTheLastStreamedFragment verifies that the fragment of the
+// answer a provider sends together with the finish reason reaches the stored
+// message, so the conversation never keeps a truncated answer.
+func TestChatKeepsTheLastStreamedFragment(t *testing.T) {
+	turn := harness.Text("I finished the implementation, tell me if you need anything else")
+	turn.Chunks = 40
+
+	app := newApp(t, turn)
+	result := app.Run(t, "run", "-a", "coder", "-p", "finish")
+
+	result.RequireSuccess(t)
+	require.Equal(t, turn.Text+"\n", result.Stdout)
+
+	session := app.Session(t, result.SessionID(t))
+	require.Equal(t, turn.Text, session.Entries[1].Blocks[0].Text)
+}
+
 // TestChatRunsEveryToolCallOfATurn verifies that a turn requesting several
 // invocations runs all of them in order and answers them together.
 func TestChatRunsEveryToolCallOfATurn(t *testing.T) {

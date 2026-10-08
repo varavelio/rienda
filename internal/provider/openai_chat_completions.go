@@ -16,6 +16,8 @@ import (
 const (
 	openAIChatCompletionsProviderName = "openai-chat-completions"
 	openAIChatCompletionsPath         = "/chat/completions"
+	// chatDoneSentinel closes a streamed Chat Completions response.
+	chatDoneSentinel = "[DONE]"
 )
 
 // openAIChatCompletionsClient is an llm.Client for the OpenAI Chat Completions
@@ -239,16 +241,12 @@ func openAIChatCompletionsRequestFrom(req *llm.Request, stream bool) *openAIChat
 		wire.Messages = append(wire.Messages, openAIChatCompletionsMessagesFrom(message)...)
 	}
 	for _, tool := range req.Tools {
-		schema := tool.Parameters
-		if len(schema) == 0 {
-			schema = emptyJSONObject
-		}
 		wire.Tools = append(wire.Tools, openAIChatCompletionsTool{
 			Type: wireToolFunction,
 			Function: openAIChatCompletionsFunctionDef{
 				Name:        tool.Name,
 				Description: tool.Description,
-				Parameters:  schema,
+				Parameters:  toolSchema(tool.Parameters),
 				Strict:      tool.Strict,
 			},
 		})
@@ -291,16 +289,12 @@ func openAIChatCompletionsMessagesFrom(message llm.Message) []openAIChatCompleti
 			case llm.BlockText:
 				text.WriteString(block.Text)
 			case llm.BlockToolCall:
-				args := string(block.ToolCallArguments)
-				if args == "" || args == wireJSONNull {
-					args = string(emptyJSONObject)
-				}
 				calls = append(calls, openAIChatCompletionsToolCall{
 					ID:   block.ToolCallID,
 					Type: wireToolFunction,
 					Function: openAIChatCompletionsFunctionCall{
 						Name:      block.ToolCallName,
-						Arguments: args,
+						Arguments: string(toolArguments(string(block.ToolCallArguments))),
 					},
 				})
 			}
@@ -391,15 +385,11 @@ func openAIChatCompletionsResponseTo(raw *openAIChatCompletionsResponse) *llm.Re
 		)
 	}
 	for _, call := range choice.Message.ToolCalls {
-		args := call.Function.Arguments
-		if args == "" || args == wireJSONNull {
-			args = string(emptyJSONObject)
-		}
 		resp.Blocks = append(resp.Blocks, llm.Block{
 			Type:              llm.BlockToolCall,
 			ToolCallID:        call.ID,
 			ToolCallName:      call.Function.Name,
-			ToolCallArguments: json.RawMessage(args),
+			ToolCallArguments: toolArguments(call.Function.Arguments),
 		})
 	}
 	return resp
@@ -434,8 +424,6 @@ type openAIChatCompletionsStream struct {
 	pending []llm.StreamEvent
 	usage   llm.Usage
 	stop    string
-	id      string
-	model   string
 }
 
 // openAIChatCompletionsStreamTool accumulates one streamed tool call by chunk index.
@@ -465,32 +453,51 @@ func (s *openAIChatCompletionsStream) Next() (llm.StreamEvent, error) {
 			return llm.StreamEvent{}, io.EOF
 		}
 		raw, err := s.scanner.Next()
-		if err != nil {
+		switch {
+		case errors.Is(err, io.EOF):
+			// The stream closed without the sentinel. When a finish reason
+			// was seen the message ends here, which tolerates providers that
+			// omit it; without one the stream was cut mid-response.
+			if s.stop == "" {
+				s.failed = openAIChatCompletionsStreamError(err)
+				return llm.StreamEvent{}, s.failed
+			}
+			s.closeMessage()
+		case err != nil:
 			s.failed = openAIChatCompletionsStreamError(err)
 			return llm.StreamEvent{}, s.failed
-		}
-		if raw.Data == "[DONE]" {
-			s.ended = true
+		case raw.Data == chatDoneSentinel:
+			// The message ends at the sentinel rather than at the chunk
+			// carrying the finish reason, so the usage the provider reports
+			// in the final chunk before it reaches the message_end event.
 			if s.stop == "" {
 				s.failed = errors.New("openai-chat-completions: stream ended before finish_reason")
 				return llm.StreamEvent{}, s.failed
 			}
-			return llm.StreamEvent{}, io.EOF
-		}
-		var chunk openAIChatCompletionsChunk
-		if err := json.Unmarshal([]byte(raw.Data), &chunk); err != nil {
-			s.failed = fmt.Errorf("openai-chat-completions: decode stream chunk: %w", err)
-			return llm.StreamEvent{}, s.failed
-		}
-		terminal, err := s.translate(chunk)
-		if err != nil {
-			s.failed = err
-			return llm.StreamEvent{}, s.failed
-		}
-		if terminal {
-			s.ended = true
+			s.closeMessage()
+		default:
+			var chunk openAIChatCompletionsChunk
+			if err := json.Unmarshal([]byte(raw.Data), &chunk); err != nil {
+				s.failed = fmt.Errorf("openai-chat-completions: decode stream chunk: %w", err)
+				return llm.StreamEvent{}, s.failed
+			}
+			if err := s.translate(chunk); err != nil {
+				s.failed = err
+				return llm.StreamEvent{}, s.failed
+			}
 		}
 	}
+}
+
+// closeMessage marks the stream ended and queues the message_end event built
+// from the accumulated stop reason and usage.
+func (s *openAIChatCompletionsStream) closeMessage() {
+	s.ended = true
+	s.pending = append(s.pending, llm.StreamEvent{
+		Type:       llm.StreamMessageEnd,
+		StopReason: openAIChatCompletionsStopReasonTo(s.stop),
+		Usage:      s.usage,
+	})
 }
 
 // Close releases the underlying response body. It is safe to call multiple times.
@@ -517,17 +524,16 @@ func openAIChatCompletionsStreamError(err error) error {
 	return fmt.Errorf("openai-chat-completions: read stream: %w", err)
 }
 
-// translate records the updates one chunk carries, queueing them in order, and
-// reports whether the chunk closed the response.
+// translate records the updates one chunk carries, queueing them in order.
 //
 // Every field of the chunk is consumed instead of the first one that matches,
 // because a chunk may both open the message and carry content or a whole tool
-// call. Chunks carrying no consumer-visible update queue nothing.
-func (s *openAIChatCompletionsStream) translate(
-	chunk openAIChatCompletionsChunk,
-) (bool, error) {
+// call, and a chunk may still carry content after the finish reason that names
+// the end of the message, which the [DONE] sentinel actually closes. Chunks
+// carrying no consumer-visible update queue nothing.
+func (s *openAIChatCompletionsStream) translate(chunk openAIChatCompletionsChunk) error {
 	if chunk.Error != nil && chunk.Error.Message != "" {
-		return false, newError(
+		return newError(
 			openAIChatCompletionsProviderName,
 			0,
 			chunk.Error.Type,
@@ -537,8 +543,6 @@ func (s *openAIChatCompletionsStream) translate(
 	}
 	if !s.started {
 		s.started = true
-		s.id = chunk.ID
-		s.model = chunk.Model
 		s.pending = append(s.pending, llm.StreamEvent{
 			Type:  llm.StreamMessageStart,
 			ID:    chunk.ID,
@@ -551,15 +555,6 @@ func (s *openAIChatCompletionsStream) translate(
 	for _, choice := range chunk.Choices {
 		if choice.Index != 0 {
 			continue
-		}
-		if choice.FinishReason != "" {
-			s.stop = choice.FinishReason
-			s.pending = append(s.pending, llm.StreamEvent{
-				Type:       llm.StreamMessageEnd,
-				StopReason: openAIChatCompletionsStopReasonTo(s.stop),
-				Usage:      s.usage,
-			})
-			return true, nil
 		}
 		if choice.Delta.Content != "" {
 			s.pending = append(s.pending, llm.StreamEvent{
@@ -576,8 +571,11 @@ func (s *openAIChatCompletionsStream) translate(
 		for _, call := range choice.Delta.ToolCalls {
 			s.translateToolCall(call)
 		}
+		if choice.FinishReason != "" {
+			s.stop = choice.FinishReason
+		}
 	}
-	return false, nil
+	return nil
 }
 
 // translateToolCall records one tool call fragment, queueing a start event on

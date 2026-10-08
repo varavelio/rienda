@@ -112,6 +112,18 @@ func TestSSEScanner(t *testing.T) {
 		require.ErrorIs(t, err, io.EOF)
 	})
 
+	t.Run("fails on a line larger than the cap", func(t *testing.T) {
+		// A single data line larger than the buffer cap must fail instead of
+		// exhausting memory.
+		body := "data: " + strings.Repeat("a", sseMaxLineBytes+1) + "\n\n"
+
+		scanner := NewSSEScanner(strings.NewReader(body))
+
+		_, err := scanner.Next()
+		require.Error(t, err)
+		require.ErrorContains(t, err, "scan SSE stream")
+	})
+
 	t.Run("wraps reader failures", func(t *testing.T) {
 		scanner := NewSSEScanner(errReader{err: errors.New("boom")})
 

@@ -326,6 +326,115 @@ func TestOpenAIChatStream(t *testing.T) {
 		}, events)
 	})
 
+	t.Run(
+		"fills the identifier and name of a call that arrive in later chunks",
+		func(t *testing.T) {
+			fixture := newOpenAIChatTestServer(t)
+			// A provider may open the call with neither identifier nor name, then
+			// send them in a later chunk.
+			fixture.streamBody = "data: " +
+				`{"id":"c","model":"m","choices":[{"index":0,` +
+				`"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"command\":"}}]}}]}` + "\n\n" +
+				"data: " +
+				`{"id":"c","model":"m","choices":[{"index":0,` +
+				`"delta":{"tool_calls":[{"index":0,"id":"call_9",` +
+				`"function":{"name":"shell","arguments":"\"ls\"}"}}]}}]}` + "\n\n" +
+				"data: " +
+				`{"id":"c","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+				"data: [DONE]\n\n"
+
+			stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "m"})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stream.Close()) }()
+
+			require.Equal(t, []llm.StreamEvent{
+				{Type: llm.StreamMessageStart, ID: "c", Model: "m"},
+				{Type: llm.StreamToolCallStart, ToolCallID: "", ToolCallName: ""},
+				{
+					Type:              llm.StreamToolCallArgsDelta,
+					ToolCallID:        "",
+					ToolCallArgsDelta: `{"command":`,
+				},
+				{
+					Type:              llm.StreamToolCallArgsDelta,
+					ToolCallID:        "call_9",
+					ToolCallArgsDelta: `"ls"}`,
+				},
+				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonToolUse},
+			}, collect(t, stream))
+		},
+	)
+
+	t.Run("keeps content that arrives in the chunk that closes the message", func(t *testing.T) {
+		fixture := newOpenAIChatTestServer(t)
+		// Some providers send the last content fragment together with the
+		// finish reason. Dropping that fragment truncates the answer.
+		fixture.streamBody = "data: " +
+			`{"id":"c","model":"m","choices":[{"index":0,"delta":{"content":"he terminado la implem"}}]}` + "\n\n" +
+			"data: " +
+			`{"id":"c","model":"m","choices":[{"index":0,` +
+			`"delta":{"content":"entacion completa"},"finish_reason":"stop"}]}` + "\n\n" +
+			"data: [DONE]\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "m"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		require.Equal(t, []llm.StreamEvent{
+			{Type: llm.StreamMessageStart, ID: "c", Model: "m"},
+			{Type: llm.StreamTextDelta, Text: "he terminado la implem"},
+			{Type: llm.StreamTextDelta, Text: "entacion completa"},
+			{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+		}, collect(t, stream))
+	})
+
+	t.Run("reports the usage of the chunk after the finish reason", func(t *testing.T) {
+		fixture := newOpenAIChatTestServer(t)
+		// The usage chunk arrives after the chunk carrying the finish reason,
+		// right before the [DONE] sentinel.
+		fixture.streamBody = "data: " +
+			`{"id":"c","model":"m","choices":[{"index":0,"delta":{"content":"done"}}]}` + "\n\n" +
+			"data: " +
+			`{"id":"c","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+			"data: " +
+			`{"id":"c","model":"m","choices":[],` +
+			`"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}` + "\n\n" +
+			"data: [DONE]\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "m"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		require.Equal(t, []llm.StreamEvent{
+			{Type: llm.StreamMessageStart, ID: "c", Model: "m"},
+			{Type: llm.StreamTextDelta, Text: "done"},
+			{
+				Type:       llm.StreamMessageEnd,
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 11, OutputTokens: 4},
+			},
+		}, collect(t, stream))
+	})
+
+	t.Run("closes the message when the provider omits the done sentinel", func(t *testing.T) {
+		fixture := newOpenAIChatTestServer(t)
+		// Some compatible providers close the connection after the finish
+		// reason without sending the [DONE] sentinel.
+		fixture.streamBody = "data: " +
+			`{"id":"c","model":"m","choices":[{"index":0,` +
+			`"delta":{"content":"done"},"finish_reason":"stop"}]}` + "\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "m"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		require.Equal(t, []llm.StreamEvent{
+			{Type: llm.StreamMessageStart, ID: "c", Model: "m"},
+			{Type: llm.StreamTextDelta, Text: "done"},
+			{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+		}, collect(t, stream))
+	})
+
 	t.Run("rejects streams ending without a finish reason", func(t *testing.T) {
 		fixture := newOpenAIChatTestServer(t)
 		fixture.streamBody = "data: " +
@@ -450,6 +559,19 @@ func TestOpenAIChatErrors(t *testing.T) {
 		require.Equal(t, http.StatusTooManyRequests, providerErr.StatusCode)
 		require.Equal(t, "rate_limit", providerErr.Type)
 		require.Equal(t, "slow down", providerErr.Message)
+	})
+
+	t.Run("maps a failed stream request to an llm error", func(t *testing.T) {
+		fixture := newOpenAIChatTestServer(t)
+		fixture.status = http.StatusUnauthorized
+		fixture.streamBody = `{"error": {"message": "no key", "type": "invalid_api_key"}}`
+
+		_, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "m"})
+
+		var providerErr *llm.Error
+		require.ErrorAs(t, err, &providerErr)
+		require.Equal(t, http.StatusUnauthorized, providerErr.StatusCode)
+		require.Equal(t, llm.ErrorKindAuthentication, providerErr.Kind)
 	})
 
 	t.Run("rejects a nil request", func(t *testing.T) {

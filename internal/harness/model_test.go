@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/varavelio/rienda/internal/catalog"
+	"github.com/varavelio/rienda/internal/config"
 	"github.com/varavelio/rienda/internal/llm"
 )
 
@@ -54,5 +56,23 @@ func TestSessionClient(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, []string{"session-1"}, recorder.generated)
+	})
+}
+
+// TestResolveContextWindow verifies the resolution order of a model context
+// window: the value the configuration declares wins, and a model nobody
+// declares falls back to the conservative default.
+func TestResolveContextWindow(t *testing.T) {
+	t.Run("prefers the declared window", func(t *testing.T) {
+		require.Equal(t, 128_000, resolveContextWindow(config.Resolved{
+			ModelID:       "gpt-test",
+			ContextWindow: 128_000,
+		}))
+	})
+
+	t.Run("falls back for a model nobody declares", func(t *testing.T) {
+		require.Equal(t, catalog.FallbackWindow, resolveContextWindow(config.Resolved{
+			ModelID: "model-nobody-knows",
+		}))
 	})
 }

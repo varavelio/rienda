@@ -366,6 +366,33 @@ func TestOpenAIResponsesStream(t *testing.T) {
 		require.Equal(t, true, fixture.requestBody["stream"])
 	})
 
+	t.Run("reads the event type from the sse name when the payload omits it", func(t *testing.T) {
+		fixture := newOpenAIResponsesTestServer(t)
+		// Some compatible providers send the event type only on the SSE
+		// "event:" line, leaving the JSON payload without a "type".
+		fixture.streamBody = "event: response.created\n" +
+			`data: {"response":{"id":"resp_1","model":"gpt-test"}}` + "\n\n" +
+			"event: response.output_text.delta\n" +
+			`data: {"delta":"Hi"}` + "\n\n" +
+			"event: response.completed\n" +
+			`data: {"response":{"id":"resp_1","model":"gpt-test","status":"completed",` +
+			`"output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}` + "\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "gpt-test"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		require.Equal(t, []llm.StreamEvent{
+			{Type: llm.StreamMessageStart, ID: "resp_1", Model: "gpt-test"},
+			{Type: llm.StreamTextDelta, Text: "Hi"},
+			{
+				Type:       llm.StreamMessageEnd,
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 1, OutputTokens: 1},
+			},
+		}, collect(t, stream))
+	})
+
 	t.Run("recovers item identifiers from other events", func(t *testing.T) {
 		fixture := newOpenAIResponsesTestServer(t)
 		fixture.streamBody = "event: response.created\n" +

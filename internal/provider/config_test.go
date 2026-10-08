@@ -124,3 +124,32 @@ func TestConfigHTTPClient(t *testing.T) {
 		require.Same(t, http.DefaultTransport, wrapper.Next)
 	})
 }
+
+// TestToolArguments verifies the normalization of tool call arguments shared by
+// every provider client.
+func TestToolArguments(t *testing.T) {
+	t.Run("keeps a JSON object unchanged", func(t *testing.T) {
+		require.JSONEq(t, `{"command":"ls"}`, string(toolArguments(`{"command":"ls"}`)))
+	})
+
+	t.Run("replaces an empty payload with an empty object", func(t *testing.T) {
+		require.JSONEq(t, "{}", string(toolArguments("")))
+	})
+
+	t.Run("replaces a null payload with an empty object", func(t *testing.T) {
+		require.JSONEq(t, "{}", string(toolArguments("null")))
+	})
+}
+
+// TestToolSchema verifies the normalization of tool schemas shared by every
+// provider client.
+func TestToolSchema(t *testing.T) {
+	t.Run("keeps a declared schema unchanged", func(t *testing.T) {
+		schema := []byte(`{"type":"object"}`)
+		require.JSONEq(t, `{"type":"object"}`, string(toolSchema(schema)))
+	})
+
+	t.Run("replaces an absent schema with an empty object", func(t *testing.T) {
+		require.JSONEq(t, "{}", string(toolSchema(nil)))
+	})
+}
