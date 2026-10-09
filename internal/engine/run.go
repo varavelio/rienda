@@ -19,6 +19,13 @@ var errNothingToContinue = errors.New("engine: there is no conversation to conti
 // hooks rewrote it, refused exactly like a response that streamed nothing.
 var errEmptyResponse = errors.New("engine: the model returned an empty response")
 
+// errToolLoop reports a run the model kept repeating the same tool call with
+// the same arguments and the same result. Without this guard a model stuck on
+// a call it cannot fix would loop forever, spending a model call per round.
+var errToolLoop = errors.New(
+	"engine: the model kept requesting the same tool call with the same arguments and the run was stopped",
+)
+
 // Texts of the synthetic results persisted when a run is interrupted while
 // tools are running. They keep the history valid for the next provider call
 // and tell the model what happened.
@@ -26,6 +33,12 @@ const (
 	interruptedBeforeTool = "the run was interrupted before the tool ran"
 	interruptedDuringTool = "the run was interrupted while the tool ran"
 )
+
+// maxIdenticalToolRounds bounds how many times in a row a run may perform the
+// same tool batch and see the same results. The model gets this many chances
+// to change its approach before the run stops, which tolerates a retry while
+// refusing a loop.
+const maxIdenticalToolRounds = 3
 
 // Run starts a run and returns the channel carrying its events.
 //
@@ -122,6 +135,10 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	// At most one automatic compaction happens per run: without the guard a
 	// stubborn threshold would turn into a loop.
 	compacted := false
+	// The signature of the last tool batch and how many times in a row it
+	// repeated, which is what stops a model stuck on the same call.
+	lastRound := ""
+	identicalRounds := 0
 	// Persisting a complete response is not cancelable, so the context of the
 	// writes is built once, outside the loop.
 	persistCtx := context.WithoutCancel(ctx)
@@ -220,6 +237,17 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			return
 		}
 		e.emitContext(events)
+
+		if round := toolRoundSignature(calls, results); round == lastRound {
+			identicalRounds++
+			if identicalRounds >= maxIdenticalToolRounds {
+				failRun(errToolLoop)
+				return
+			}
+		} else {
+			lastRound = round
+			identicalRounds = 1
+		}
 	}
 }
 
@@ -410,6 +438,26 @@ func reportResult(call llm.Block, result tool.Result, events chan<- Event) llm.B
 		ToolResult:        result.Blocks,
 		ToolResultIsError: result.IsError,
 	}
+}
+
+// toolRoundSignature returns a stable signature of a tool batch: the name, the
+// arguments and the result of every call, in order. Two rounds sharing a
+// signature produced no progress at all, which is what lets a run notice a
+// model that is stuck asking for the same call.
+func toolRoundSignature(calls, results []llm.Block) string {
+	if len(calls) == 0 || len(results) != len(calls) {
+		return ""
+	}
+	var signature strings.Builder
+	for i, call := range calls {
+		signature.WriteString(call.ToolCallName)
+		signature.WriteByte(0)
+		signature.Write(call.ToolCallArguments)
+		signature.WriteByte(0)
+		signature.WriteString(resultText(results[i].ToolResult))
+		signature.WriteByte('\n')
+	}
+	return signature.String()
 }
 
 // resultText flattens the model-facing text of tool result blocks.

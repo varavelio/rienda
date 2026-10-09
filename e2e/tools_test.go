@@ -145,6 +145,33 @@ func TestToolsShadowABuiltin(t *testing.T) {
 	require.Contains(t, chat.Messages[3].Text(), "user says echo hi")
 }
 
+// TestToolsStopsARepeatedCall verifies that a model stuck on the same tool
+// call with the same arguments and the same result does not loop forever: the
+// run stops and the failure names the loop.
+func TestToolsStopsARepeatedCall(t *testing.T) {
+	definition := coderAgent()
+	definition.Tools = []string{"shell"}
+	// The model asks for the very same call over and over, which the shell
+	// tool rejects with the same error every time.
+	script := make([]harness.Turn, 0, 6)
+	for range 6 {
+		script = append(script, harness.ToolCall("shell", map[string]any{}))
+	}
+	script = append(script, harness.Text("never reached"))
+	app := toolsApp(t, definition, nil, nil, script...)
+
+	result := app.Run(t, "run", "-a", "coder", "-p", "loop")
+
+	require.NotEqual(t, 0, result.Code, "the run fails instead of looping forever")
+	require.Contains(t, result.Stderr, "kept requesting the same tool call")
+	require.Less(
+		t,
+		len(app.Provider().Requests()),
+		len(script),
+		"the run stops well before the script is exhausted",
+	)
+}
+
 // TestToolsSkipsABrokenTool verifies that a broken tool the agent does not
 // declare is reported on standard error while the run succeeds without it. A
 // declared tool that cannot load fails the run like an unknown tool, because

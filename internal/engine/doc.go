@@ -67,6 +67,12 @@
 //     are not a JSON object are not executed and receive an error result that
 //     explains why.
 //
+// A model that keeps requesting the same tool call with the same arguments and
+// receives the same result is making no progress, so the run stops it after a
+// few identical rounds instead of looping forever, one model call per round.
+// The round that repeats is compared by name, arguments and result, so a model
+// that retries the call and sees a different outcome keeps running.
+//
 // Streaming a model response is retried with exponential backoff while the
 // failure is transient, so a dropped connection or an overloaded provider
 // stays invisible. A transient failure that arrives after part of the response

@@ -621,6 +621,78 @@ func TestRun(t *testing.T) {
 		require.NotEmpty(t, eventTypes(events))
 	})
 
+	t.Run("stops a model stuck on the same tool call", func(t *testing.T) {
+		// A model that keeps asking for the same call with the same arguments
+		// and sees the same result makes no progress: the run must stop
+		// instead of looping forever, one model call per round.
+		scripts := make([]script, 0, maxIdenticalToolRounds+1)
+		for range maxIdenticalToolRounds + 1 {
+			scripts = append(scripts, toolTurn("call_1", "echo", `{"command":"ls"}`))
+		}
+		client := &fakeClient{scripts: scripts}
+		engine, store := newTestEngine(t, Config{
+			Registry: newTestRegistry(t, &fakeTool{name: "echo", output: "ok"}),
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"echo"}}},
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		events := collect(engine.Run(t.Context(), "go"))
+
+		require.Len(
+			t,
+			client.requests,
+			maxIdenticalToolRounds,
+			"the run stops on the repeated round",
+		)
+		var last Event
+		for _, event := range events {
+			last = event
+		}
+		require.Equal(t, EventRunEnd, last.Type)
+		require.Equal(t, EndReasonError, last.Reason)
+		var failure string
+		for _, event := range events {
+			if event.Type == EventError {
+				failure = event.Error
+			}
+		}
+		require.Contains(t, failure, "kept requesting the same tool call")
+		// The results of every round stay in the conversation, so a front end
+		// reads what the model did before the run stopped.
+		require.NotEmpty(t, store.History())
+	})
+
+	t.Run("keeps running while the tool result changes", func(t *testing.T) {
+		// A model that repeats the call but gets a different result every time
+		// is making progress, so the guard must not stop it.
+		outputs := []string{"1", "2", "3", "4"}
+		echo := &fakeTool{name: "echo"}
+		echo.before = func(context.Context) {
+			echo.output = outputs[len(echo.calls)-1]
+		}
+		scripts := make([]script, 0, len(outputs)+1)
+		for range outputs {
+			scripts = append(scripts, toolTurn("call_1", "echo", `{}`))
+		}
+		scripts = append(scripts, endTurn("done"))
+		client := &fakeClient{scripts: scripts}
+		engine, _ := newTestEngine(t, Config{
+			Registry: newTestRegistry(t, echo),
+			Agents:   []agent.Agent{{ID: "coder", Tools: []string{"echo"}}},
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		events := collect(engine.Run(t.Context(), "go"))
+
+		require.Len(t, client.requests, len(outputs)+1, "every distinct round runs")
+		require.Len(t, echo.calls, len(outputs))
+		var last Event
+		for _, event := range events {
+			last = event
+		}
+		require.Equal(t, EndReasonTurn, last.Reason)
+	})
+
 	t.Run("keeps the system prompt of the run fixed across its turns", func(t *testing.T) {
 		dir := t.TempDir()
 		writeSkill(t, dir, "one", skillFile("one", "First."))
