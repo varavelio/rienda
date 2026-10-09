@@ -15,8 +15,9 @@ import (
 // errNothingToContinue reports a run asked to continue an empty session.
 var errNothingToContinue = errors.New("engine: there is no conversation to continue")
 
-// errEmptyResponse reports a model response left with no content after the
-// hooks rewrote it, refused exactly like a response that streamed nothing.
+// errEmptyResponse reports a model response left with no content: either the
+// stream carried nothing at all, which is retried, or the hooks rewrote the
+// answer into nothing, which is not, because the model already answered.
 var errEmptyResponse = errors.New("engine: the model returned an empty response")
 
 // errToolLoop reports a run the model kept repeating the same tool call with

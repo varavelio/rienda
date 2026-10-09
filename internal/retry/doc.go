@@ -14,4 +14,9 @@
 // would repeat what the user already saw. A caller that can retract what it
 // delivered, as the engine does with a streamed response, retries instead and
 // reports the retraction to its own consumer.
+//
+// A producer whose failure IsTransient does not recognize on its own, such as
+// an answer that streamed no content, wraps it with Transient so the call is
+// repeated. The providers already mark a stream they cut before the response
+// completed with llm.ErrIncompleteStream, which IsTransient recognizes.
 package retry

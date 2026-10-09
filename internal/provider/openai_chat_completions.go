@@ -471,14 +471,18 @@ func (s *openAIChatCompletionsStream) Next() (llm.StreamEvent, error) {
 			// carrying the finish reason, so the usage the provider reports
 			// in the final chunk before it reaches the message_end event.
 			if s.stop == "" {
-				s.failed = errors.New("openai-chat-completions: stream ended before finish_reason")
+				s.failed = llm.IncompleteStream(
+					errors.New("openai-chat-completions: stream ended before finish_reason"),
+				)
 				return llm.StreamEvent{}, s.failed
 			}
 			s.closeMessage()
 		default:
 			var chunk openAIChatCompletionsChunk
 			if err := json.Unmarshal([]byte(raw.Data), &chunk); err != nil {
-				s.failed = fmt.Errorf("openai-chat-completions: decode stream chunk: %w", err)
+				s.failed = llm.IncompleteStream(
+					fmt.Errorf("openai-chat-completions: decode stream chunk: %w", err),
+				)
 				return llm.StreamEvent{}, s.failed
 			}
 			if err := s.translate(chunk); err != nil {
@@ -516,9 +520,12 @@ func (s *openAIChatCompletionsStream) Close() error {
 // means the stream was truncated.
 func openAIChatCompletionsStreamError(err error) error {
 	if errors.Is(err, io.EOF) {
-		return fmt.Errorf(
-			"openai-chat-completions: stream ended before [DONE]: %w",
-			io.ErrUnexpectedEOF,
+		//nolint:wrapcheck // the marker keeps the message of the failure.
+		return llm.IncompleteStream(
+			fmt.Errorf(
+				"openai-chat-completions: stream ended before [DONE]: %w",
+				io.ErrUnexpectedEOF,
+			),
 		)
 	}
 	return fmt.Errorf("openai-chat-completions: read stream: %w", err)

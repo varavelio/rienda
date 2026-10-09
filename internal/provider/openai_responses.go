@@ -465,7 +465,9 @@ func (s *openAIResponsesStream) Next() (llm.StreamEvent, error) {
 		}
 		var envelope openAIResponsesStreamEnvelope
 		if err := json.Unmarshal([]byte(raw.Data), &envelope); err != nil {
-			s.failed = fmt.Errorf("openai-responses: decode stream event: %w", err)
+			s.failed = llm.IncompleteStream(
+				fmt.Errorf("openai-responses: decode stream event: %w", err),
+			)
 			return llm.StreamEvent{}, s.failed
 		}
 		if envelope.Type == "" {
@@ -501,9 +503,9 @@ func (s *openAIResponsesStream) Close() error {
 // terminal event means the stream was truncated.
 func openAIResponsesStreamError(err error) error {
 	if errors.Is(err, io.EOF) {
-		return fmt.Errorf(
-			"openai-responses: stream ended before completion: %w",
-			io.ErrUnexpectedEOF,
+		//nolint:wrapcheck // the marker keeps the message of the failure.
+		return llm.IncompleteStream(
+			fmt.Errorf("openai-responses: stream ended before completion: %w", io.ErrUnexpectedEOF),
 		)
 	}
 	return fmt.Errorf("openai-responses: read stream: %w", err)

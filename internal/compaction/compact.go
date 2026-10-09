@@ -56,7 +56,12 @@ func Compact(ctx context.Context, prep Preparation, deps Deps) (Result, error) {
 
 		summary := strings.TrimSpace(textOf(response.Blocks))
 		if summary == "" {
-			return Result{}, errors.New("compaction: the model returned an empty summary")
+			// An empty summary is worth one more try: the summary is not
+			// persisted until it carries text, so repeating the call is safe.
+			//nolint:wrapcheck // the marker keeps the message of the failure.
+			return Result{}, retry.Transient(
+				errors.New("compaction: the model returned an empty summary"),
+			)
 		}
 
 		model := response.Model

@@ -452,6 +452,23 @@ func TestOpenAIChatStream(t *testing.T) {
 		_, err = stream.Next()
 		require.Error(t, err)
 		require.NotErrorIs(t, err, io.EOF)
+		require.ErrorIs(t, err, llm.ErrIncompleteStream, "the stream is worth repeating")
+	})
+
+	t.Run("rejects a chunk that is not valid JSON", func(t *testing.T) {
+		fixture := newOpenAIChatTestServer(t)
+		// A chunk cut in half is what a stream dropped mid-write looks like.
+		fixture.streamBody = "data: " +
+			`{"id":"c","model":"m","choices":[{"index":0,"delta":{"conte` + "\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "m"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		_, err = stream.Next()
+
+		require.ErrorContains(t, err, "decode stream chunk")
+		require.ErrorIs(t, err, llm.ErrIncompleteStream, "the stream is worth repeating")
 	})
 
 	t.Run("surfaces error payloads instead of truncation", func(t *testing.T) {

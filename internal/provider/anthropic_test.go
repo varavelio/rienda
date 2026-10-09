@@ -488,6 +488,23 @@ func TestAnthropicStream(t *testing.T) {
 		_, err = stream.Next()
 		require.ErrorContains(t, err, "ended before message_stop")
 		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+		require.ErrorIs(t, err, llm.ErrIncompleteStream, "the stream is worth repeating")
+	})
+
+	t.Run("rejects an event that is not valid JSON", func(t *testing.T) {
+		fixture := newAnthropicTestServer(t)
+		// An event cut in half is what a stream dropped mid-write looks like.
+		fixture.streamBody = "event: message_start\n" +
+			`data: {"type":"message_start","mess` + "\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "c"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		_, err = stream.Next()
+
+		require.ErrorContains(t, err, "decode stream event")
+		require.ErrorIs(t, err, llm.ErrIncompleteStream, "the stream is worth repeating")
 	})
 
 	t.Run("wraps read failures", func(t *testing.T) {

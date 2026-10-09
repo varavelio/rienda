@@ -1,5 +1,33 @@
 package llm
 
+import "errors"
+
+// ErrIncompleteStream reports a provider stream that ended or broke before the
+// response completed. A caller may repeat the call, because the stream carried
+// no complete answer.
+var ErrIncompleteStream = errors.New("the response stream is incomplete")
+
+// IncompleteStream marks err as coming from a stream that broke before the
+// response completed. A provider wraps the malformed fragment it could not
+// read, so a caller knows repeating the call may overcome the failure. The
+// message of err is preserved exactly.
+func IncompleteStream(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &incompleteStreamError{err: err}
+}
+
+// incompleteStreamError marks a failure of an incomplete stream.
+type incompleteStreamError struct{ err error }
+
+// Error returns the description of the wrapped failure.
+func (e *incompleteStreamError) Error() string { return e.err.Error() }
+
+// Unwrap returns the wrapped failure together with the marker, so errors.Is
+// reaches both.
+func (e *incompleteStreamError) Unwrap() []error { return []error{e.err, ErrIncompleteStream} }
+
 // StreamEventType discriminates the payload carried by a StreamEvent.
 type StreamEventType string
 

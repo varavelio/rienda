@@ -78,8 +78,11 @@
 // stays invisible. A transient failure that arrives after part of the response
 // reached the caller is retried too: the retry reports Discard so the consumer
 // drops the partial response before the next attempt streams it again, and the
-// restarted answer is never shown twice. Only a failure that repeating cannot
-// overcome, or the exhaustion of the attempts, ends the run.
+// restarted answer is never shown twice. An answer that carried no content at
+// all is retried too, because a provider sometimes closes a complete stream
+// with nothing in it, and nothing of that empty answer reached the caller or
+// the session. Only a failure that repeating cannot overcome, or the
+// exhaustion of the attempts, ends the run.
 //
 // The engine keeps the conversation inside the context window of its model: at
 // the top of every loop iteration, before the request of the turn is built, it

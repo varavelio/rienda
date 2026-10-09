@@ -126,6 +126,31 @@ func TestIsTransient(t *testing.T) {
 			err:  fmt.Errorf("read: %w", io.ErrUnexpectedEOF),
 			want: true,
 		},
+		{
+			name: "incomplete stream",
+			err:  fmt.Errorf("provider: %w", llm.ErrIncompleteStream),
+			want: true,
+		},
+		{
+			name: "failure marked transient",
+			err:  Transient(errors.New("the model returned an empty response")),
+			want: true,
+		},
+		{
+			name: "wrapped failure marked transient",
+			err:  fmt.Errorf("generate: %w", Transient(errors.New("empty response"))),
+			want: true,
+		},
+		{
+			name: "canceled failure marked transient",
+			err:  Transient(context.Canceled),
+			want: false,
+		},
+		{
+			name: "failure marked permanent over a transient one",
+			err:  Permanent(&llm.Error{Kind: llm.ErrorKindServer}),
+			want: false,
+		},
 		{name: "unknown failure", err: errors.New("boom"), want: false},
 	}
 

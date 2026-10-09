@@ -158,12 +158,19 @@ func TestCompact(t *testing.T) {
 		require.Len(t, client.requests, 1)
 	})
 
-	t.Run("refuses an empty summary", func(t *testing.T) {
-		client := &stubClient{responses: []*llm.Response{summarizationResponse("   ")}}
+	t.Run("retries an empty summary", func(t *testing.T) {
+		// A summary that carried no text is not persisted, so the call is
+		// repeated and the recovered summary is the one returned.
+		client := &stubClient{responses: []*llm.Response{
+			summarizationResponse("   "),
+			summarizationResponse("the recovered summary"),
+		}}
 
-		_, err := Compact(t.Context(), prepared(), Deps{Client: client})
+		result, err := Compact(t.Context(), prepared(), Deps{Client: client})
 
-		require.ErrorContains(t, err, "empty summary")
+		require.NoError(t, err)
+		require.Equal(t, "the recovered summary", result.Summary)
+		require.Len(t, client.requests, 2)
 	})
 
 	t.Run("refuses a missing client and an empty preparation", func(t *testing.T) {

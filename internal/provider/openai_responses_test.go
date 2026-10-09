@@ -468,8 +468,25 @@ func TestOpenAIResponsesStream(t *testing.T) {
 		_, err = stream.Next()
 		require.ErrorContains(t, err, "ended before completion")
 		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+		require.ErrorIs(t, err, llm.ErrIncompleteStream, "the stream is worth repeating")
 
 		require.NoError(t, stream.Close())
+	})
+
+	t.Run("rejects an event that is not valid JSON", func(t *testing.T) {
+		fixture := newOpenAIResponsesTestServer(t)
+		// An event cut in half is what a stream dropped mid-write looks like.
+		fixture.streamBody = "event: response.created\n" +
+			`data: {"type":"response.created","resp` + "\n\n"
+
+		stream, err := fixture.client().Stream(t.Context(), &llm.Request{Model: "m"})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close()) }()
+
+		_, err = stream.Next()
+
+		require.ErrorContains(t, err, "decode stream event")
+		require.ErrorIs(t, err, llm.ErrIncompleteStream, "the stream is worth repeating")
 	})
 
 	t.Run("wraps read failures", func(t *testing.T) {

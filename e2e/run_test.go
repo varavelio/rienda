@@ -273,14 +273,33 @@ func TestRunReportsProviderFailures(t *testing.T) {
 	require.Contains(t, second.Stderr, "the script ran out of turns")
 }
 
-// TestRunRejectsEmptyAnswers verifies that an answer with no content fails the
-// run instead of ending it silently.
-func TestRunRejectsEmptyAnswers(t *testing.T) {
-	app := newApp(t, harness.Text(""))
+// TestRunRetriesAnEmptyAnswer verifies that a response that carried no content
+// at all is retried, and that the recovered answer is the one the run reports.
+func TestRunRetriesAnEmptyAnswer(t *testing.T) {
+	app := newApp(t, harness.Text(""), harness.Text("recovered"))
+
+	result := app.Run(t, "run", "-a", "coder", "-p", "say nothing")
+
+	result.RequireSuccess(t)
+	require.Equal(t, "recovered\n", result.Stdout)
+	require.Contains(t, result.Stderr, "the model returned an empty response")
+	require.Contains(t, result.Stderr, "retrying")
+	require.Len(t, app.Provider().Requests(), 2)
+}
+
+// TestRunFailsWhenEveryAnswerIsEmpty verifies that a provider that never
+// answers with content fails the run instead of retrying forever.
+func TestRunFailsWhenEveryAnswerIsEmpty(t *testing.T) {
+	turns := make([]harness.Turn, 8)
+	for index := range turns {
+		turns[index] = harness.Text("")
+	}
+	app := newApp(t, turns...)
 
 	result := app.Run(t, "run", "-a", "coder", "-p", "say nothing")
 
 	require.Equal(t, 1, result.Code)
 	require.Empty(t, result.Stdout)
 	require.Contains(t, result.Stderr, "the model returned an empty response")
+	require.Len(t, app.Provider().Requests(), 5)
 }

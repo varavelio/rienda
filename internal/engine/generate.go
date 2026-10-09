@@ -152,7 +152,12 @@ func (a *accumulator) turn(fallbackModel string) (turn, error) {
 	}
 
 	if len(blocks) == 0 {
-		return turn{}, errors.New("engine: the model returned an empty response")
+		// A response that carried nothing is worth one more try: the provider
+		// sometimes answers a complete stream with no content at all, and the
+		// next attempt usually carries an answer. Nothing was delivered to the
+		// caller and nothing was persisted, so the retry is safe.
+		//nolint:wrapcheck // the marker keeps the message of the failure.
+		return turn{}, retry.Transient(errEmptyResponse)
 	}
 
 	model := a.model

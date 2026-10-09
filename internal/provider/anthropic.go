@@ -419,7 +419,9 @@ func (s *anthropicStream) Next() (llm.StreamEvent, error) {
 		}
 		var envelope anthropicStreamEnvelope
 		if err := json.Unmarshal([]byte(raw.Data), &envelope); err != nil {
-			s.failed = fmt.Errorf("anthropic: decode stream event: %w", err)
+			s.failed = llm.IncompleteStream(
+				fmt.Errorf("anthropic: decode stream event: %w", err),
+			)
 			return llm.StreamEvent{}, s.failed
 		}
 		event, terminal, err := s.translate(envelope)
@@ -452,9 +454,9 @@ func (s *anthropicStream) Close() error {
 // means the stream was truncated.
 func anthropicStreamError(err error) error {
 	if errors.Is(err, io.EOF) {
-		return fmt.Errorf(
-			"anthropic: stream ended before message_stop: %w",
-			io.ErrUnexpectedEOF,
+		//nolint:wrapcheck // the marker keeps the message of the failure.
+		return llm.IncompleteStream(
+			fmt.Errorf("anthropic: stream ended before message_stop: %w", io.ErrUnexpectedEOF),
 		)
 	}
 	return fmt.Errorf("anthropic: read stream: %w", err)

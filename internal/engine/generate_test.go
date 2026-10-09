@@ -165,9 +165,45 @@ func TestGenerate(t *testing.T) {
 		require.Equal(t, "call_1", calls[0].ToolCallID)
 	})
 
-	t.Run("reports empty responses", func(t *testing.T) {
-		engine, _ := newGenerateTest(t, []llm.StreamEvent{
-			{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+	t.Run("retries a response that carried nothing", func(t *testing.T) {
+		// A provider sometimes closes a complete stream without content, so the
+		// empty answer is retried and the recovered one is the one returned.
+		client := &fakeClient{scripts: []script{
+			{events: []llm.StreamEvent{
+				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+			}},
+			endTurn("recovered"),
+		}}
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		response, events := generateTurn(t, engine)
+
+		require.Equal(t, []llm.Block{{Type: llm.BlockText, Text: "recovered"}}, response.blocks)
+		require.Len(t, client.requests, 2)
+		require.Equal(t, []EventType{EventRetry, EventTextDelta}, eventTypes(events))
+		require.Contains(t, events[0].Error, "empty response")
+		require.False(
+			t,
+			events[0].Discard,
+			"nothing reached the caller, so nothing is discarded",
+		)
+	})
+
+	t.Run("stops retrying an empty response when the failure turns permanent", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{
+			{events: []llm.StreamEvent{
+				{Type: llm.StreamMessageEnd, StopReason: llm.StopReasonEndTurn},
+			}},
+			{openErr: &llm.Error{
+				Provider: "test",
+				Kind:     llm.ErrorKindInvalidRequest,
+				Message:  "rejected",
+			}},
+		}}
+		engine, _ := newTestEngine(t, Config{
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
 		})
 
 		plan, err := engine.plan()
@@ -176,7 +212,8 @@ func TestGenerate(t *testing.T) {
 		events := make(chan Event, 8)
 		_, err = engine.generate(t.Context(), events, plan)
 
-		require.ErrorContains(t, err, "empty response")
+		require.ErrorContains(t, err, "rejected")
+		require.Len(t, client.requests, 2, "a permanent failure ends the retries")
 	})
 
 	t.Run("reports stream failures", func(t *testing.T) {

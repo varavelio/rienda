@@ -96,17 +96,50 @@ func Permanent(err error) error {
 	return try.Permanent(err)
 }
 
+// Transient marks err as worth repeating, so Do retries the call that produced
+// it even when IsTransient would not recognize the failure on its own. A
+// producer uses it for a failure it knows a repeated call can overcome, such
+// as a response that streamed no content at all, or a stream the provider cut
+// before it completed. The wrapping keeps the message and the cause of err
+// reachable.
+func Transient(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &transientError{err: err}
+}
+
+// transientError marks a failure as worth repeating.
+type transientError struct{ err error }
+
+// Error returns the description of the wrapped failure.
+func (e *transientError) Error() string { return e.err.Error() }
+
+// Unwrap returns the wrapped failure, so its cause stays reachable.
+func (e *transientError) Unwrap() error { return e.err }
+
+// isMarkedTransient reports whether err was wrapped with Transient.
+func isMarkedTransient(err error) bool {
+	var marked *transientError
+	return errors.As(err, &marked)
+}
+
 // IsTransient reports whether err is a failure that repeating the call may
 // overcome: a rate limit, a failed or overloaded provider, an attempt that
 // timed out or conflicted, or a transport error. The failures a provider
 // attributes to the request, the credentials or the account are not transient,
-// and neither is a canceled context.
+// and neither is a canceled context. A failure marked with Transient is always
+// transient, and one marked with Permanent never is.
 func IsTransient(err error) bool {
 	switch {
 	case err == nil:
 		return false
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return false
+	case try.IsPermanent(err):
+		return false
+	case isMarkedTransient(err):
+		return true
 	}
 
 	if apiErr, ok := errors.AsType[*llm.Error](err); ok {
@@ -115,7 +148,7 @@ func IsTransient(err error) bool {
 	if _, ok := errors.AsType[net.Error](err); ok {
 		return true
 	}
-	return errors.Is(err, io.ErrUnexpectedEOF)
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, llm.ErrIncompleteStream)
 }
 
 // transientKind reports whether a classified provider failure is worth
