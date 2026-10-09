@@ -93,7 +93,9 @@ func catalogPayload(models map[string]int) string {
 			payload.WriteString(",")
 		}
 		first = false
-		payload.WriteString(`"` + id + `":{"limit":{"context":`)
+		payload.WriteString(`"`)
+		payload.WriteString(id)
+		payload.WriteString(`":{"limit":{"context":`)
 		payload.WriteString(strconv.Itoa(context))
 		payload.WriteString("}}")
 	}
