@@ -174,9 +174,8 @@ func isVCS(path string) bool {
 // parentDir returns the directory that holds the given relative path, or the
 // empty string when the path has no parent.
 func parentDir(path string) string {
-	index := strings.LastIndexByte(path, '/')
-	if index < 0 {
-		return ""
-	}
-	return path[:index]
+	dir, _, _ := strings.CutLast(path, "/")
+	return dir
 }
+
+
