@@ -3,10 +3,10 @@
 ##################
 
 # Use golang (debian) as the base image
-FROM golang:1.27-trixie as tools
+FROM golang:1.27.0-trixie as tools
 
 # Install golangci-lint
-COPY --from=golangci/golangci-lint:v2.13.2 /usr/bin/golangci-lint /usr/local/bin/golangci-lint
+COPY --from=golangci/golangci-lint:v2.14.0 /usr/bin/golangci-lint /usr/local/bin/golangci-lint
 
 # Install veta
 COPY --from=varavel/veta:0.1.1 /usr/local/bin/veta /usr/local/bin/veta
