@@ -80,6 +80,11 @@ type entry struct {
 	// conversation shows for the switch, so the label is written once.
 	selectionKind session.Kind
 
+	// section is the section of the transcript the entry belongs to. Entries
+	// of one section that share a kind merge, so a streamed answer and the
+	// reasoning interleaved with it stay one block each.
+	section int
+
 	// Tool fields are only meaningful for entryTool entries.
 	toolCallID    string
 	toolName      string
@@ -122,6 +127,15 @@ type transcript struct {
 	// dirty is the index of the first entry that must be rendered again, or
 	// the number of entries when every one of them is already rendered.
 	dirty int
+
+	// section counts the sections the transcript split into. A section is the
+	// stretch what the run is doing stays one and the same: the answer being
+	// streamed and the reasoning interwoven with it. The entries of a section
+	// merge with the ones appended inside it, so an answer the reasoning
+	// interrupts still reads as one block, and a new section opens whenever
+	// something else happens between two deltas, such as a tool invocation or
+	// the opening of a run.
+	section int
 }
 
 // changedFrom returns the index of the first entry whose rendering is stale.
@@ -153,20 +167,30 @@ func (t *transcript) push(current entry) {
 	}
 }
 
+// begin opens a new section: the entries appended from now on merge only with
+// the ones appended inside it, never with the ones that came before, because
+// something happened in between that changed what the entries belong to.
+func (t *transcript) begin() {
+	t.section++
+}
+
 // addUser appends a message written by the user.
 func (t *transcript) addUser(text string) {
-	t.push(entry{kind: entryUser, fragments: []string{text}})
+	t.begin()
+	t.push(entry{kind: entryUser, section: t.section, fragments: []string{text}})
 }
 
 // addNotice appends an informational notice.
 func (t *transcript) addNotice(text string) {
-	t.push(entry{kind: entryNotice, fragments: []string{text}})
+	t.begin()
+	t.push(entry{kind: entryNotice, section: t.section, fragments: []string{text}})
 }
 
 // addCompaction appends the checkpoint of a compaction, which the conversation
 // renders as a row of metadata between two turns.
 func (t *transcript) addCompaction() {
-	t.push(entry{kind: entryCompaction, fragments: []string{compactionBody}})
+	t.begin()
+	t.push(entry{kind: entryCompaction, section: t.section, fragments: []string{compactionBody}})
 }
 
 // finishTurn records how long the turn in flight took on the entry that closes
@@ -225,6 +249,9 @@ func (t *transcript) fold(entry session.Entry, agent string) {
 		t.addSwitch(entry)
 		return
 	}
+	// A stored entry is one message the session persisted: its blocks belong
+	// together and merge, while the entries of other messages never do.
+	t.begin()
 
 	textKind := entryAssistant
 	if entry.Message.Role == llm.RoleUser {
@@ -271,9 +298,11 @@ func hasBlock(blocks []llm.Block, kind llm.BlockType) bool {
 // it as a line of metadata between two turns, exactly as the tree shows it as a
 // node of its own, so a switch is never lost by reading one of the two.
 func (t *transcript) addSwitch(selection session.Entry) {
+	t.begin()
 	t.push(entry{
 		kind:          entrySwitch,
 		selectionKind: selection.Kind,
+		section:       t.section,
 		fragments:     []string{selectionText(selection)},
 	})
 }
@@ -304,10 +333,14 @@ func selectionText(selection session.Entry) string {
 	return previous + " → " + next
 }
 
-// addTool appends a tool invocation to the transcript.
+// addTool appends a tool invocation to the transcript. The invocation opens a
+// section of its own, so the answer that follows it never extends the one that
+// asked for it.
 func (t *transcript) addTool(callID, name, arguments string) {
+	t.begin()
 	t.push(entry{
 		kind:          entryTool,
+		section:       t.section,
 		toolCallID:    callID,
 		toolName:      name,
 		toolArguments: arguments,
@@ -343,6 +376,17 @@ func textOf(blocks []llm.Block) string {
 // apply folds one engine event into the transcript.
 func (t *transcript) apply(event engine.Event) {
 	switch event.Type {
+	case engine.EventRunStart:
+		// A run streams its own answers: the deltas that follow never extend
+		// what an earlier run streamed.
+		t.begin()
+		for _, diagnostic := range event.Diagnostics {
+			t.addNotice(diagnostic)
+		}
+	case engine.EventMessageEnd:
+		// The message is persisted: whatever the run streams next answers the
+		// next model turn, so it never extends what the reader just read.
+		t.begin()
 	case engine.EventTextDelta:
 		t.appendText(entryAssistant, t.agent, event.Text)
 	case engine.EventThinkingDelta:
@@ -355,11 +399,10 @@ func (t *transcript) apply(event engine.Event) {
 			t.touch(index)
 		}
 	case engine.EventToolResult:
+		// The tool answered, so the run goes back to the model: the deltas
+		// that follow start the answer of that turn.
+		t.begin()
 		t.finishTool(event.ToolCallID, event.IsError, event.Text)
-	case engine.EventRunStart:
-		for _, diagnostic := range event.Diagnostics {
-			t.addNotice(diagnostic)
-		}
 	case engine.EventNotice:
 		t.addNotice(event.Text)
 	case engine.EventRetry:
@@ -370,7 +413,8 @@ func (t *transcript) apply(event engine.Event) {
 	case engine.EventCompactionEnd:
 		t.addCompaction()
 	case engine.EventError:
-		t.push(entry{kind: entryError, fragments: []string{event.Error}})
+		t.begin()
+		t.push(entry{kind: entryError, section: t.section, fragments: []string{event.Error}})
 	}
 }
 
@@ -408,19 +452,26 @@ func (t *transcript) discard() {
 	t.touch(len(t.entries))
 }
 
-// appendText extends the last entry of the given kind, starting a new one when
-// the last entry belongs to another kind.
+// appendText extends the last entry of the given kind the current section
+// holds, starting a new one when the section holds none. The reasoning a
+// response interleaves with its answer joins the block the response opened, so
+// the answer reads as one block however often the reasoning interrupts it,
+// which is also how the response ends up persisted.
 func (t *transcript) appendText(kind entryKind, agent, text string) {
 	if text == "" {
 		return
 	}
-	if n := len(t.entries); n > 0 && t.entries[n-1].kind == kind &&
-		t.entries[n-1].agent == agent {
-		t.entries[n-1].append(text)
-		t.touch(n - 1)
-		return
+	for index := len(t.entries) - 1; index >= 0; index-- {
+		if t.entries[index].section < t.section {
+			break
+		}
+		if t.entries[index].kind == kind && t.entries[index].agent == agent {
+			t.entries[index].append(text)
+			t.touch(index)
+			return
+		}
 	}
-	t.push(entry{kind: kind, agent: agent, fragments: []string{text}})
+	t.push(entry{kind: kind, agent: agent, section: t.section, fragments: []string{text}})
 }
 
 // toolIndex returns the index of the tool entry of the call, or -1 when it is

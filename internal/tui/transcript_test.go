@@ -68,6 +68,57 @@ func TestTranscript(t *testing.T) {
 		require.Equal(t, entryAssistant, conversation.entries[1].kind)
 	})
 
+	t.Run("keeps an answer one block while the reasoning interleaves it", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(
+			engine.Event{Type: engine.EventThinkingDelta, Text: "Let me gather this "},
+		)
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "Invest"})
+		conversation.apply(engine.Event{Type: engine.EventThinkingDelta, Text: " more"})
+		conversation.apply(
+			engine.Event{Type: engine.EventTextDelta, Text: "igo where the error is born."},
+		)
+
+		require.Len(t, conversation.entries, 2)
+		require.Equal(t, entryThinking, conversation.entries[0].kind)
+		require.Equal(t, "Let me gather this  more", conversation.entries[0].text())
+		require.Equal(t, entryAssistant, conversation.entries[1].kind)
+		require.Equal(t, "Investigo where the error is born.", conversation.entries[1].text())
+	})
+
+	t.Run("starts a new answer after a tool result", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "Invest"})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolCall,
+			ToolCallID: "call_1",
+			ToolName:   "shell",
+		})
+		conversation.apply(engine.Event{
+			Type:       engine.EventToolResult,
+			ToolCallID: "call_1",
+			Text:       "ok",
+		})
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "igo further."})
+
+		require.Len(t, conversation.entries, 3)
+		require.Equal(t, "Invest", conversation.entries[0].text())
+		require.Equal(t, entryTool, conversation.entries[1].kind)
+		require.Equal(t, entryAssistant, conversation.entries[2].kind)
+		require.Equal(t, "igo further.", conversation.entries[2].text())
+	})
+
+	t.Run("starts a new answer when a run streams after a finished message", func(t *testing.T) {
+		conversation := transcript{}
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "Invest"})
+		conversation.apply(engine.Event{Type: engine.EventMessageEnd})
+		conversation.apply(engine.Event{Type: engine.EventTextDelta, Text: "igo further."})
+
+		require.Len(t, conversation.entries, 2)
+		require.Equal(t, "Invest", conversation.entries[0].text())
+		require.Equal(t, "igo further.", conversation.entries[1].text())
+	})
+
 	t.Run("keeps a result that did not stream", func(t *testing.T) {
 		conversation := transcript{}
 		conversation.apply(engine.Event{
