@@ -104,5 +104,7 @@
 // receive.
 //
 // Consumers follow a run through the channel returned by Run, which always
-// closes after a run_end event.
+// closes after a run_end event. The engine is released before that event is
+// emitted, so a consumer that starts the next run the moment it reads run_end
+// never finds the engine busy.
 package engine

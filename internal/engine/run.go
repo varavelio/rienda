@@ -48,7 +48,9 @@ const maxIdenticalToolRounds = 3
 //
 // The caller must keep receiving from the channel until it closes: a run
 // blocks while an event cannot be delivered. Canceling ctx interrupts the run
-// and closes the channel.
+// and closes the channel. The engine is released before the run_end event is
+// emitted, so a run started as soon as run_end is consumed never reports that
+// another one is in flight.
 func (e *Engine) Run(ctx context.Context, prompt string) <-chan Event {
 	events := make(chan Event, eventBuffer)
 	go func() {
@@ -57,15 +59,32 @@ func (e *Engine) Run(ctx context.Context, prompt string) <-chan Event {
 			fail(events, errRunInFlight)
 			return
 		}
-		defer e.leave()
+		// run releases the engine before the run_end event the caller waits
+		// for, not on return, so a follow-up run started the moment run_end
+		// is consumed always finds the engine free.
 		e.run(ctx, prompt, events)
 	}()
 	return events
 }
 
 // run executes the conversation loop, emitting every update through events.
-// It always ends by emitting a run_end event.
+// It always ends by emitting a run_end event, and it releases the engine
+// before that last event is emitted, so a run the consumer starts as soon as
+// run_end is consumed never finds the engine busy.
 func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
+	// released records that the run already left the engine. Every terminal
+	// path releases before it emits the events the consumer reads to know the
+	// run is over, and this defer covers the exit paths that reach it without
+	// one.
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			e.leave()
+		}
+	}
+	defer release()
+
 	if e.workdir != "" {
 		ctx = tool.WithWorkdir(ctx, e.workdir)
 	}
@@ -77,6 +96,7 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 	// cannot run.
 	plan, err := e.plan()
 	if err != nil {
+		release()
 		fail(events, err)
 		return
 	}
@@ -102,11 +122,13 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 			Blocks: []llm.Block{{Type: llm.BlockText, Text: prompt}},
 		}})
 		if err != nil {
+			release()
 			fail(events, err)
 			return
 		}
 		start.EntryID = entry.ID
 	case e.store.Leaf() == "":
+		release()
 		fail(events, errNothingToContinue)
 		return
 	}
@@ -125,8 +147,9 @@ func (e *Engine) run(ctx context.Context, prompt string, events chan<- Event) {
 		ModelID:   plan.model.ID,
 	})
 	finish := func(reason EndReason) {
-		emit(events, Event{Type: EventRunEnd, Reason: reason})
 		hooks.AfterRun(runCtx, AfterRunHook{Reason: reason})
+		release()
+		emit(events, Event{Type: EventRunEnd, Reason: reason})
 	}
 	failRun := func(err error) {
 		emit(events, Event{Type: EventError, Error: err.Error()})

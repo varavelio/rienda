@@ -24,7 +24,8 @@ type Hooks interface {
 	// BeforeRun runs once per run, after the run-start event.
 	BeforeRun(ctx context.Context, ev BeforeRunHook)
 
-	// AfterRun runs once per run, after the run-end event.
+	// AfterRun runs once per run, after the last turn, before the run-end
+	// event reaches the consumer.
 	AfterRun(ctx context.Context, ev AfterRunHook)
 
 	// BeforeModelRequest runs every turn, before the provider call.
@@ -52,7 +53,7 @@ type BeforeRunHook struct {
 	ModelID string
 }
 
-// AfterRunHook closes a run, after the run-end event.
+// AfterRunHook closes a run, after the last turn of the run.
 type AfterRunHook struct {
 	// Reason explains why the run ended.
 	Reason EndReason

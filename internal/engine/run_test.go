@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -64,6 +65,57 @@ func (t *fakeTool) Execute(
 	default:
 		return tool.TextResult(t.output), nil
 	}
+}
+
+// slowAfterHooks scripts hooks whose AfterRun takes a while, which is the
+// window a follow-up run used to race against: the previous goroutine still
+// held the engine after the consumer had read run_end.
+type slowAfterHooks struct {
+	stubHooks
+	wait time.Duration
+}
+
+func (s *slowAfterHooks) AfterRun(_ context.Context, ev AfterRunHook) {
+	s.record("afterRun")
+	time.Sleep(s.wait)
+}
+
+// TestRunFreesTheEngineBeforeRunEnd verifies that the engine is released
+// before the run_end event reaches the consumer, so the next run the consumer
+// starts at once never reports that another one is in flight. Before, the
+// AfterRun hooks ran after run_end, and an immediate follow-up run raced
+// against them and was refused.
+func TestRunFreesTheEngineBeforeRunEnd(t *testing.T) {
+	t.Run("accepts the next prompt the moment run_end is consumed", func(t *testing.T) {
+		client := &fakeClient{scripts: []script{
+			endTurn("first"),
+			endTurn("second"),
+		}}
+		engine, _ := newTestEngine(t, Config{
+			Agents: []agent.Agent{{ID: "coder", Hooks: []string{"probe"}}},
+			Hooks: stubResolver{
+				stub: &slowAfterHooks{stubHooks: stubHooks{}, wait: 50 * time.Millisecond},
+			},
+			Resolver: newTestResolver(client, Model{ID: "test-model"}),
+		})
+
+		// Consume the run in flight and stop reading at run_end, exactly what
+		// a front end does when the answer is over.
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			for event := range engine.Run(t.Context(), "first") {
+				if event.Type == EventRunEnd {
+					return
+				}
+			}
+		}()
+		<-stopped
+
+		events := collect(engine.Run(t.Context(), "second"))
+		require.NotContains(t, eventTypes(events), EventError, "the engine must be free already")
+		require.Len(t, client.requests, 2, "the second run ran")
+	})
 }
 
 // closingClient closes the session when the stream opens, simulating a session

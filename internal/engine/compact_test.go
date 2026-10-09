@@ -344,6 +344,27 @@ func TestManualCompaction(t *testing.T) {
 		require.Equal(t, compaction.RefusalEmpty, refusal.Kind)
 	})
 
+	t.Run("starts a compaction the moment run_end is consumed", func(t *testing.T) {
+		engine, _, _ := newCompactionEngine(t, nil, Compaction{}, 200, endTurn("one"))
+
+		// Stop reading at run_end, exactly what a front end does when the run
+		// is over.
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			for event := range engine.Run(t.Context(), "go") {
+				if event.Type == EventRunEnd {
+					return
+				}
+			}
+		}()
+		<-stopped
+
+		events := collect(engine.Compact(t.Context()))
+		require.NotContains(t, eventError(events), "already in flight")
+		require.Equal(t, EndReasonTurn, events[len(events)-1].Reason)
+	})
+
 	t.Run("refuses a second run while one is in flight", func(t *testing.T) {
 		engine, _, _ := newCompactionEngine(t, nil, Compaction{}, 200, endTurn("one"))
 

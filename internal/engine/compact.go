@@ -71,7 +71,8 @@ func (e *Engine) CanCompact() bool {
 //
 // The channel closes with an EventRunEnd, or with an EventError when the
 // summarization fails or when another run is in flight. As with Run, the
-// caller must keep receiving from the channel until it closes.
+// caller must keep receiving from the channel until it closes, and the engine
+// is released before the run_end event is emitted.
 func (e *Engine) Compact(ctx context.Context) <-chan Event {
 	events := make(chan Event, eventBuffer)
 	go func() {
@@ -81,16 +82,20 @@ func (e *Engine) Compact(ctx context.Context) <-chan Event {
 			fail(events, errRunInFlight)
 			return
 		}
-		defer e.leave()
 
 		runCtx := ctx
 		if e.workdir != "" {
 			runCtx = tool.WithWorkdir(runCtx, e.workdir)
 		}
 		if err := e.compactBranch(runCtx, events); err != nil {
+			e.leave()
 			fail(events, err)
 			return
 		}
+		// The engine is released before the end event, so a run or a
+		// compaction the consumer starts as soon as run_end is consumed never
+		// reports that another one is in flight.
+		e.leave()
 		emit(events, Event{Type: EventRunEnd, Reason: EndReasonTurn})
 	}()
 	return events
