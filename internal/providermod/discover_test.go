@@ -79,6 +79,38 @@ func TestDiscoverGathersUserProviders(t *testing.T) {
 	require.Equal(t, []string{"alpha/model-a"}, providers[0].Refs())
 }
 
+// TestProviderDisplayName verifies the name the interface shows a provider by:
+// the one its declaration carries, or the module name when it declares none.
+func TestProviderDisplayName(t *testing.T) {
+	dir := t.TempDir()
+	writeProvider(t, dir, "named", `
+module.exports = function (ctx) {
+  return {
+    name: "My Provider",
+    protocol: "openai_chat_completions",
+    base_url: "https://example.test/v1",
+    auth: "api_key",
+    models: [{ id: "model-a", context_window: 128000, reasoning: false }],
+  };
+};
+`)
+	writeProvider(t, dir, "plain", goodModule)
+
+	log := &logged{}
+	providers, err := Discover(t.Context(), Sources{UserDir: dir}, Options{}, log.logf)
+	require.NoError(t, err)
+	require.Empty(t, log.lines)
+	byName := make(map[string]Provider, len(providers))
+	for _, item := range providers {
+		byName[item.Name] = item
+	}
+
+	require.Equal(t, "My Provider", byName["named"].DisplayName(),
+		"the name the declaration carries wins")
+	require.Equal(t, "plain", byName["plain"].DisplayName(),
+		"a provider without a name reads by its module name")
+}
+
 // TestDiscoverShadowsBuiltins verifies the naming rule: a user module wins,
 // the embedded code never runs, and a built-in nobody shadows still works.
 func TestDiscoverShadowsBuiltins(t *testing.T) {

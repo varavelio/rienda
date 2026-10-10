@@ -54,6 +54,12 @@ type ModelInfo struct {
 	// empty when the model is shown by its ID.
 	Name string
 
+	// Provider is the display name the provider module declares, empty when
+	// the provider is shown by its module name. It is what a front end names
+	// the provider by alongside the model, so a reader sees which account a
+	// model belongs to without reading the reference that addresses it.
+	Provider string
+
 	// ThinkingLevel is the extended thinking level the configuration declares,
 	// empty when the model uses its provider default.
 	ThinkingLevel string

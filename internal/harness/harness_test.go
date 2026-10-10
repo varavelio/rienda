@@ -291,6 +291,7 @@ func (e *testEnvironment) writeFakeProvider(t *testing.T) {
 	}
 	module := "module.exports = function (ctx) {" +
 		"  return {" +
+		"    name: 'Fake Provider'," +
 		"    protocol: 'openai_chat_completions'," +
 		"    base_url: '" + e.provider.server.URL + "'," +
 		"    api_key_ref: null," +
@@ -1246,8 +1247,9 @@ func TestModelInfo(t *testing.T) {
 
 		info := env.prepare(t).ModelInfo("fake/test-model")
 
-		require.Equal(t, engine.ModelInfo{ID: "test-model", Name: "Test Model"}, info,
-			"a reference names its model by the wire id, which is the second half")
+		require.Equal(t, engine.ModelInfo{
+			ID: "test-model", Name: "Test Model", Provider: "Fake Provider",
+		}, info, "a reference names its model by the wire id, which is the second half")
 	})
 
 	t.Run("the description belongs to the model the branch runs", func(t *testing.T) {
@@ -1257,7 +1259,7 @@ func TestModelInfo(t *testing.T) {
 		prepared := env.prepare(t)
 		require.Equal(
 			t,
-			engine.ModelInfo{ID: "test-model", Name: "Test Model"},
+			engine.ModelInfo{ID: "test-model", Name: "Test Model", Provider: "Fake Provider"},
 			prepared.ModelInfo("fake/test-model"),
 		)
 
@@ -1267,7 +1269,7 @@ func TestModelInfo(t *testing.T) {
 
 		require.Equal(
 			t,
-			engine.ModelInfo{ID: "gpt-second"},
+			engine.ModelInfo{ID: "gpt-second", Provider: "Fake Provider"},
 			prepared.ModelInfo(prepared.ActiveModel()),
 		)
 	})

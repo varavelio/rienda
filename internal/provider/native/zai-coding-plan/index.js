@@ -155,6 +155,7 @@ module.exports = function(ctx) {
   }
 
   return {
+    name: "Z.AI Coding Plan",
     protocol: "openai_chat_completions",
     base_url: plan.api,
     auth: "api_key",

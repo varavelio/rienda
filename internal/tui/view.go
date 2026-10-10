@@ -455,9 +455,21 @@ func modelName(ref string, info engine.ModelInfo) string {
 // configuration no longer holds reads as the reference alone.
 func modelLabel(ref string, info engine.ModelInfo) string {
 	if description := modelDescription(info); description != "" {
-		return providerOf(ref) + ": " + description
+		return providerLabel(ref, info) + ": " + description
 	}
 	return ref
+}
+
+// providerLabel returns the name the interface shows the provider of a model
+// by: the display name its module declares, or the module name when it
+// declares none. A reference the configuration no longer holds falls back to
+// the module name its two halves carry, so a model that is gone still reads
+// under the provider it belonged to.
+func providerLabel(ref string, info engine.ModelInfo) string {
+	if name := info.Provider; name != "" {
+		return name
+	}
+	return providerOf(ref)
 }
 
 // providerOf returns the provider name, the first half of a model reference.
@@ -939,6 +951,11 @@ type identity struct {
 	// agent is the agent the branch runs.
 	agent string
 
+	// provider names the provider the model of the branch belongs to: the
+	// display name its module declares, or the module name when it declares
+	// none. It is empty when the configuration no longer holds the model.
+	provider string
+
 	// model names the model the branch runs: its wire identifier, which is
 	// the real model the provider receives, or the reference that addresses
 	// it when the configuration no longer holds one.
@@ -962,9 +979,11 @@ type identity struct {
 func identityFrom(s Session) identity {
 	info := s.Info()
 	ref := s.ActiveModel()
+	model := s.ModelInfo(ref)
 	return identity{
 		agent:    s.ActiveAgent(),
-		model:    modelName(ref, s.ModelInfo(ref)),
+		provider: model.Provider,
+		model:    modelName(ref, model),
 		thinking: s.ActiveThinking(),
 		named:    info.Named,
 		title:    info.Title,
@@ -972,18 +991,25 @@ func identityFrom(s Session) identity {
 }
 
 // chatIdentity renders the identity of the session: the brand followed by the
-// agent, the model, the thinking mode of the branch and, when the user named
-// it, the name, which closes the line so the reader sees the name the session
-// is found under in the list. The thinking mode is always on the line, off
-// included, so a cycle or a selection reads where the conversation stands
-// without leaving it. It renders the cached identity, so it never reads the
-// session.
+// agent, the provider and model the branch runs, the thinking mode and, when
+// the user named it, the name, which closes the line so the reader sees the
+// name the session is found under in the list. The provider leads the model,
+// so which account a model belongs to reads before the model itself. The
+// thinking mode is always on the line, off included, so a cycle or a selection
+// reads where the conversation stands without leaving it. It renders the
+// cached identity, so it never reads the session.
 func (m *model) chatIdentity() string {
 	thinking := m.identity.thinking
 	if thinking == "" {
 		thinking = thinkingOff
 	}
-	parts := []string{m.identity.agent, m.identity.model, "thinking " + thinking}
+	parts := []string{m.identity.agent}
+	if m.identity.provider != "" {
+		// The provider leads the model, so which account a model belongs to
+		// reads before the model itself.
+		parts = append(parts, m.identity.provider)
+	}
+	parts = append(parts, m.identity.model, "thinking "+thinking)
 	if m.identity.named {
 		parts = append(parts, m.identity.title)
 	}

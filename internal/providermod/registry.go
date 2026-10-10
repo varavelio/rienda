@@ -31,6 +31,11 @@ const (
 // every request of the provider makes and the roster of models the user may
 // pick from. Models carry their own overrides of the connection fields.
 type Declaration struct {
+	// Name is the display name the interface shows the provider by. It is
+	// optional: a provider without one is shown by its module name, which is
+	// the name of its directory.
+	Name string `json:"name,omitempty"`
+
 	// Protocol is the wire protocol models without their own protocol run.
 	Protocol provider.Protocol `json:"protocol,omitempty"`
 
@@ -120,11 +125,22 @@ type ThinkingMode struct {
 // Provider is one discovered provider: the module name and the declaration
 // its code returned.
 type Provider struct {
-	// Name is the provider name, the first half of every model reference.
+	// Name is the provider name, the first half of every model reference and
+	// the name of its module directory.
 	Name string
 
 	// Decl is the declaration the module returned.
 	Decl Declaration
+}
+
+// DisplayName returns the name the interface shows the provider by: the one
+// its declaration carries, or the module name when it declares none, so a
+// provider is always named by something the user can read.
+func (p Provider) DisplayName() string {
+	if p.Decl.Name != "" {
+		return p.Decl.Name
+	}
+	return p.Name
 }
 
 // Refs returns the model references of the provider in declaration order.

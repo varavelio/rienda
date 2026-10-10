@@ -70,6 +70,28 @@ func TestPickerMarks(t *testing.T) {
 		return m
 	}
 
+	t.Run("names the provider by its declared name", func(t *testing.T) {
+		scripted := newFakeSession()
+		scripted.models = []string{"fake/a"}
+		scripted.activeModel = "fake/a"
+		scripted.modelInfo = map[string]engine.ModelInfo{
+			"fake/a": {ID: "a-real", Name: "Model A", Provider: "Fake Provider"},
+		}
+		m := newTestModel(
+			t,
+			[]agent.Agent{{ID: "coder", Description: "A test agent"}},
+			0,
+			func(string) (Session, error) { return scripted, nil },
+		)
+		run(t, m, m.Init())
+		update(t, m, windowMsg(80, 24))
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+
+		require.Contains(t, plain(m.render()), "Fake Provider: Model A",
+			"the picker reads the provider by its declared name too")
+	})
+
 	t.Run("pinned models come first and carry the mark", func(t *testing.T) {
 		view := plain(modelPicker(t, []string{"fake/c"}).render())
 
@@ -987,6 +1009,34 @@ func TestChatIdentity(t *testing.T) {
 		update(t, m, windowMsg(80, 24))
 
 		require.Contains(t, plain(m.render()), "coder · fake/test-model")
+	})
+
+	t.Run("leads the model with the provider of the branch", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.modelInfo = map[string]engine.ModelInfo{
+			"fake/test-model": {ID: "test-model", Provider: "Fake Provider"},
+		}
+		update(t, m, windowMsg(120, 24))
+
+		m.identity = identityFrom(scripted)
+
+		require.Contains(t, plain(m.render()), "coder · Fake Provider · test-model",
+			"the provider reads to the left of the model")
+	})
+
+	t.Run("leaves the provider out when none is declared", func(t *testing.T) {
+		m, scripted := chatModel(t)
+		scripted.modelInfo = map[string]engine.ModelInfo{
+			"fake/test-model": {ID: "test-model"},
+		}
+		update(t, m, windowMsg(120, 24))
+
+		m.identity = identityFrom(scripted)
+
+		view := plain(m.render())
+		require.Contains(t, view, "coder · test-model")
+		require.NotContains(t, view, "fake · test-model",
+			"a provider that declares no name leaves no empty segment")
 	})
 
 	t.Run("never shows the session id", func(t *testing.T) {

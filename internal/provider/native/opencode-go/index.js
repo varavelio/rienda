@@ -156,6 +156,7 @@ module.exports = function(ctx) {
   }
 
   return {
+    name: "OpenCode Go",
     protocol: "openai_chat_completions",
     base_url: plan.api,
     session_header: SESSION_HEADER,

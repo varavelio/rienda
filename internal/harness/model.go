@@ -237,7 +237,11 @@ func (r *modelResolver) Info(ref string) engine.ModelInfo {
 	}
 	for _, model := range provider.Decl.Models {
 		if model.ID == modelID {
-			return engine.ModelInfo{ID: model.ID, Name: model.Name}
+			return engine.ModelInfo{
+				ID:       model.ID,
+				Name:     model.Name,
+				Provider: provider.DisplayName(),
+			}
 		}
 	}
 	return engine.ModelInfo{}

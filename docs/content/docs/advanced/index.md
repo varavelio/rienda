@@ -90,6 +90,7 @@ module.exports = function(ctx) {
   // pick the models of the provider you serve, filter to the adapters
   // Rienda speaks, and return the declaration:
   return {
+    name: "My Provider",
     protocol: "openai_chat_completions", // one of openai_responses,
     // openai_chat_completions, anthropic
     base_url: "https://opencode.ai/zen/go/v1",
@@ -101,7 +102,10 @@ module.exports = function(ctx) {
 };
 ```
 
-The declarations that reach the modules are the roster the picker offers and
-the connections every run uses; the module owns its catalog, and the caches it
-writes sit beside its declaration, inside its own directory. Keys travel
-through `rienda auth`, which stores them at `~/.rienda/credentials.json`.
+`name` is the display name the interface shows the provider by in the header
+and the model picker; it is optional and falls back to the directory name, just
+like a model falls back to its `id`. The declarations that reach the modules are
+the roster the picker offers and the connections every run uses; the module owns
+its catalog, and the caches it writes sit beside its declaration, inside its own
+directory. Keys travel through `rienda auth`, which stores them at
+`~/.rienda/credentials.json`.
