@@ -1,6 +1,6 @@
-// z-ai is the built-in Z.AI provider of Rienda. It serves the GLM catalogue
-// over the endpoint the Z.AI open platform publishes, and derives its model
-// catalogue from the models.dev database.
+// zai-coding-plan is the built-in Z.AI Coding Plan provider of Rienda. It serves the
+// GLM models the coding plan publishes over the coding endpoint, and derives
+// its model catalogue from the models.dev database.
 //
 // The catalog is cached through ctx.cache under "models.dev", shared with
 // every other provider that reads the database.
@@ -38,7 +38,7 @@ module.exports = function(ctx) {
     try {
       ctx.cache.set(CACHE_KEY, text, REFRESH_AFTER_MS / 1000);
     } catch (err) {
-      ctx.log("z-ai: cache write failed: " + err);
+      ctx.log("zai-coding-plan: cache write failed: " + err);
     }
   }
 
@@ -57,7 +57,7 @@ module.exports = function(ctx) {
     try {
       cached = ctx.cache.get(CACHE_KEY);
     } catch (err) {
-      ctx.log("z-ai: cache read failed: " + err);
+      ctx.log("zai-coding-plan: cache read failed: " + err);
     }
     if (typeof cached === "string") {
       // The cache holds a parseable document: it wins over everything,
@@ -65,7 +65,7 @@ module.exports = function(ctx) {
       try {
         return JSON.parse(cached);
       } catch (err) {
-        ctx.log("z-ai: the cached catalog is not JSON: " + err);
+        ctx.log("zai-coding-plan: the cached catalog is not JSON: " + err);
       }
     }
 
@@ -74,7 +74,7 @@ module.exports = function(ctx) {
       cacheSet(live);
       return JSON.parse(live);
     } catch (err) {
-      ctx.log("z-ai: models.dev fetch failed (" + err + "); using the cache");
+      ctx.log("zai-coding-plan: models.dev fetch failed (" + err + "); using the cache");
     }
     if (typeof cached === "string") {
       // A fetch failure with an unparsed cache is the last mile: serve it
@@ -82,10 +82,10 @@ module.exports = function(ctx) {
       try {
         return JSON.parse(cached);
       } catch (err) {
-        ctx.log("z-ai: the cached catalog is not JSON: " + err);
+        ctx.log("zai-coding-plan: the cached catalog is not JSON: " + err);
       }
     }
-    ctx.log("z-ai: no cache and no models.dev: the roster stays empty until the next start");
+    ctx.log("zai-coding-plan: no cache and no models.dev: the roster stays empty until the next start");
     return {};
   }
 
@@ -122,7 +122,7 @@ module.exports = function(ctx) {
 
   // roster maps the models.dev models of the plan to the canonical shape.
   function roster(db) {
-    let plan = db["zai"];
+    let plan = db["zai-coding-plan"];
     let models = [];
     if (!plan || !plan.models) return models;
     let npm = plan.npm;
@@ -149,9 +149,9 @@ module.exports = function(ctx) {
   }
 
   let db = catalog();
-  let plan = db["zai"] || {};
+  let plan = db["zai-coding-plan"] || {};
   if (typeof plan.api !== "string" || plan.api === "") {
-    throw new Error("models.dev carries no api endpoint for zai; restarting after a catalog refresh");
+    throw new Error("models.dev carries no api endpoint for zai-coding-plan; restarting after a catalog refresh");
   }
 
   return {

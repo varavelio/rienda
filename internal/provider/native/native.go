@@ -12,8 +12,8 @@ import (
 //go:embed opencode-go/index.js
 var opencodeGo string
 
-//go:embed z-ai/index.js
-var zAI string
+//go:embed zai-coding-plan/index.js
+var zaiCodingPlan string
 
 // CatalogBudget is the payload cap the provider modules need: the models.dev
 // database is measured in megabytes, and the default cap of the extension
@@ -25,7 +25,7 @@ const CatalogBudget = 32 << 20
 // source of truth.
 func Builtin() map[string]string {
 	return map[string]string{
-		"opencode-go": opencodeGo,
-		"z-ai":        zAI,
+		"opencode-go":     opencodeGo,
+		"zai-coding-plan": zaiCodingPlan,
 	}
 }

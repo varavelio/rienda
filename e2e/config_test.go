@@ -186,7 +186,7 @@ func TestRunReportsConfigurationFailures(t *testing.T) {
 		providerDir := filepath.Join(t.TempDir(), "providers")
 		stub := "module.exports = function (ctx) { return {protocol: 'openai_chat_completions', base_url: 'https://example.invalid', auth: 'none', models: []}; };"
 		writeTestModule(t, filepath.Join(providerDir, "opencode-go"), stub)
-		writeTestModule(t, filepath.Join(providerDir, "z-ai"), stub)
+		writeTestModule(t, filepath.Join(providerDir, "zai-coding-plan"), stub)
 		app := harness.New(t, harness.Options{
 			Agents:         []harness.Agent{coderAgent()},
 			SkipConfigFile: true,
