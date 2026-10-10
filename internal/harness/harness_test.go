@@ -1049,6 +1049,98 @@ func TestPinnedModels(t *testing.T) {
 	})
 }
 
+// TestThinkingPersistence verifies that the thinking level the user picks for
+// a model is remembered in the global state and that a new session of that
+// model starts on it, the same memory the last used model keeps.
+func TestThinkingPersistence(t *testing.T) {
+	t.Run("picking a level remembers it for the model the branch runs", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		stored := env.prepare(t)
+		require.NoError(t, stored.SetThinking(t.Context(), "high"))
+		require.NoError(t, stored.Close())
+
+		doc, err := state.Load(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"fake/test-model": "high"}, doc.LastThinking)
+	})
+
+	t.Run("a new session starts on the remembered level", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		stored := env.prepare(t)
+		require.NoError(t, stored.SetThinking(t.Context(), "high"))
+		require.NoError(t, stored.Close())
+
+		fresh := env.prepare(t)
+		require.Equal(t, "high", fresh.ActiveThinking(),
+			"a new session of the model picks up where the last one left it")
+	})
+
+	t.Run("an explicit level on the command line wins", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		require.NoError(t, state.Write(env.statePath, state.Doc{
+			LastThinking: map[string]string{"fake/test-model": "high"},
+		}))
+
+		options := env.options()
+		options.ThinkingLevel = "low"
+		prepared, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+
+		require.Equal(t, "low", prepared.ActiveThinking())
+	})
+
+	t.Run("an explicit level on the command line is remembered", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+
+		options := env.options()
+		options.ThinkingLevel = "medium"
+		prepared, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+		require.Equal(t, "medium", prepared.ActiveThinking())
+
+		doc, err := state.Load(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"fake/test-model": "medium"}, doc.LastThinking,
+			"an explicit level is what the next session of the model starts on")
+	})
+
+	t.Run("turning the thinking off forgets the level", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		stored := env.prepare(t)
+		require.NoError(t, stored.SetThinking(t.Context(), "high"))
+		require.NoError(t, stored.SetThinking(t.Context(), ""))
+		require.NoError(t, stored.Close())
+
+		doc, err := state.Load(env.statePath)
+		require.NoError(t, err)
+		require.NotContains(t, doc.LastThinking, "fake/test-model",
+			"off is what a model with nothing remembered starts on")
+
+		fresh := env.prepare(t)
+		require.Equal(t, "", fresh.ActiveThinking())
+	})
+
+	t.Run("each model remembers its own level", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+		stored := env.prepare(t)
+		require.NoError(t, stored.SetModel(t.Context(), "fake/test-model"))
+		require.NoError(t, stored.SetThinking(t.Context(), "high"))
+		require.NoError(t, stored.SetModel(t.Context(), "fake/gpt-second"))
+		require.NoError(t, stored.SetThinking(t.Context(), "low"))
+		require.NoError(t, stored.Close())
+
+		doc, err := state.Load(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{
+			"fake/test-model": "high",
+			"fake/gpt-second": "low",
+		}, doc.LastThinking)
+	})
+}
+
 // TestSessions verifies session listing.
 func TestSessions(t *testing.T) {
 	t.Run("lists the sessions of the workspace", func(t *testing.T) {

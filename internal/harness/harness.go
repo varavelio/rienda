@@ -254,23 +254,52 @@ func (s *Session) rememberModel(ref string) {
 	rememberLastModel(s.statePath, ref)
 }
 
-// rememberLastModel records ref as the model the user last switched to,
+// editState loads the global state, applies edit to it and writes it back,
 // reading the document fresh so a writer who joined while the run was open
 // keeps its entries. A failure is logged on standard error and nothing else:
-// the memory is a startup convenience, never a run error.
-func rememberLastModel(path, ref string) {
+// what names the memory that was lost, because remembering is a startup
+// convenience and never a run error.
+func editState(path, what string, edit func(*state.Doc)) {
 	if path == "" {
 		return
 	}
 	doc, err := state.Load(path)
 	if err != nil {
-		logProvider("state %s: %v; the last used model is not remembered", path, err)
+		logProvider("state %s: %v; %s", path, err, what)
 		return
 	}
-	doc.LastModel = ref
+	edit(&doc)
 	if err := state.Write(path, doc); err != nil {
-		logProvider("state %s: %v; the last used model is not remembered", path, err)
+		logProvider("state %s: %v; %s", path, err, what)
 	}
+}
+
+// rememberLastModel records ref as the model the user last switched to, the
+// model a new session starts from.
+func rememberLastModel(path, ref string) {
+	editState(path, "the last used model is not remembered", func(doc *state.Doc) {
+		doc.LastModel = ref
+	})
+}
+
+// rememberLastThinking records level as the thinking level the user last
+// picked for a model, the level a new session of that model starts on. An
+// empty level is off and leaves no entry, because off is what a model with
+// nothing remembered starts on anyway.
+func rememberLastThinking(path, ref, level string) {
+	if ref == "" {
+		return
+	}
+	editState(path, "the thinking level is not remembered", func(doc *state.Doc) {
+		if doc.LastThinking == nil {
+			doc.LastThinking = map[string]string{}
+		}
+		if level == "" {
+			delete(doc.LastThinking, ref)
+			return
+		}
+		doc.LastThinking[ref] = level
+	})
 }
 
 // PinnedModels returns the model references the user pinned, in the order
@@ -329,11 +358,13 @@ func (s *Session) ThinkingModes(ref string) []string {
 // empty level is off and writes an entry of its own, so the newest selection
 // of the branch wins at that turn: turning the mode off never wakes an
 // earlier level when the reader returns to that turn of the conversation. A
-// level the branch already holds is a no-op.
+// level the branch already holds is a no-op. The level is remembered for the
+// model the branch runs, so a new session of that model starts on it.
 func (s *Session) SetThinking(ctx context.Context, level string) error {
 	if err := s.store.SetThinking(ctx, level); err != nil {
 		return fmt.Errorf("harness: %w", err)
 	}
+	rememberLastThinking(s.statePath, s.store.ActiveModel(), level)
 	return nil
 }
 
@@ -439,6 +470,13 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 	// makes once the session runs.
 	if strings.TrimSpace(opts.ModelRef) != "" {
 		rememberLastModel(userStatePath(opts), strings.TrimSpace(opts.ModelRef))
+	}
+	// An explicit thinking level on the command line is what the next
+	// session of the model starts on, exactly like a level the picker sets
+	// once the session runs. An empty flag is indistinguishable from no
+	// flag, so it leaves the memory alone.
+	if level := strings.TrimSpace(opts.ThinkingLevel); level != "" {
+		rememberLastThinking(userStatePath(opts), sessionModel, level)
 	}
 
 	// Every model the discovered providers hold is resolvable by the engine,
@@ -646,6 +684,11 @@ func openSession(
 	}, id.NewIDGenerator())
 	if err != nil {
 		return nil, fmt.Errorf("harness: create session: %w", err)
+	}
+	// A new session of a model starts on the thinking level the user last
+	// picked for it, unless the command line named one.
+	if thinkingLevel == "" {
+		thinkingLevel = rememberedThinking(opts, model)
 	}
 	if thinkingLevel != "" {
 		if err := store.SetThinking(ctx, thinkingLevel); err != nil {

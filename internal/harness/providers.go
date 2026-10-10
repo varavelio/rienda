@@ -217,13 +217,20 @@ func modelRoster(providers []providermod.Provider) []string {
 	return refs
 }
 
+// rememberedThinking returns the thinking level the user last picked for a
+// model, the level a new session of that model starts on when the command
+// line does not name one. An empty level means off.
+func rememberedThinking(opts Options, ref string) string {
+	return userState(opts).LastThinking[ref]
+}
+
 // initialModel decides the model a session starts on: the explicit override,
 // the model of a resumed branch, the model the user last used, the head of
 // the roster and, when the roster is empty, no model at all. Stale entries
 // fall through to the next rule with a logged warning.
 func initialModel(
 	opts Options,
-	store *credentials.Store,
+	_ *credentials.Store,
 	roster []string,
 	dir string,
 ) (string, error) {
