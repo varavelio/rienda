@@ -72,10 +72,10 @@
 // model that runs it. A selection the agent directory or the configuration no
 // longer holds leaves the branch with nothing to run: the conversation is
 // still walked and read, but sending waits until another agent or model is
-// selected. The thinking of the conversation takes no picker: ctrl+x t moves
-// it to the next mode of the model, off first, and the status line above the
-// prompt reads what it landed on, so the press is seen without leaving the
-// conversation. A session whose agent is gone is offered like any other,
+// selected. The thinking of the conversation takes no picker: shift+tab
+// moves it to the next mode of the model, off first, and the header segment
+// of the thinking reads what it landed on, so the press is seen without
+// leaving the conversation. A session whose agent is gone is offered like any other,
 // marked in the start list so the reader knows before opening it, and the
 // conversation
 // says in the status line which agent or model is missing, so a definition that

@@ -204,28 +204,29 @@ func (s *fakeSession) Close() error {
 
 // Keys used by the tests.
 var (
-	pressUp     = tea.KeyPressMsg{Code: tea.KeyUp}
-	pressDown   = tea.KeyPressMsg{Code: tea.KeyDown}
-	pressEnter  = tea.KeyPressMsg{Code: tea.KeyEnter}
-	pressEscape = tea.KeyPressMsg{Code: tea.KeyEscape}
-	pressSpace  = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
-	pressCtrlC  = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
-	pressCtrlD  = tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
-	pressCtrlJ  = tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}
-	pressCtrlP  = tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
-	pressCtrlT  = tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}
-	pressCtrlF  = tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl}
-	pressCtrlA  = tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}
-	pressCtrlO  = tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl}
-	pressCtrlX  = tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}
-	pressA      = tea.KeyPressMsg{Code: 'a'}
-	pressM      = tea.KeyPressMsg{Code: 'm'}
-	pressPgUp   = tea.KeyPressMsg{Code: tea.KeyPgUp}
-	pressPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
-	wheelUp     = tea.MouseWheelMsg{Button: tea.MouseWheelUp}
-	wheelDown   = tea.MouseWheelMsg{Button: tea.MouseWheelDown}
-	pressHome   = tea.KeyPressMsg{Code: tea.KeyHome}
-	pressEnd    = tea.KeyPressMsg{Code: tea.KeyEnd}
+	pressUp       = tea.KeyPressMsg{Code: tea.KeyUp}
+	pressDown     = tea.KeyPressMsg{Code: tea.KeyDown}
+	pressEnter    = tea.KeyPressMsg{Code: tea.KeyEnter}
+	pressEscape   = tea.KeyPressMsg{Code: tea.KeyEscape}
+	pressSpace    = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	pressCtrlC    = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	pressCtrlD    = tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
+	pressCtrlJ    = tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}
+	pressCtrlP    = tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
+	pressCtrlT    = tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}
+	pressCtrlF    = tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl}
+	pressCtrlA    = tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}
+	pressCtrlO    = tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl}
+	pressCtrlX    = tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}
+	pressShiftTab = tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+	pressA        = tea.KeyPressMsg{Code: 'a'}
+	pressM        = tea.KeyPressMsg{Code: 'm'}
+	pressPgUp     = tea.KeyPressMsg{Code: tea.KeyPgUp}
+	pressPgDown   = tea.KeyPressMsg{Code: tea.KeyPgDown}
+	wheelUp       = tea.MouseWheelMsg{Button: tea.MouseWheelUp}
+	wheelDown     = tea.MouseWheelMsg{Button: tea.MouseWheelDown}
+	pressHome     = tea.KeyPressMsg{Code: tea.KeyHome}
+	pressEnd      = tea.KeyPressMsg{Code: tea.KeyEnd}
 )
 
 // storeSession drives the interface over a real session store, so the tests
@@ -3543,9 +3544,9 @@ func lineOf(view, text string) string {
 }
 
 // TestCycleThinking verifies the thinking selection of an open conversation:
-// the leader chord that cycles through the roster of the model, off first,
+// the shift+tab chord that cycles through the roster of the model, off first,
 // and the command center entry that reaches the same place. The cycle reads
-// in the status line what the conversation runs, and a model that declares
+// in the header what the conversation runs, and a model that declares
 // nothing stays off whatever the chord repeats.
 func TestCycleThinking(t *testing.T) {
 	// thinkingChat opens a conversation whose model declares three levels in
@@ -3562,38 +3563,30 @@ func TestCycleThinking(t *testing.T) {
 	t.Run("cycles through the roster and wraps to off", func(t *testing.T) {
 		m, scripted := thinkingChat(t)
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 		require.Equal(t, "low", scripted.thinking)
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 		require.Equal(t, "high", scripted.thinking)
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 		require.Equal(t, "max", scripted.thinking)
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 		require.Equal(t, "", scripted.thinking, "the roster wraps to off")
 	})
 
 	t.Run("reads what it landed on in the header", func(t *testing.T) {
 		m, _ := thinkingChat(t)
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 		require.Contains(t, plain(m.render()), "thinking low")
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 		require.Contains(t, plain(m.render()), "thinking high")
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
+		update(t, m, pressShiftTab)
 		require.Contains(t, plain(m.render()), "thinking off")
 	})
 
@@ -3604,8 +3597,7 @@ func TestCycleThinking(t *testing.T) {
 		scripted.thinking = "ultra"
 		m.status = ""
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 		require.Empty(t, scripted.thinking, "the stale level is turned off first")
 		require.Contains(t, plain(m.render()), "thinking off")
 	})
@@ -3613,8 +3605,7 @@ func TestCycleThinking(t *testing.T) {
 	t.Run("does nothing on a model that declares no thinking", func(t *testing.T) {
 		m, scripted := chatModel(t)
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 
 		require.Empty(t, scripted.thinking, "off is the whole roster")
 		require.Contains(t, plain(m.render()), "thinking off", "the header still shows the mode")
@@ -3636,8 +3627,7 @@ func TestCycleThinking(t *testing.T) {
 		m.input.SetValue("hello")
 		require.NotNil(t, update(t, m, pressEnter))
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 
 		require.Empty(t, scripted.thinking, "a run in flight holds the roster")
 	})
@@ -3646,8 +3636,7 @@ func TestCycleThinking(t *testing.T) {
 		m, scripted := thinkingChat(t)
 		scripted.thinkingErr = errors.New("store closed")
 
-		update(t, m, pressCtrlX)
-		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressShiftTab)
 
 		require.Error(t, m.fatal)
 		require.Contains(t, plain(m.activityLine()), "store closed")

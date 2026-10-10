@@ -126,6 +126,14 @@ const defaultDarkBackground = true
 // or a phase already uses, and every command added to it keeps the same shape.
 const keyLeader = "ctrl+x"
 
+// keyShiftTab cycles the thinking mode of the branch: shift+tab on the
+// keyboard, which many interfaces borrow to flip between modes, so a press
+// reads the selection it made right away. It belongs to the interface like the
+// leader chords and answers in every phase that holds no typing, because a
+// mode chosen by mistake is cheaper to walk back than a chord that landed in
+// the middle of a sentence.
+const keyShiftTab = "shift+tab"
+
 // Chords of the leader key that select what a session runs. Each one opens the
 // same picker over its own roster, so the two selections behave alike.
 const (
@@ -134,9 +142,6 @@ const (
 
 	// keyLeaderModel changes the model the branch runs.
 	keyLeaderModel = "m"
-
-	// keyLeaderThinking changes the thinking mode the branch runs.
-	keyLeaderThinking = "t"
 )
 
 // pickerMode selects what the picker offers, which the interface shows and what
@@ -1054,6 +1059,13 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.handleConfirmKey(key)
 	}
+	// Shift+tab cycles the thinking mode before every phase reads the key:
+	// the input holds no meaning for it, and a machine a shift-tab walks back
+	// is one press away.
+	if key.String() == keyShiftTab {
+		m.cycleThinking()
+		return nil
+	}
 	if cmd, handled := m.handleLeaderKey(key); handled {
 		return cmd
 	}
@@ -1114,9 +1126,6 @@ func (m *model) handleLeaderKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		return m.openSwitchPicker(pickerAgent), true
 	case keyLeaderModel:
 		return m.openSwitchPicker(pickerModel), true
-	case keyLeaderThinking:
-		m.cycleThinking()
-		return nil, true
 	}
 	return nil, true
 }
