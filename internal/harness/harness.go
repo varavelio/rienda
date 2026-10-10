@@ -381,9 +381,11 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 
 	//nolint:contextcheck // loading precedes every run; there is no invocation context yet.
 	registry, toolDiagnostics, err := newTools(tool.DiscoverOptions{
-		Dir:     toolsDir,
-		Workdir: workdir,
-		Config:  cfg.Data(),
+		Dir:      toolsDir,
+		Workdir:  workdir,
+		Config:   cfg.Data(),
+		CacheDir: cacheDir(),
+		StoreDir: storeDir(),
 	})
 	if err != nil {
 		closeStore(store)
@@ -392,8 +394,10 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 
 	//nolint:contextcheck // loading precedes every run; there is no invocation context yet.
 	hookRegistry, hookDiagnostics := hook.Discover(hooksDir, jsruntime.Options{
-		Workdir: workdir,
-		Config:  cfg.Data(),
+		Workdir:  workdir,
+		Config:   cfg.Data(),
+		CacheDir: cacheDir(),
+		StoreDir: storeDir(),
 	})
 
 	summarizer, err := newCompactor(resolver, cfg.Compaction.KeepRecentTokens)

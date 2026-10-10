@@ -24,6 +24,12 @@ type DiscoverOptions struct {
 
 	// Config is the configuration handed to ctx.config.
 	Config any
+
+	// CacheDir is the shared cache handed to ctx.cache when set.
+	CacheDir string
+
+	// StoreDir is the permanent store handed to ctx.store when set.
+	StoreDir string
 }
 
 // DiscoverScripts compiles every user tool of dir and returns the tools it
@@ -82,10 +88,12 @@ func loadScriptTool(opts DiscoverOptions, name string) (Tool, string) {
 		return nil, `tool "` + name + `": ` + err.Error()
 	}
 	tool, err := NewScriptTool(ScriptToolOptions{
-		Name:    name,
-		Module:  module,
-		Workdir: opts.Workdir,
-		Config:  opts.Config,
+		Name:     name,
+		Module:   module,
+		Workdir:  opts.Workdir,
+		Config:   opts.Config,
+		CacheDir: opts.CacheDir,
+		StoreDir: opts.StoreDir,
 	})
 	if err != nil {
 		return nil, `tool "` + name + `": ` + err.Error()

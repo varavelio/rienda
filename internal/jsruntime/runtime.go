@@ -88,9 +88,15 @@ type Options struct {
 	Config any
 
 	// CacheDir is the absolute directory of the shared cache the extension
-	// may use through ctx.cache when set: one document per name, readable
-	// across extensions and runs. Empty leaves the primitive out.
+	// may use through ctx.cache when set: text entries with a time to live,
+	// readable across extensions and runs. Empty leaves the primitive out.
 	CacheDir string
+
+	// StoreDir is the absolute directory of the permanent store the
+	// extension may use through ctx.store when set: text entries that stay
+	// until removed, readable across extensions and runs. Empty leaves the
+	// primitive out.
+	StoreDir string
 }
 
 // Runtime is the execution context of one invocation. It owns the goja

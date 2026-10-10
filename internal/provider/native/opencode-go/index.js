@@ -5,11 +5,13 @@
 // carrying the display names and the thinking levels models.dev documents.
 //
 // The catalog is cached through ctx.cache under "models.dev", shared with
-// every other provider that reads the database. A fresh-enough cache serves
-// as it is: the database is refetched only when the cached copy is older than
-// the refresh window. On a failed fetch the cache serves whatever it holds,
-// however old, and only an empty roster is left when there is neither.
-// Refreshing the roster is restarting Rienda.
+// every other provider that reads the database. The cache owns the age: the
+// module stores the document with a four-hour time to live, and the runtime
+// serves it only while it lasts, so the database is fetched at most once per
+// window. A stale document never reaches a run: past the window the entry is
+// gone, and a failed fetch leaves the roster empty until the next start
+// finds either a cache or a live database. Refreshing the roster is
+// restarting Rienda.
 module.exports = function(ctx) {
   var BASE_URL = "https://opencode.ai/zen/go/v1";
   var SESSION_HEADER = "x-opencode-session";
@@ -34,22 +36,11 @@ module.exports = function(ctx) {
   // sends nothing, so a database level either of those names is skipped.
   var RESERVED_LEVELS = { off: true, none: true };
 
-  // isFresh reports whether a cached catalog is young enough to serve
-  // without a refetch. A document without a parsable date is stale: the
-  // cache stays a hint, so a malformed envelope can only cost a refetch,
-  // never the roster itself.
-  function isFresh(doc) {
-    if (!doc || typeof doc.date !== "string") return false;
-    var saved = Date.parse(doc.date);
-    if (isNaN(saved)) return false;
-    return Date.now() - saved < REFRESH_AFTER_MS;
-  }
-
-  // cacheWrite wraps write so a cache that cannot be stored is logged and
+  // cacheSet wraps set so a cache that cannot be stored is logged and
   // dropped: the next start fetches again.
-  function cacheWrite(data) {
+  function cacheSet(text) {
     try {
-      ctx.cache.write(CACHE_KEY, data);
+      ctx.cache.set(CACHE_KEY, text, REFRESH_AFTER_MS / 1000);
     } catch (err) {
       ctx.log("opencode-go: cache write failed: " + err);
     }
@@ -62,27 +53,42 @@ module.exports = function(ctx) {
     return res.body;
   }
 
-  // catalog returns the models.dev database: the fresh cache when one
-  // exists, the live fetch otherwise, and whatever the cache holds on a
-  // failed fetch. Without either, the roster stays empty until the next
-  // start.
+  // catalog returns the models.dev database: the cached text while it lasts
+  // (the runtime drops the entry the moment it expires), the live fetch
+  // otherwise. Without either, the roster stays empty until the next start.
   function catalog() {
     var cached = null;
     try {
-      cached = ctx.cache.read(CACHE_KEY);
+      cached = ctx.cache.get(CACHE_KEY);
     } catch (err) {
       ctx.log("opencode-go: cache read failed: " + err);
     }
-    if (isFresh(cached)) return cached.data;
+    if (typeof cached === "string") {
+      // The cache holds a parseable document: it wins over everything,
+      // including a fetch, because it is younger than the window proves.
+      try {
+        return JSON.parse(cached);
+      } catch (err) {
+        ctx.log("opencode-go: the cached catalog is not JSON: " + err);
+      }
+    }
 
     try {
-      var live = JSON.parse(fetchCatalog());
-      cacheWrite(live);
-      return live;
+      var live = fetchCatalog();
+      cacheSet(live);
+      return JSON.parse(live);
     } catch (err) {
       ctx.log("opencode-go: models.dev fetch failed (" + err + "); using the cache");
     }
-    if (cached) return cached.data;
+    if (typeof cached === "string") {
+      // A fetch failure with an unparsed cache is the last mile: serve it
+      // stale rather than empty.
+      try {
+        return JSON.parse(cached);
+      } catch (err) {
+        ctx.log("opencode-go: the cached catalog is not JSON: " + err);
+      }
+    }
     ctx.log("opencode-go: no cache and no models.dev: the roster stays empty until the next start");
     return {};
   }

@@ -164,6 +164,11 @@ type Options struct {
 	// that needs it is told nothing about the file system beyond its own
 	// directory.
 	CacheDir string
+
+	// StoreDir is the absolute directory of the permanent store the module
+	// reaches through ctx.store. Empty leaves the primitive out, the same
+	// stand the cache takes.
+	StoreDir string
 }
 
 // Discover resolves the provider set: user modules shadow embedded ones by

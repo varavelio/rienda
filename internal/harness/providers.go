@@ -22,18 +22,34 @@ import (
 const riendaDirName = ".rienda"
 
 // cacheDirName is the directory inside the Rienda directory that holds the
-// shared cache of the provider modules.
+// shared cache of the extension modules.
 const cacheDirName = "cache"
+
+// storeDirName is the directory inside the Rienda directory that holds the
+// permanent store of the extension modules.
+const storeDirName = "store"
 
 // cacheDir returns the directory of the shared cache: the Rienda cache of the
 // installation, which every run of the home directory shares. A missing home
 // yields an empty path, which leaves the primitive out of the modules.
 func cacheDir() string {
+	return riendaHomeDir(cacheDirName)
+}
+
+// storeDir returns the directory of the permanent store, the same stand the
+// shared cache takes on a missing home.
+func storeDir() string {
+	return riendaHomeDir(storeDirName)
+}
+
+// riendaHomeDir joins a directory name under the Rienda directory of the home,
+// or returns an empty path when the home cannot be located.
+func riendaHomeDir(name string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, riendaDirName, cacheDirName)
+	return filepath.Join(home, riendaDirName, name)
 }
 
 // providersEnvVar overrides the provider directory the same way RIENDA_CONFIG
@@ -83,6 +99,7 @@ func discoverProviders(
 			Config:         cfg.Data(),
 			MaxOutputBytes: native.CatalogBudget,
 			CacheDir:       cacheDir(),
+			StoreDir:       storeDir(),
 		},
 		logProvider,
 	)

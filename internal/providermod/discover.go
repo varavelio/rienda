@@ -123,6 +123,7 @@ func runModule(
 		FileRoot:       dir,
 		MaxOutputBytes: opts.MaxOutputBytes,
 		CacheDir:       opts.CacheDir,
+		StoreDir:       opts.StoreDir,
 		Config:         opts.Config,
 	}, nil, func(rt *jsruntime.Runtime, exports *jsruntime.Exports) error {
 		main := exports.Self()

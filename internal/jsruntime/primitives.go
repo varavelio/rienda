@@ -81,6 +81,15 @@ func installContext(rt *Runtime, invocationCtx context.Context) error {
 			return fmt.Errorf("jsruntime: build ctx.cache: %w", err)
 		}
 	}
+	if rt.opts.StoreDir != "" {
+		store, err := rt.storeObject()
+		if err != nil {
+			return fmt.Errorf("jsruntime: build ctx.store: %w", err)
+		}
+		if err := ctx.Set("store", store); err != nil {
+			return fmt.Errorf("jsruntime: build ctx.store: %w", err)
+		}
+	}
 	if err := ctx.Set("env", rt.envObject(invocationCtx)); err != nil {
 		return fmt.Errorf("jsruntime: build ctx.env: %w", err)
 	}
@@ -604,93 +613,177 @@ func (s execStream) Emit(name string, data []byte) {
 }
 
 // cacheObject builds the ctx.cache namespace: a shared key/value store of
-// cached documents that lives outside the file scope of the extension. Every
-// document is one file of the cache directory, keyed by the name the caller
-// gave it, so several extensions and runs share one cache without sharing
-// their workspaces.
+// plain text that lives outside the file scope of the extension. Every entry
+// is one file of the cache directory keyed by its name, carries a time to
+// live the runtime enforces, and several extensions and runs share it without
+// sharing their workspaces.
 func (rt *Runtime) cacheObject() (*goja.Object, error) {
-	cache := rt.vm.NewObject()
+	return rt.kvObject("ctx.cache", rt.opts.CacheDir, true)
+}
+
+// storeObject builds the ctx.store namespace: the permanent sibling of the
+// cache, same shape and the same four operations with no time to live. What
+// the store keeps entries until the user or the script removes them.
+func (rt *Runtime) storeObject() (*goja.Object, error) {
+	return rt.kvObject("ctx.store", rt.opts.StoreDir, false)
+}
+
+// kvObject builds one key/value namespace over a directory: the four
+// operations the stores expose, rejecting a time to live where the store
+// has none and requiring one where it must have it.
+func (rt *Runtime) kvObject(prefix, dir string, expires bool) (*goja.Object, error) {
+	store := rt.vm.NewObject()
 	for name, fn := range map[string]func(goja.FunctionCall) goja.Value{
-		"read":  func(call goja.FunctionCall) goja.Value { return rt.cacheRead(call) },
-		"write": func(call goja.FunctionCall) goja.Value { return rt.cacheWrite(call) },
+		"has": func(call goja.FunctionCall) goja.Value {
+			return rt.kvHas(prefix, dir, expires, call)
+		},
+		"get": func(call goja.FunctionCall) goja.Value {
+			return rt.kvGet(prefix, dir, expires, call)
+		},
+		"set": func(call goja.FunctionCall) goja.Value {
+			return rt.kvSet(prefix, dir, expires, call)
+		},
+		"del": func(call goja.FunctionCall) goja.Value {
+			return rt.kvDel(prefix, dir, call)
+		},
 	} {
-		if err := cache.Set(name, fn); err != nil {
-			return nil, fmt.Errorf("jsruntime: build ctx.cache: %w", err)
+		if err := store.Set(name, fn); err != nil {
+			return nil, fmt.Errorf("jsruntime: build %s: %w", prefix, err)
 		}
 	}
-	return cache, nil
+	return store, nil
 }
 
-// cachedDocument is the envelope every cache file holds: the time the
-// document was stored and the data it carries.
-type cachedDocument struct {
-	// SavedAt is the time the document was stored, RFC 3339 in UTC.
-	SavedAt string `json:"date"`
+// storedEntry is the envelope every cache and store file holds: the time the
+// entry stops being served and the raw text it carries.
+type storedEntry struct {
+	// ExpiresAt is when the entry expires, RFC 3339 in UTC, empty when it
+	// never does.
+	ExpiresAt string `json:"expires_at"`
 
-	// Data is the cached payload, opaque to the runtime.
-	Data any `json:"data"`
+	// Payload is the stored text, untouched from the moment it was set.
+	Payload string `json:"payload"`
 }
 
-// cachePath returns the absolute file of one cache entry, refusing names that
-// would leave the cache directory.
-func (rt *Runtime) cachePath(primitive string, call goja.FunctionCall) string {
-	name := requiredString(rt, primitive, call, 0, "name")
-	if !validCacheName(name) {
-		rt.raise("%s: name %q must be a single path segment", primitive, name)
+// kvPath returns the absolute file of one entry, refusing names that would
+// leave the store directory.
+func (rt *Runtime) kvPath(prefix, dir string, call goja.FunctionCall) string {
+	name := requiredString(rt, prefix, call, 0, "name")
+	if !validStoreName(name) {
+		rt.raise("%s: name %q must be a single path segment", prefix, name)
 	}
-	return filepath.Join(rt.opts.CacheDir, name+".json")
+	return filepath.Join(dir, name+".json")
 }
 
-// validCacheName reports whether a name is one path segment: a file name a
-// cache directory can hold, with nothing that travels or hides inside it.
-func validCacheName(name string) bool {
+// validStoreName reports whether a name is one path segment: a file name a
+// store directory can hold, with nothing that travels or hides inside it.
+func validStoreName(name string) bool {
 	return name != "" &&
-		!strings.ContainsAny(name, "/\\\x00 ") &&
 		name != "." && name != ".." &&
-		!filepath.IsAbs(name)
+		!filepath.IsAbs(name) &&
+		!strings.ContainsAny(name, "/"+string(filepath.Separator)+"\x00 ")
 }
 
-// cacheRead returns the stored document {date, data} of a name, or null when
-// one is missing or unreadable: a cache is a hint, never the truth.
-func (rt *Runtime) cacheRead(call goja.FunctionCall) goja.Value {
-	path := rt.cachePath("ctx.cache.read", call)
+// expired reports whether an entry is past its time, reading its envelope.
+// An entry that never expires is never old.
+func expired(entry storedEntry) bool {
+	if entry.ExpiresAt == "" {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339, entry.ExpiresAt)
+	return err != nil || !at.After(time.Now())
+}
+
+// kvHas reports whether a name holds a live entry: false when nothing was
+// stored or what was stored is past its time.
+func (rt *Runtime) kvHas(prefix, dir string, expires bool, call goja.FunctionCall) goja.Value {
+	entry, found := rt.kvLoad(prefix, dir, call)
+	return rt.vm.ToValue(found && !expired(entry))
+}
+
+// kvGet returns the payload of a live entry. An expired one is dropped on
+// the spot, so the file is gone and the next has reports false: null leaves
+// the call.
+func (rt *Runtime) kvGet(prefix, dir string, expires bool, call goja.FunctionCall) goja.Value {
+	entry, found := rt.kvLoad(prefix, dir, call)
+	if !found {
+		return goja.Null()
+	}
+	if expired(entry) {
+		rt.kvDrop(prefix, dir, call)
+		return goja.Null()
+	}
+	return rt.vm.ToValue(entry.Payload)
+}
+
+// kvDrop removes the file of one entry without complaining about one that is
+// not there: the goal the caller had is already the world.
+func (rt *Runtime) kvDrop(prefix, dir string, call goja.FunctionCall) {
+	path := rt.kvPath(prefix, dir, call)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		rt.raise("%s: %s", prefix, err.Error())
+	}
+}
+
+// kvLoad reads the envelope of a name from the store: false when nothing is
+// stored or it cannot be read. A store is a hint, never the truth.
+func (rt *Runtime) kvLoad(prefix, dir string, call goja.FunctionCall) (storedEntry, bool) {
+	path := rt.kvPath(prefix, dir, call)
 	data, err := os.ReadFile(path) //nolint:gosec // the runtime built the path.
 	if err != nil {
-		return goja.Null()
+		return storedEntry{}, false
 	}
-	var doc cachedDocument
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return goja.Null()
+	var entry storedEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return storedEntry{}, false
 	}
-	return rt.vm.ToValue(map[string]any{"date": doc.SavedAt, "data": doc.Data})
+	return entry, true
 }
 
-// cacheWrite stores data under a name: whatever the caller passed is
-// serialized as it stands, wrapped in the envelope stamped with the current
-// UTC time and written atomically, so a reader never sees a partial document.
-// It returns the stamp the document carries, as the caller chose to compare
-// it against the present.
-func (rt *Runtime) cacheWrite(call goja.FunctionCall) goja.Value {
-	path := rt.cachePath("ctx.cache.write", call)
-	data, _ := argumentAt(call, 1)
-	if data == nil {
-		rt.raise("ctx.cache.write: data is required")
+// kvSet stores text under a name, wrapped in the envelope stamped with the
+// moment the entry stops being served. The write is atomic, so a reader
+// never sees a partial document.
+func (rt *Runtime) kvSet(prefix, dir string, expires bool, call goja.FunctionCall) goja.Value {
+	path := rt.kvPath(prefix, dir, call)
+	payload := requiredString(rt, prefix, call, 1, "payload")
+	entry := storedEntry{Payload: payload}
+	if rt.opts.MaxOutputBytes > 0 && int64(len(payload)) > rt.opts.MaxOutputBytes {
+		rt.raise("%s: payload exceeds the %d byte cap", prefix, rt.opts.MaxOutputBytes)
 	}
-	doc := cachedDocument{
-		SavedAt: time.Now().UTC().Format(time.RFC3339),
-		Data:    data.Export(),
+	if !expires {
+		// The store has no expiry, so a ttl_seconds argument is refused
+		// rather than silently dropped: a misread between the two stores
+		// stays loud.
+		if raw, ok := argumentAt(call, 2); ok && raw.Export() != nil {
+			rt.raise("%s: ttl_seconds must be omitted", prefix)
+		}
 	}
-	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if expires {
+		ttl := requiredNumber(rt, prefix, call, 2, "ttl_seconds")
+		if ttl <= 0 {
+			rt.raise("%s: ttl_seconds must be a positive number of seconds", prefix)
+		}
+		expiry := time.Now().Add(time.Duration(ttl) * time.Second)
+		entry.ExpiresAt = expiry.UTC().Format(time.RFC3339)
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		rt.raise("%s: %s", prefix, err.Error())
+	}
+	encoded, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
-		rt.raise("ctx.cache.write: %s", err.Error())
-	}
-	if err := os.MkdirAll(rt.opts.CacheDir, 0o750); err != nil {
-		rt.raise("ctx.cache.write: %s", err.Error())
+		rt.raise("%s: %s", prefix, err.Error())
 	}
 	if err := writeFileAtomic(path, encoded); err != nil {
-		rt.raise("ctx.cache.write: %s", err.Error())
+		rt.raise("%s: %s", prefix, err.Error())
 	}
-	return rt.vm.ToValue(doc.SavedAt)
+	return rt.vm.ToValue(entry.ExpiresAt)
+}
+
+// kvDel removes the entry of a name. Removing what is not there is a no-op:
+// the outcome the caller wanted is already the world. It reports nothing.
+func (rt *Runtime) kvDel(prefix, dir string, call goja.FunctionCall) goja.Value {
+	rt.kvDrop(prefix, dir, call)
+	return goja.Undefined()
 }
 
 // writeFileAtomic writes data to path through a temporary file renamed over

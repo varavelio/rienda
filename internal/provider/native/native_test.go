@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -182,28 +181,23 @@ func TestOpencodeGoServesTheCacheOnFailure(t *testing.T) {
 	}))
 	t.Cleanup(dead.Close)
 
-	userDir, cacheDir := t.TempDir(), t.TempDir()
-	require.NoError(t, os.MkdirAll(cacheDir, 0o750))
-	stored, err := json.Marshal(map[string]any{
-		"date": time.Now().UTC().Format(time.RFC3339),
-		"data": map[string]any{
-			"opencode-go": map[string]any{
-				"npm": "@ai-sdk/openai-compatible",
-				"models": map[string]any{
-					"kimi-k3": map[string]any{
-						"reasoning": true,
-						"limit":     map[string]any{"context": 1000, "output": 100},
-					},
+	cacheDir := t.TempDir()
+	db := map[string]any{
+		"opencode-go": map[string]any{
+			"npm": "@ai-sdk/openai-compatible",
+			"models": map[string]any{
+				"kimi-k3": map[string]any{
+					"reasoning": true,
+					"limit":     map[string]any{"context": 1000, "output": 100},
 				},
 			},
 		},
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "models.dev.json"), stored, 0o600))
+	}
+	seedCatalog(t, cacheDir, db, time.Hour)
 
 	providers, err := providermod.Discover(t.Context(), providermod.Sources{
 		Embedded: map[string]string{"opencode-go": withEndpoint(t, dead.URL)},
-		UserDir:  userDir,
+		UserDir:  t.TempDir(),
 	}, providermod.Options{CacheDir: cacheDir}, nil)
 	require.NoError(t, err)
 	require.Len(t, providers, 1)
@@ -232,9 +226,9 @@ func TestOpencodeGoEmptyWithoutCacheOrFetch(t *testing.T) {
 	require.Empty(t, providers[0].Decl.Models)
 }
 
-// TestOpencodeGoRefetchesTheStaleCache verifies the refresh window: a young
-// cache answers alone, an old one is refetched, and the refetch restamps the
-// stored document.
+// TestOpencodeGoRefetchesTheStaleCache verifies the refresh window: a cache
+// inside it answers alone, an entry past it is dropped and refetched, and the
+// refetch stores the live database under a fresh expiry.
 func TestOpencodeGoRefetchesTheStaleCache(t *testing.T) {
 	cached := map[string]any{
 		"opencode-go": map[string]any{
@@ -247,17 +241,6 @@ func TestOpencodeGoRefetchesTheStaleCache(t *testing.T) {
 			},
 		},
 	}
-	store := func(t *testing.T, age time.Duration) string {
-		t.Helper()
-		dir := t.TempDir()
-		stored, err := json.Marshal(map[string]any{
-			"date": time.Now().Add(-age).UTC().Format(time.RFC3339),
-			"data": cached,
-		})
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "models.dev.json"), stored, 0o600))
-		return dir
-	}
 	db := planDatabase(map[string]any{
 		"opencode-go": map[string]any{"npm": "@ai-sdk/openai-compatible"},
 	})
@@ -269,31 +252,42 @@ func TestOpencodeGoRefetchesTheStaleCache(t *testing.T) {
 		return ids
 	}
 
-	// A young cache answers as it is: the roster carries only the served
-	// model, whatever the live database holds.
-	providers := discover(t, store(t, time.Hour), db)
+	store := func(t *testing.T, alive time.Duration) string {
+		t.Helper()
+		dir := t.TempDir()
+		seedCatalog(t, dir, cached, alive)
+		return dir
+	}
+
+	// A cache inside the window answers as it is: the roster carries only
+	// the served model, whatever the live database holds.
+	young := store(t, 3*time.Hour)
+	providers := discover(t, young, db)
 	require.Equal(t, []string{"old-model"}, models(providers))
 
-	// An old cache is refetched: the roster carries the live models, and
-	// the refetch restamps the stored document.
-	stale := store(t, 5*time.Hour)
-	providers = discover(t, stale, db)
+	// An entry past the window is dropped and refetched: the roster carries
+	// the live models, and the refetch stores the live database with a
+	// fresh expiry.
+	aging := store(t, -time.Minute)
+	providers = discover(t, aging, db)
 	require.Contains(t, models(providers), "kimi-k3")
-	var refetched cachedDocument
-	path := stale + "/models.dev.json"
-	file, err := os.ReadFile(path) //nolint:gosec // the test stored the path itself.
+	var restamped storedEntryEnvelope
+	seed, err := os.ReadFile(aging + "/models.dev.json") //nolint:gosec // the test stored the path.
 	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(file, &refetched))
+	require.NoError(t, json.Unmarshal(seed, &restamped))
+	text, ok := restamped.Payload.(string)
+	require.True(t, ok, "the stored payload is the database text: %T", restamped.Payload)
+	require.Contains(t, text, `"kimi-k3"`)
+	fresh, err := time.Parse(time.RFC3339, restamped.ExpiresAt)
+	require.NoError(t, err)
+	require.WithinDuration(t, time.Now().Add(4*time.Hour), fresh, 5*time.Second)
+}
 
-	// The restamp carries the live database under a fresh date.
-	restamp, ok := refetched.Data.(map[string]any)
-	require.True(t, ok, "the stored data is the database: %T", refetched.Data)
-	plan, ok := restamp["opencode-go"].(map[string]any)
-	require.True(t, ok, "the database holds the plan: %T", restamp["opencode-go"])
-	require.Contains(t, plan["models"], "kimi-k3")
-	saved, parseErr := time.Parse(time.RFC3339, refetched.Date)
-	require.NoError(t, parseErr)
-	require.WithinDuration(t, time.Now(), saved, time.Minute)
+// storedEntryEnvelope mirrors the envelope of a shared cache file, so the
+// tests read the stamped files the way the runtime writes them.
+type storedEntryEnvelope struct {
+	ExpiresAt string `json:"expires_at"`
+	Payload   any    `json:"payload"`
 }
 
 // discover discovers the embedded module against a catalog endpoint whose
@@ -310,9 +304,20 @@ func discover(t *testing.T, cacheDir string, db map[string]any) []providermod.Pr
 	return providers
 }
 
-// cachedDocument mirrors the envelope the shared cache stores, so the tests
-// read the stamped files the way the runtime writes them.
-type cachedDocument struct {
-	Date string `json:"date"`
-	Data any    `json:"data"`
+// seedCatalog stores a models.dev database in cacheDir through the envelope
+// the shared cache writes, so the embedded module reads it through
+// ctx.cache. The expires at for ttl keeps the entry alive or dead, as the
+// caller wants it.
+func seedCatalog(t *testing.T, cacheDir string, db map[string]any, ttl time.Duration) {
+	t.Helper()
+	data, err := json.Marshal(db)
+	require.NoError(t, err)
+	entry := map[string]any{
+		"expires_at": time.Now().Add(ttl).UTC().Format(time.RFC3339),
+		"payload":    string(data),
+	}
+	stored, err := json.MarshalIndent(entry, "", "  ")
+	require.NoError(t, err)
+	seed := cacheDir + "/models.dev.json"
+	require.NoError(t, os.WriteFile(seed, stored, 0o600))
 }

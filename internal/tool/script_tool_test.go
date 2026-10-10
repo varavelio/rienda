@@ -243,3 +243,38 @@ func (f *fakeDefinitionTool) Definition() llm.Tool {
 func (f *fakeDefinitionTool) Execute(_ context.Context, _ Call, _ Sink) (Result, error) {
 	return TextResult("fake"), nil
 }
+
+// TestScriptToolReachesTheStores verifies a tool's script can reach the
+// shared cache and the permanent store its options name, with the runtime
+// owning the time to live.
+func TestScriptToolReachesTheStores(t *testing.T) {
+	module, err := jsruntime.Compile(writeUserTool(t, "storeprobe", `module.exports = {
+  description: "A store probe.",
+  parameters: {type: "object", properties: {}, additionalProperties: false},
+  execute: function(ctx) {
+    var expires = ctx.cache.set("probe", "cached text", 30);
+    var stored = ctx.store.set("probe", "stored text");
+    return "cache=" + ctx.cache.get("probe") + " store=" + ctx.store.get("probe") +
+      " expiry=" + (typeof expires === "string" && expires !== "") +
+      " eternal=" + (stored === "");
+  },
+};`))
+	require.NoError(t, err)
+	tool, err := NewScriptTool(ScriptToolOptions{
+		Name:     "storeprobe",
+		Module:   module,
+		Workdir:  t.TempDir(),
+		CacheDir: t.TempDir(),
+		StoreDir: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	result, _ := runUserTool(t, tool, "{}")
+	require.False(t, result.IsError)
+	require.Len(t, result.Blocks, 1)
+	require.Equal(
+		t,
+		"cache=cached text store=stored text expiry=true eternal=true",
+		result.Blocks[0].Text,
+	)
+}

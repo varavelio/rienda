@@ -23,6 +23,8 @@ type ScriptTool struct {
 	workdir     string
 	config      any
 	maxOutput   int
+	cacheDir    string
+	storeDir    string
 }
 
 // ScriptToolOptions configures a ScriptTool.
@@ -41,6 +43,12 @@ type ScriptToolOptions struct {
 
 	// MaxOutput caps the model-facing result text. Zero means the default.
 	MaxOutput int
+
+	// CacheDir is the shared cache handed to ctx.cache when set.
+	CacheDir string
+
+	// StoreDir is the permanent store handed to ctx.store when set.
+	StoreDir string
 }
 
 // NewScriptTool validates the module exports and builds the tool.
@@ -58,6 +66,8 @@ func NewScriptTool(opts ScriptToolOptions) (*ScriptTool, error) {
 		workdir:   opts.Workdir,
 		config:    opts.Config,
 		maxOutput: maxOutput,
+		cacheDir:  opts.CacheDir,
+		storeDir:  opts.StoreDir,
 	}
 	if err := tool.load(); err != nil {
 		return nil, err
@@ -76,10 +86,21 @@ func NewScriptTool(opts ScriptToolOptions) (*ScriptTool, error) {
 	return tool, nil
 }
 
+// runtimeOptions builds the options every invocation of the tool runs on:
+// the static settings the tool was loaded with, stores included.
+func (t *ScriptTool) runtimeOptions() jsruntime.Options {
+	return jsruntime.Options{
+		Workdir:  t.workdir,
+		Config:   t.config,
+		CacheDir: t.cacheDir,
+		StoreDir: t.storeDir,
+	}
+}
+
 // load reads the description, parameters and execute function of the module.
 func (t *ScriptTool) load() error {
 	ctx := context.Background()
-	err := t.module.Invoke(ctx, jsruntime.Options{Workdir: t.workdir, Config: t.config}, nil,
+	err := t.module.Invoke(ctx, t.runtimeOptions(), nil,
 		func(rt *jsruntime.Runtime, exports *jsruntime.Exports) error {
 			if description, ok := exports.Field("description"); ok {
 				if text, ok := description.String(); ok {
@@ -122,7 +143,7 @@ func (t *ScriptTool) Execute(ctx context.Context, call Call, out Sink) (Result, 
 		return Result{}, fmt.Errorf("tool: %w", err)
 	}
 	var result Result
-	err := t.module.Invoke(ctx, jsruntime.Options{Workdir: t.workdir, Config: t.config},
+	err := t.module.Invoke(ctx, t.runtimeOptions(),
 		func(stream jsruntime.Stream, data []byte) {
 			if out == nil {
 				return
