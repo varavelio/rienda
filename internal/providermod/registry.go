@@ -158,6 +158,12 @@ type Options struct {
 	// honor, which a catalog large enough needs. Zero keeps the default of
 	// the extension runtime.
 	MaxOutputBytes int64
+
+	// CacheDir is the absolute directory of the shared cache the module
+	// reaches through ctx.cache. Empty leaves the primitive out: a module
+	// that needs it is told nothing about the file system beyond its own
+	// directory.
+	CacheDir string
 }
 
 // Discover resolves the provider set: user modules shadow embedded ones by

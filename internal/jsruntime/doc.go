@@ -8,8 +8,9 @@
 //
 // The runtime exposes the extension surface as the ctx object: workspace and
 // session identity, files, environment, processes, HTTP, logging, sleeping,
-// configuration and human-in-the-loop interaction. Scripts run with the
-// privileges of the user who wrote them and are not sandboxed.
+// configuration, human-in-the-loop interaction and, when its caller
+// configures one, a shared cache of {date, data} documents. Scripts run with
+// the privileges of the user who wrote them and are not sandboxed.
 //
 // The ceilings are deliberate: execution is synchronous with no event loop,
 // the runtime imposes no timeout and only honors context cancellation, every

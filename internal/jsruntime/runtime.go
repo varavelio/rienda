@@ -86,6 +86,11 @@ type Options struct {
 
 	// Config is the global configuration as plain data: ctx.config.
 	Config any
+
+	// CacheDir is the absolute directory of the shared cache the extension
+	// may use through ctx.cache when set: one document per name, readable
+	// across extensions and runs. Empty leaves the primitive out.
+	CacheDir string
 }
 
 // Runtime is the execution context of one invocation. It owns the goja

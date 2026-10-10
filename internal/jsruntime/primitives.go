@@ -2,6 +2,7 @@ package jsruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,6 +71,15 @@ func installContext(rt *Runtime, invocationCtx context.Context) error {
 	}
 	if err := ctx.Set("file", file); err != nil {
 		return fmt.Errorf("jsruntime: build ctx.file: %w", err)
+	}
+	if rt.opts.CacheDir != "" {
+		cache, err := rt.cacheObject()
+		if err != nil {
+			return fmt.Errorf("jsruntime: build ctx.cache: %w", err)
+		}
+		if err := ctx.Set("cache", cache); err != nil {
+			return fmt.Errorf("jsruntime: build ctx.cache: %w", err)
+		}
 	}
 	if err := ctx.Set("env", rt.envObject(invocationCtx)); err != nil {
 		return fmt.Errorf("jsruntime: build ctx.env: %w", err)
@@ -591,4 +601,119 @@ func (s execStream) Emit(name string, data []byte) {
 		return
 	}
 	s.rt.emit(StreamStdout, data)
+}
+
+// cacheObject builds the ctx.cache namespace: a shared key/value store of
+// cached documents that lives outside the file scope of the extension. Every
+// document is one file of the cache directory, keyed by the name the caller
+// gave it, so several extensions and runs share one cache without sharing
+// their workspaces.
+func (rt *Runtime) cacheObject() (*goja.Object, error) {
+	cache := rt.vm.NewObject()
+	for name, fn := range map[string]func(goja.FunctionCall) goja.Value{
+		"read":  func(call goja.FunctionCall) goja.Value { return rt.cacheRead(call) },
+		"write": func(call goja.FunctionCall) goja.Value { return rt.cacheWrite(call) },
+	} {
+		if err := cache.Set(name, fn); err != nil {
+			return nil, fmt.Errorf("jsruntime: build ctx.cache: %w", err)
+		}
+	}
+	return cache, nil
+}
+
+// cachedDocument is the envelope every cache file holds: the time the
+// document was stored and the data it carries.
+type cachedDocument struct {
+	// SavedAt is the time the document was stored, RFC 3339 in UTC.
+	SavedAt string `json:"date"`
+
+	// Data is the cached payload, opaque to the runtime.
+	Data any `json:"data"`
+}
+
+// cachePath returns the absolute file of one cache entry, refusing names that
+// would leave the cache directory.
+func (rt *Runtime) cachePath(primitive string, call goja.FunctionCall) string {
+	name := requiredString(rt, primitive, call, 0, "name")
+	if !validCacheName(name) {
+		rt.raise("%s: name %q must be a single path segment", primitive, name)
+	}
+	return filepath.Join(rt.opts.CacheDir, name+".json")
+}
+
+// validCacheName reports whether a name is one path segment: a file name a
+// cache directory can hold, with nothing that travels or hides inside it.
+func validCacheName(name string) bool {
+	return name != "" &&
+		!strings.ContainsAny(name, "/\\\x00 ") &&
+		name != "." && name != ".." &&
+		!filepath.IsAbs(name)
+}
+
+// cacheRead returns the stored document {date, data} of a name, or null when
+// one is missing or unreadable: a cache is a hint, never the truth.
+func (rt *Runtime) cacheRead(call goja.FunctionCall) goja.Value {
+	path := rt.cachePath("ctx.cache.read", call)
+	data, err := os.ReadFile(path) //nolint:gosec // the runtime built the path.
+	if err != nil {
+		return goja.Null()
+	}
+	var doc cachedDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return goja.Null()
+	}
+	return rt.vm.ToValue(map[string]any{"date": doc.SavedAt, "data": doc.Data})
+}
+
+// cacheWrite stores data under a name: whatever the caller passed is
+// serialized as it stands, wrapped in the envelope stamped with the current
+// UTC time and written atomically, so a reader never sees a partial document.
+// It returns the stamp the document carries, as the caller chose to compare
+// it against the present.
+func (rt *Runtime) cacheWrite(call goja.FunctionCall) goja.Value {
+	path := rt.cachePath("ctx.cache.write", call)
+	data, _ := argumentAt(call, 1)
+	if data == nil {
+		rt.raise("ctx.cache.write: data is required")
+	}
+	doc := cachedDocument{
+		SavedAt: time.Now().UTC().Format(time.RFC3339),
+		Data:    data.Export(),
+	}
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		rt.raise("ctx.cache.write: %s", err.Error())
+	}
+	if err := os.MkdirAll(rt.opts.CacheDir, 0o750); err != nil {
+		rt.raise("ctx.cache.write: %s", err.Error())
+	}
+	if err := writeFileAtomic(path, encoded); err != nil {
+		rt.raise("ctx.cache.write: %s", err.Error())
+	}
+	return rt.vm.ToValue(doc.SavedAt)
+}
+
+// writeFileAtomic writes data to path through a temporary file renamed over
+// it, so readers never see a partial write.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".cache-*")
+	if err != nil {
+		return fmt.Errorf("jsruntime: stage the cache document: %w", err)
+	}
+	defer os.Remove(tmp.Name()) //nolint:errcheck // the rename below decides.
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("jsruntime: write the cache document: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("jsruntime: finish the cache document: %w", err)
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		return fmt.Errorf("jsruntime: seal the cache document: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("jsruntime: swap the cache document: %w", err)
+	}
+	return nil
 }

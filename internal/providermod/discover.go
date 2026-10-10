@@ -122,6 +122,7 @@ func runModule(
 		Workdir:        dir,
 		FileRoot:       dir,
 		MaxOutputBytes: opts.MaxOutputBytes,
+		CacheDir:       opts.CacheDir,
 		Config:         opts.Config,
 	}, nil, func(rt *jsruntime.Runtime, exports *jsruntime.Exports) error {
 		main := exports.Self()
