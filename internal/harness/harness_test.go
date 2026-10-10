@@ -21,6 +21,7 @@ import (
 	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/state"
 )
 
 // receivedRequest is the subset of a chat completions request the tests
@@ -649,6 +650,58 @@ func TestPrepare(t *testing.T) {
 			"a model named for a new session is what its header records")
 	})
 
+	t.Run("a switch remembers the model for the next startup", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+
+		// A switch through the picker writes the state file.
+		stored := env.prepare(t)
+		require.Equal(t, "fake/gpt-second", stored.ActiveModel())
+		require.NoError(t, stored.SetModel(t.Context(), "fake/test-model"))
+		require.NoError(t, stored.Close())
+		doc, err := state.Load(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, "fake/test-model", doc.LastModel)
+		info, err := os.Stat(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+		// The next startup starts from what the switch wrote, not from the
+		// roster head.
+		options := env.options()
+		prepared, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+		require.Equal(t, "fake/test-model", prepared.Info().Model)
+	})
+
+	t.Run("a stale remembered model falls back to the roster head", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+		require.NoError(t, state.Write(env.statePath, state.Doc{LastModel: "fake/ghost"}))
+
+		prepared, err := Prepare(t.Context(), env.options())
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+		require.Equal(t, "fake/gpt-second", prepared.Info().Model)
+	})
+
+	t.Run("an explicit model on the command line is remembered", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+
+		options := env.options()
+		options.ModelRef = "fake/test-model"
+		prepared, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+		require.Equal(t, "fake/test-model", prepared.Info().Model)
+
+		doc, err := state.Load(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, "fake/test-model", doc.LastModel)
+	})
+
 	t.Run("refuses a model the configuration does not hold", func(t *testing.T) {
 		env := newTestEnvironment(t, textScript("one"))
 
@@ -830,6 +883,58 @@ func TestSession(t *testing.T) {
 		require.Len(t, env.provider.requests, 3)
 		require.Equal(t, "gpt-summary", env.provider.requests[2].Model,
 			"an undeclared compaction model follows the model of the branch")
+	})
+
+	t.Run("a switch remembers the model for the next startup", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+
+		// A switch through the picker writes the state file.
+		stored := env.prepare(t)
+		require.Equal(t, "fake/gpt-second", stored.ActiveModel())
+		require.NoError(t, stored.SetModel(t.Context(), "fake/test-model"))
+		require.NoError(t, stored.Close())
+		doc, err := state.Load(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, "fake/test-model", doc.LastModel)
+		info, err := os.Stat(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+		// The next startup starts from what the switch wrote, not from the
+		// roster head.
+		options := env.options()
+		prepared, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+		require.Equal(t, "fake/test-model", prepared.Info().Model)
+	})
+
+	t.Run("a stale remembered model falls back to the roster head", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+		require.NoError(t, state.Write(env.statePath, state.Doc{LastModel: "fake/ghost"}))
+
+		prepared, err := Prepare(t.Context(), env.options())
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+		require.Equal(t, "fake/gpt-second", prepared.Info().Model)
+	})
+
+	t.Run("an explicit model on the command line is remembered", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+
+		options := env.options()
+		options.ModelRef = "fake/test-model"
+		prepared, err := Prepare(t.Context(), options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+		require.Equal(t, "fake/test-model", prepared.Info().Model)
+
+		doc, err := state.Load(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, "fake/test-model", doc.LastModel)
 	})
 
 	t.Run("refuses a model the configuration does not hold", func(t *testing.T) {

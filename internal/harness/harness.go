@@ -17,6 +17,7 @@ import (
 	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/jsruntime"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/state"
 	"github.com/varavelio/rienda/internal/tokens"
 	"github.com/varavelio/rienda/internal/tool"
 )
@@ -107,6 +108,11 @@ type Session struct {
 	// declared in the configuration and never stored, such as the extended
 	// thinking level of the model it runs.
 	resolver *modelResolver
+
+	// statePath is the global state file rememberModel writes the model a
+	// switch selects to. It is empty for a session built without one, which
+	// switches without touching the state.
+	statePath string
 }
 
 // Branch returns the entries of the active branch in conversation order, which
@@ -235,7 +241,36 @@ func (s *Session) SetModel(ctx context.Context, ref string) error {
 	if err := s.store.SetModel(ctx, ref); err != nil {
 		return fmt.Errorf("harness: %w", err)
 	}
+	s.rememberModel(ref)
 	return nil
+}
+
+// rememberModel records the model reference the user last switched to in the
+// global state file, which is the model a new session starts from. A failure
+// to write is logged and carried no further: the run itself already picked
+// the model, and remembering it is a convenience for the next startup, not a
+// guarantee the current one reports.
+func (s *Session) rememberModel(ref string) {
+	rememberLastModel(s.statePath, ref)
+}
+
+// rememberLastModel records ref as the model the user last switched to,
+// reading the document fresh so a writer who joined while the run was open
+// keeps its entries. A failure is logged on standard error and nothing else:
+// the memory is a startup convenience, never a run error.
+func rememberLastModel(path, ref string) {
+	if path == "" {
+		return
+	}
+	doc, err := state.Load(path)
+	if err != nil {
+		logProvider("state %s: %v; the last used model is not remembered", path, err)
+		return
+	}
+	doc.LastModel = ref
+	if err := state.Write(path, doc); err != nil {
+		logProvider("state %s: %v; the last used model is not remembered", path, err)
+	}
 }
 
 // ActiveThinking returns the thinking level the branch runs: the level the
@@ -361,6 +396,13 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
+	// An explicit model selection on the command line is a switch, so it is
+	// what the next startup remembers, exactly like a switch a front end
+	// makes once the session runs.
+	if strings.TrimSpace(opts.ModelRef) != "" {
+		rememberLastModel(userStatePath(opts), strings.TrimSpace(opts.ModelRef))
+	}
+
 	// Every model the discovered providers hold is resolvable by the engine,
 	// and the resolver caches one client per reference, so a session that
 	// switches model reuses the connections of the models it already talked
@@ -434,7 +476,17 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		interactor = jsruntime.ApproveAll(interactor)
 	}
 
-	return &Session{store: store, engine: runner, resolver: resolver, interactor: interactor}, nil
+	statePath := strings.TrimSpace(opts.StatePath)
+	if statePath == "" {
+		statePath = stateFile()
+	}
+	return &Session{
+		store:      store,
+		engine:     runner,
+		resolver:   resolver,
+		interactor: interactor,
+		statePath:  statePath,
+	}, nil
 }
 
 // hookResolver adapts a hook registry to the engine contract.

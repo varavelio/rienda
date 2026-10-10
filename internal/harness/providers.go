@@ -63,6 +63,16 @@ const credentialsEnvVar = "RIENDA_CREDENTIALS" //nolint:gosec // an environment 
 // stateEnvVar overrides the state file the same way.
 const stateEnvVar = "RIENDA_STATE"
 
+// stateFile returns the state file of the user: the one the environment
+// names, or the global one. It reports an empty path when no home can be
+// located, which the callers treat as no state at all.
+func stateFile() string {
+	if path := strings.TrimSpace(os.Getenv(stateEnvVar)); path != "" {
+		return path
+	}
+	return riendaHomeDir("state.json")
+}
+
 // Discover runs the provider discovery of an installation without a session:
 // the auth screen of the product lists what it returns. An installation whose
 // discovery fails yields no providers rather than refusing the screen, since
@@ -168,19 +178,25 @@ func credentialStore(opts Options) (*credentials.Store, error) {
 	return store, nil
 }
 
+// userStatePath returns the state file a run reads and writes, before any
+// fallback of its resolution.
+func userStatePath(opts Options) string {
+	if path := strings.TrimSpace(opts.StatePath); path != "" {
+		return path
+	}
+	return stateFile()
+}
+
 // userState loads the global state of a user from the state file of the run:
 // the requested one, the environment one, or the global one. A malformed
 // state degrades to the zero document with one logged warning.
 func userState(opts Options) state.Doc {
 	path := strings.TrimSpace(opts.StatePath)
 	if path == "" {
-		path = strings.TrimSpace(os.Getenv(stateEnvVar))
+		path = stateFile()
 	}
 	if path == "" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			path = filepath.Join(home, riendaDirName, "state.json")
-		}
+		return state.Doc{}
 	}
 	doc, err := state.Load(path)
 	if err != nil {
@@ -225,7 +241,7 @@ func initialModel(
 		}
 	}
 
-	doc := userState(Options{})
+	doc := userState(opts)
 	if doc.LastModel != "" {
 		if slices.Contains(roster, doc.LastModel) {
 			return doc.LastModel, nil
