@@ -5,7 +5,6 @@
 // The catalog is cached through ctx.cache under "models.dev", shared with
 // every other provider that reads the database.
 module.exports = function(ctx) {
-  let BASE_URL = "https://opencode.ai/zen/go/v1";
   let SESSION_HEADER = "x-opencode-session";
   let MODELS_DEV = "https://models.dev/api.json";
   let CACHE_KEY = "models.dev";
@@ -150,11 +149,17 @@ module.exports = function(ctx) {
     return models;
   }
 
+  let db = catalog();
+  let plan = db["opencode-go"] || {};
+  if (typeof plan.api !== "string" || plan.api === "") {
+    throw new Error("models.dev carries no api endpoint for opencode-go; restarting after a catalog refresh");
+  }
+
   return {
     protocol: "openai_chat_completions",
-    base_url: BASE_URL,
+    base_url: plan.api,
     session_header: SESSION_HEADER,
     auth: "api_key",
-    models: roster(catalog()),
+    models: roster(db),
   };
 };
