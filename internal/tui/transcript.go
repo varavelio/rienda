@@ -212,7 +212,7 @@ func (t *transcript) finishTurn(elapsed time.Duration) {
 // that started it, and the moment it closed, the assistant message that
 // answered it, so a slow provider that takes minutes to answer is reported
 // like any other turn.
-func (t *transcript) load(entries []session.Entry, agent string) {
+func (t *transcript) load(entries []session.Entry, agent string, name modelNameFunc) {
 	var opened time.Time
 	for _, entry := range entries {
 		// The branch is linear, so the agent of every turn is the one the
@@ -221,7 +221,7 @@ func (t *transcript) load(entries []session.Entry, agent string) {
 		if entry.Kind == session.KindAgent {
 			agent = entry.AgentID
 		}
-		t.fold(entry, agent)
+		t.fold(entry, agent, name)
 		switch {
 		case opensTurn(entry):
 			opened = entry.CreatedAt
@@ -240,13 +240,13 @@ func (t *transcript) load(entries []session.Entry, agent string) {
 // the agent the branch runs at that point. A compaction checkpoint and a
 // selection of what the branch runs carry no message of their own, so they are
 // shown for what they are instead of being folded as conversation.
-func (t *transcript) fold(entry session.Entry, agent string) {
+func (t *transcript) fold(entry session.Entry, agent string, name modelNameFunc) {
 	switch entry.Kind {
 	case session.KindCompaction:
 		t.addCompaction()
 		return
 	case session.KindAgent, session.KindModel:
-		t.addSwitch(entry)
+		t.addSwitch(entry, name)
 		return
 	}
 	// A stored entry is one message the session persisted: its blocks belong
@@ -297,13 +297,13 @@ func hasBlock(blocks []llm.Block, kind llm.BlockType) bool {
 // model that changed in the middle of the conversation. The conversation shows
 // it as a line of metadata between two turns, exactly as the tree shows it as a
 // node of its own, so a switch is never lost by reading one of the two.
-func (t *transcript) addSwitch(selection session.Entry) {
+func (t *transcript) addSwitch(selection session.Entry, name modelNameFunc) {
 	t.begin()
 	t.push(entry{
 		kind:          entrySwitch,
 		selectionKind: selection.Kind,
 		section:       t.section,
-		fragments:     []string{selectionText(selection)},
+		fragments:     []string{selectionText(selection, name)},
 	})
 }
 
@@ -321,16 +321,34 @@ func selectionLabel(kind session.Kind) string {
 // "coder → reviewer". The selection records the value it replaced when it is
 // written, so the transition reads off the entry alone. A selection that does
 // not carry it, which is the case of the ones written before the value was
-// recorded, reads as the value it selects.
-func selectionText(selection session.Entry) string {
+// recorded, reads as the value it selects. A model transition is named the way
+// the rest of the interface names a model, through name, so the reader never
+// has to decode a raw reference; a nil name leaves the references as they are.
+func selectionText(selection session.Entry, name modelNameFunc) string {
 	previous, next := selection.PreviousAgentID, selection.AgentID
 	if selection.Kind == session.KindModel {
-		previous, next = selection.PreviousModelRef, selection.ModelRef
+		previous, next = nameModel(name, selection.PreviousModelRef),
+			nameModel(name, selection.ModelRef)
 	}
 	if previous == "" {
 		return next
 	}
 	return previous + " → " + next
+}
+
+// modelNameFunc names a model reference for display. A nil value names a model
+// by its reference, which is what a caller without a configuration falls back
+// to.
+type modelNameFunc func(ref string) string
+
+// nameModel resolves a model reference through name, naming it by its
+// reference when no namer is given, so every caller stays safe without a
+// guard of its own.
+func nameModel(name modelNameFunc, ref string) string {
+	if name == nil {
+		return ref
+	}
+	return name(ref)
 }
 
 // addTool appends a tool invocation to the transcript. The invocation opens a

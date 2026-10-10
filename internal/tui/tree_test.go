@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
 )
@@ -68,7 +69,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("shows one node per turn", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, nil, "coder")
+		nodes := treeNodes(entries, branch, nil, "coder", nil)
 
 		require.Len(t, nodes, 5, "the tool results of a turn are an activity, not a turn")
 		require.Equal(
@@ -81,7 +82,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("places every turn in the tree", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, nil, "coder")
+		nodes := treeNodes(entries, branch, nil, "coder", nil)
 
 		require.Equal(
 			t,
@@ -117,7 +118,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("marks the branch the session leaves open", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, nil, "coder")
+		nodes := treeNodes(entries, branch, nil, "coder", nil)
 
 		require.Equal(
 			t,
@@ -138,7 +139,7 @@ func TestTreeNodes(t *testing.T) {
 			turnEntry("m2", "", llm.RoleUser, "again"),
 		}
 
-		nodes := treeNodes(entries, entries[1:], nil, "coder")
+		nodes := treeNodes(entries, entries[1:], nil, "coder", nil)
 
 		require.Equal(
 			t,
@@ -161,7 +162,7 @@ func TestTreeNodes(t *testing.T) {
 			turnEntry("m2", "m1", llm.RoleAssistant, "one"),
 		}
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Empty(t, nodes[0].guides, "the only first turn opens no level")
 		require.True(t, nodes[0].continued, "it continues the root instead")
@@ -174,7 +175,7 @@ func TestTreeNodes(t *testing.T) {
 			turnEntry("m2", "", llm.RoleUser, "again"),
 		}
 
-		nodes := treeNodes(entries, entries[1:], nil, "coder")
+		nodes := treeNodes(entries, entries[1:], nil, "coder", nil)
 
 		require.Equal(
 			t,
@@ -189,7 +190,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("shows the message of a turn on a single line", func(t *testing.T) {
 		entries := []session.Entry{turnEntry("m1", "", llm.RoleUser, "  fix\n\n the  bug ")}
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Equal(t, "fix the bug", nodes[0].text)
 	})
@@ -203,7 +204,7 @@ func TestTreeNodes(t *testing.T) {
 			},
 		}}
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Equal(t, "(no message)", nodes[0].text)
 	})
@@ -212,7 +213,7 @@ func TestTreeNodes(t *testing.T) {
 		entries := []session.Entry{turnEntry("m1", "", llm.RoleUser, "fix the bug")}
 		entries[0].Tag = "parser"
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Equal(t, "fix the bug parser", nodes[0].search())
 	})
@@ -228,7 +229,7 @@ func TestTreeNodes(t *testing.T) {
 			turnEntry("m5", "m2", llm.RoleAssistant, "other"),
 		}
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Equal(
 			t,
@@ -246,7 +247,7 @@ func TestTreeNodes(t *testing.T) {
 	t.Run("draws the lines that connect a subtree to its turn", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, nil, "coder")
+		nodes := treeNodes(entries, branch, nil, "coder", nil)
 
 		require.Equal(
 			t,
@@ -273,7 +274,7 @@ func TestTreeNodes(t *testing.T) {
 			turnEntry("m5", "m2", llm.RoleAssistant, "other"),
 		}
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Equal(
 			t,
@@ -286,7 +287,7 @@ func TestTreeNodes(t *testing.T) {
 	})
 
 	t.Run("shows nothing for a session without turns", func(t *testing.T) {
-		require.Empty(t, treeNodes(nil, nil, nil, "coder"))
+		require.Empty(t, treeNodes(nil, nil, nil, "coder", nil))
 	})
 }
 
@@ -311,7 +312,7 @@ func TestTreeFolding(t *testing.T) {
 	t.Run("keeps the turns inside a folded subtree out of the nodes", func(t *testing.T) {
 		entries, branch := branchedDialogue()
 
-		nodes := treeNodes(entries, branch, map[string]bool{"m2": true}, "coder")
+		nodes := treeNodes(entries, branch, map[string]bool{"m2": true}, "coder", nil)
 
 		require.Equal(
 			t,
@@ -517,7 +518,7 @@ func TestTreeWideFolding(t *testing.T) {
 // TestTreeForks verifies whether writing after a turn opens a branch.
 func TestTreeForks(t *testing.T) {
 	entries, branch := branchedDialogue()
-	nodes := treeNodes(entries, branch, nil, "coder")
+	nodes := treeNodes(entries, branch, nil, "coder", nil)
 	tree := tree{nodes: nodes}
 
 	t.Run("opens a branch after an answer that has turns after it", func(t *testing.T) {
@@ -546,7 +547,7 @@ func TestTreeCompaction(t *testing.T) {
 		}
 
 		require.True(t, isTreeNode(entry))
-		require.Equal(t, compactionBody, nodeText(entry))
+		require.Equal(t, compactionBody, nodeText(entry, nil))
 		require.Equal(t, "Compaction:", treeName(treeNode{entry: entry}))
 	})
 
@@ -678,7 +679,7 @@ func TestTreeSwitch(t *testing.T) {
 	t.Run("draws a selection as a node of its own", func(t *testing.T) {
 		entries := switches()
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Equal(
 			t,
@@ -697,7 +698,7 @@ func TestTreeSwitch(t *testing.T) {
 	t.Run("labels a selection with its transition", func(t *testing.T) {
 		entries := switches()
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Equal(t, "Agent switch:", treeName(nodes[2]))
 		require.Equal(t, "coder → reviewer", nodes[2].text)
@@ -705,10 +706,29 @@ func TestTreeSwitch(t *testing.T) {
 		require.Equal(t, "fake/test-model → fake/other-model", nodes[3].text)
 	})
 
+	t.Run("names the models of a switch the way the interface does", func(t *testing.T) {
+		entries := switches()
+		name := func(ref string) string {
+			return map[string]string{
+				"fake/test-model":  "Fake Provider · Test Model",
+				"fake/other-model": "Fake Provider · Other Model",
+			}[ref]
+		}
+
+		nodes := treeNodes(entries, entries, nil, "coder", name)
+
+		require.Equal(
+			t,
+			"Fake Provider · Test Model → Fake Provider · Other Model",
+			nodes[3].text,
+			"the tree reads the names, not the raw references",
+		)
+	})
+
 	t.Run("labels the answers with the agent the branch runs at the turn", func(t *testing.T) {
 		entries := switches()
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Equal(t, "coder", nodes[1].agent, "the answer before the switch keeps its agent")
 		require.Equal(t, "reviewer", nodes[5].agent, "the answer after carries the new agent")
@@ -717,7 +737,7 @@ func TestTreeSwitch(t *testing.T) {
 	t.Run("finds a selection by what it changed", func(t *testing.T) {
 		entries := switches()
 
-		nodes := treeNodes(entries, entries, nil, "coder")
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
 
 		require.Contains(t, nodes[2].search(), "reviewer")
 		require.Contains(t, nodes[2].search(), "Agent switch")
@@ -726,7 +746,7 @@ func TestTreeSwitch(t *testing.T) {
 	t.Run("marks a selection the session stands on as the turn it is at", func(t *testing.T) {
 		entries := switches()
 
-		nodes := treeNodes(entries, entries[:4], nil, "coder")
+		nodes := treeNodes(entries, entries[:4], nil, "coder", nil)
 
 		require.True(t, nodes[3].current, "the session stands on the model it just selected")
 	})
@@ -752,6 +772,26 @@ func TestTreeSwitch(t *testing.T) {
 			m.styles.metadata.title,
 			m.treeNameStyle(session.Entry{Kind: session.KindCompaction}),
 			"a checkpoint and a switch share the same faint style in the tree",
+		)
+	})
+
+	t.Run("renders a model switch with the display names of the models", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		stored.modelInfo = map[string]engine.ModelInfo{
+			"fake/test-model":  {ID: "test-model", Name: "Test Model", Provider: "Fake Provider"},
+			"fake/other-model": {ID: "other-model", Name: "Other Model", Provider: "Fake Provider"},
+		}
+		require.NoError(t, stored.store.SetModel(t.Context(), "fake/other-model"))
+		m.buildTree()
+
+		require.Contains(
+			t,
+			plain(m.render()),
+			"Model switch: Fake Provider · Test Model → Fake Provider · Other Model",
+			"the tree reads the names the interface shows elsewhere",
 		)
 	})
 }

@@ -183,7 +183,7 @@ func TestTranscript(t *testing.T) {
 			// reader, and the stored timestamps carry the whole wait.
 			messageEntryAt(base.Add(5*time.Minute), llm.RoleAssistant,
 				llm.Block{Type: llm.BlockText, Text: "finally"}),
-		}, "coder")
+		}, "coder", nil)
 
 		require.Len(t, conversation.entries, 2)
 		require.Equal(t, 5*time.Minute, conversation.entries[1].elapsed)
@@ -201,7 +201,7 @@ func TestTranscript(t *testing.T) {
 				llm.Block{Type: llm.BlockToolResult, ToolResultCallID: "c1"}),
 			messageEntryAt(base.Add(30*time.Second), llm.RoleAssistant,
 				llm.Block{Type: llm.BlockText, Text: "done"}),
-		}, "coder")
+		}, "coder", nil)
 
 		last := conversation.entries[len(conversation.entries)-1]
 		require.Equal(t, 30*time.Second, last.elapsed, "the whole turn counts")
@@ -214,7 +214,7 @@ func TestTranscript(t *testing.T) {
 		conversation.load([]session.Entry{
 			messageEntryAt(base, llm.RoleUser,
 				llm.Block{Type: llm.BlockText, Text: "never answered"}),
-		}, "coder")
+		}, "coder", nil)
 
 		require.Len(t, conversation.entries, 1)
 		require.Zero(t, conversation.entries[0].elapsed)
@@ -401,7 +401,7 @@ func TestTranscript(t *testing.T) {
 					{Type: llm.BlockText, Text: "a.txt"},
 				},
 			}),
-		}, "coder")
+		}, "coder", nil)
 
 		require.Len(t, conversation.entries, 4)
 		require.Equal(t, entryUser, conversation.entries[0].kind)
@@ -433,7 +433,7 @@ func TestTranscript(t *testing.T) {
 					{Type: llm.BlockText, Text: "boom"},
 				},
 			}),
-		}, "coder")
+		}, "coder", nil)
 
 		require.Len(t, conversation.entries, 1)
 		require.True(t, conversation.entries[0].toolDone)
@@ -508,6 +508,60 @@ func TestCutRunes(t *testing.T) {
 	})
 }
 
+// TestSelectionText verifies the transition a selection reads as: the values it
+// recorded, named the way the interface names them. A model is named through
+// the namer the caller supplies, and named by its reference when there is none,
+// so a caller without a configuration still reads the transition.
+func TestSelectionText(t *testing.T) {
+	// displayName names a model the way a configured provider would.
+	displayName := func(ref string) string {
+		return map[string]string{
+			"fake/test-model":  "Fake Provider · Test Model",
+			"fake/other-model": "Fake Provider · Other Model",
+		}[ref]
+	}
+
+	t.Run("names both models of a switch through the namer", func(t *testing.T) {
+		selection := session.Entry{
+			Kind:             session.KindModel,
+			ModelRef:         "fake/other-model",
+			PreviousModelRef: "fake/test-model",
+		}
+
+		require.Equal(
+			t,
+			"Fake Provider · Test Model → Fake Provider · Other Model",
+			selectionText(selection, displayName),
+		)
+	})
+
+	t.Run("names a model by its reference without a namer", func(t *testing.T) {
+		selection := session.Entry{
+			Kind:             session.KindModel,
+			ModelRef:         "fake/other-model",
+			PreviousModelRef: "fake/test-model",
+		}
+
+		require.Equal(t, "fake/test-model → fake/other-model", selectionText(selection, nil))
+	})
+
+	t.Run("reads a selection with no previous value as the value it selects", func(t *testing.T) {
+		selection := session.Entry{Kind: session.KindModel, ModelRef: "fake/other-model"}
+
+		require.Equal(t, "Fake Provider · Other Model", selectionText(selection, displayName))
+	})
+
+	t.Run("leaves an agent switch on the agent identifiers", func(t *testing.T) {
+		selection := session.Entry{
+			Kind:            session.KindAgent,
+			AgentID:         "reviewer",
+			PreviousAgentID: "coder",
+		}
+
+		require.Equal(t, "coder → reviewer", selectionText(selection, displayName))
+	})
+}
+
 // TestTranscriptCompaction verifies the checkpoint block of the conversation.
 func TestTranscriptCompaction(t *testing.T) {
 	t.Run("appends a checkpoint on the end event", func(t *testing.T) {
@@ -531,7 +585,7 @@ func TestTranscriptCompaction(t *testing.T) {
 				CompactionSummary: "the summary",
 				CompactionKeptID:  "u1",
 			},
-		}, "coder")
+		}, "coder", nil)
 
 		require.Len(t, folded.entries, 2)
 		require.Equal(t, entryUser, folded.entries[0].kind)
@@ -564,7 +618,7 @@ func TestTranscriptSwitch(t *testing.T) {
 				ModelRef:         "fake/other-model",
 				PreviousModelRef: "fake/test-model",
 			},
-		}, "coder")
+		}, "coder", nil)
 
 		require.Len(t, folded.entries, 3)
 		require.Equal(t, entrySwitch, folded.entries[1].kind)
@@ -582,7 +636,7 @@ func TestTranscriptSwitch(t *testing.T) {
 
 			folded.load([]session.Entry{
 				{ID: "a1", Kind: session.KindAgent, AgentID: "reviewer"},
-			}, "coder")
+			}, "coder", nil)
 
 			require.Len(t, folded.entries, 1)
 			require.Equal(t, "reviewer", folded.entries[0].text(),
@@ -596,7 +650,7 @@ func TestTranscriptSwitch(t *testing.T) {
 		folded.load([]session.Entry{
 			{ID: "u1", Kind: session.KindMessage, Message: textMessage(llm.RoleUser, "hello")},
 			{ID: "a1", Kind: session.KindAgent, AgentID: "reviewer"},
-		}, "coder")
+		}, "coder", nil)
 
 		require.Equal(t, "reviewer", folded.agent,
 			"the answers that stream next are labeled with the agent that writes them")

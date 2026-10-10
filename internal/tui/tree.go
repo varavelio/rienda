@@ -97,6 +97,10 @@ type tree struct {
 	// written before the first agent selection of the branch.
 	owner string
 
+	// name names the model references a selection switched between, so the
+	// tree rebuilds its nodes the same way it first built them.
+	name modelNameFunc
+
 	// folded names the turns whose children the user hid, by entry identifier.
 	// It is what the reader decided, not what the session stores, so it lives
 	// with the screen and is gone once the tree closes. The empty set shows
@@ -230,7 +234,12 @@ func newTreeScreen(text func(int) string, base styles, isDark bool) tree {
 // of a subtree stay together under the turn they follow however late they were
 // written: a branch opened from a turn of the past lands beside it, not at the
 // end of the tree.
-func treeNodes(entries, branch []session.Entry, folded map[string]bool, owner string) []treeNode {
+func treeNodes(
+	entries, branch []session.Entry,
+	folded map[string]bool,
+	owner string,
+	name modelNameFunc,
+) []treeNode {
 	active := make(map[string]bool, len(branch))
 	for _, entry := range branch {
 		active[entry.ID] = true
@@ -277,7 +286,7 @@ func treeNodes(entries, branch []session.Entry, folded map[string]bool, owner st
 		entry := stored[id]
 		node := treeNode{
 			entry:     entry,
-			text:      nodeText(entry),
+			text:      nodeText(entry, name),
 			agent:     effective[entry.ParentID],
 			parent:    parent,
 			guides:    guides,
@@ -368,13 +377,14 @@ func isTreeNode(entry session.Entry) bool {
 
 // nodeText returns the text of one node of the tree on a single line, so a node
 // never takes more than one row: the message of a turn, the transition a
-// selection wrote, or the note that names a checkpoint.
-func nodeText(entry session.Entry) string {
+// selection wrote, or the note that names a checkpoint. A model transition is
+// named the way the rest of the interface names a model, through name.
+func nodeText(entry session.Entry, name modelNameFunc) string {
 	switch entry.Kind {
 	case session.KindCompaction:
 		return compactionBody
 	case session.KindAgent, session.KindModel:
-		return selectionText(entry)
+		return selectionText(entry, name)
 	}
 
 	text := strings.Join(strings.Fields(textOf(entry.Message.Blocks)), " ")
@@ -391,7 +401,7 @@ func nodeText(entry session.Entry) string {
 func (t *tree) fold(folded map[string]bool) {
 	held := t.entryID(t.filter.selected())
 	t.folded = folded
-	t.nodes = treeNodes(t.entries, t.branch, t.folded, t.owner)
+	t.nodes = treeNodes(t.entries, t.branch, t.folded, t.owner, t.name)
 	t.filter.setCount(len(t.nodes))
 	t.filter.cursor = t.focusOn(held)
 }
@@ -472,7 +482,9 @@ func (t *tree) toggleAll() {
 	}
 
 	folded := make(map[string]bool)
-	for _, node := range treeNodes(t.entries, t.branch, nil, t.owner) {
+	// The text of the nodes is never read here, so the models are named by
+	// their references: folding cares only about the shape of the tree.
+	for _, node := range treeNodes(t.entries, t.branch, nil, t.owner, nil) {
 		if node.children > 0 {
 			folded[node.entry.ID] = true
 		}
@@ -486,7 +498,7 @@ func (t *tree) toggleAll() {
 // branch keeps it as it is, which makes the fold safe to repeat.
 func (t *tree) foldOthers() {
 	folded := make(map[string]bool)
-	for _, node := range treeNodes(t.entries, t.branch, nil, t.owner) {
+	for _, node := range treeNodes(t.entries, t.branch, nil, t.owner, nil) {
 		if node.children > 0 && !node.active {
 			folded[node.entry.ID] = true
 		}

@@ -435,6 +435,22 @@ func (m *model) pickerLine(position int) string {
 	return m.clip(line)
 }
 
+// modelNamer returns a function that names a model reference the way the
+// interface reads it: the provider and the model as display names, or the
+// reference when the configuration no longer holds it. It is handed to the
+// tree and the conversation so a switch reads with the names the user sees
+// everywhere else instead of the raw references the session stores. The
+// lookup reads the immutable declarations, so it is safe to call while a run
+// holds the session.
+func (m *model) modelNamer() modelNameFunc {
+	return func(ref string) string {
+		if m.session == nil {
+			return ref
+		}
+		return modelSwitchName(ref, m.session.ModelInfo(ref))
+	}
+}
+
 // modelName returns the name the interface shows a model by on its own, without
 // the reference that addresses it: the wire identifier the provider receives,
 // which is the real model, together with the extended thinking level the
@@ -458,6 +474,18 @@ func modelLabel(ref string, info engine.ModelInfo) string {
 		return providerLabel(ref, info) + ": " + description
 	}
 	return ref
+}
+
+// modelSwitchName renders a model reference as one half of a switch marker:
+// the provider and the model, joined the way the header reads them, so a line
+// that shows two models names both the same way the rest of the interface
+// does. A reference the configuration no longer holds falls back to the
+// reference itself, so a switch that is gone still reads as something.
+func modelSwitchName(ref string, info engine.ModelInfo) string {
+	if info.ID == "" {
+		return ref
+	}
+	return providerLabel(ref, info) + " · " + modelDescription(info)
 }
 
 // providerLabel returns the name the interface shows the provider of a model

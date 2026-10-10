@@ -1587,7 +1587,7 @@ func BenchmarkStreamBurst(b *testing.B) {
 	for i := 0; b.Loop(); i++ {
 		if i%benchResetEvery == 0 {
 			m.transcript = transcript{}
-			m.transcript.load(history, "coder")
+			m.transcript.load(history, "coder", nil)
 		}
 		m.Update(burst)
 	}
@@ -2074,6 +2074,36 @@ func TestTreeRoot(t *testing.T) {
 
 // TestChatSwitch verifies that a selection of what the branch runs is shown in
 // the conversation as a line of metadata between two turns.
+// TestModelSwitchName verifies how one model is named in a switch marker: the
+// provider and the model as display names, with each name falling back to what
+// it has when the provider declares none.
+func TestModelSwitchName(t *testing.T) {
+	t.Run("joins the provider and the model display names", func(t *testing.T) {
+		got := modelSwitchName("opencode-go/deepseek-v4.1-flash", engine.ModelInfo{
+			ID: "deepseek-v4.1-flash", Name: "DeepSeek V4.1 Flash", Provider: "OpenCode Go",
+		})
+		require.Equal(t, "OpenCode Go · DeepSeek V4.1 Flash", got)
+	})
+
+	t.Run("falls back to the model id when it declares no name", func(t *testing.T) {
+		got := modelSwitchName("opencode-go/mimo-v2.6", engine.ModelInfo{
+			ID: "mimo-v2.6", Provider: "OpenCode Go",
+		})
+		require.Equal(t, "OpenCode Go · mimo-v2.6", got)
+	})
+
+	t.Run("falls back to the reference for a model it does not hold", func(t *testing.T) {
+		require.Equal(
+			t,
+			"opencode-go/mimo-v2.6",
+			modelSwitchName("opencode-go/mimo-v2.6", engine.ModelInfo{}),
+		)
+	})
+}
+
+// TestChatSwitch verifies the selection a switch writes reads as a line of
+// metadata between two turns, named the way the rest of the interface names
+// what it switched between.
 func TestChatSwitch(t *testing.T) {
 	t.Run("renders a switch as a line of the conversation", func(t *testing.T) {
 		m, stored := storeChat(t,
@@ -2105,6 +2135,27 @@ func TestChatSwitch(t *testing.T) {
 		// conversation never makes one look like a voice and the other like a
 		// note.
 		require.Equal(t, m.styles.metadata.title, m.styles.metadata.markerStyle)
+	})
+
+	t.Run("names the models of a switch with their display names", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		stored.modelInfo = map[string]engine.ModelInfo{
+			"fake/test-model":  {ID: "test-model", Name: "Test Model", Provider: "Fake Provider"},
+			"fake/other-model": {ID: "other-model", Name: "Other Model", Provider: "Fake Provider"},
+		}
+		update(t, m, windowMsg(80, 40))
+		require.NoError(t, stored.store.SetModel(t.Context(), "fake/other-model"))
+		m.reloadTranscript()
+
+		require.Contains(
+			t,
+			plain(m.render()),
+			"▌ Model switch: Fake Provider · Test Model → Fake Provider · Other Model",
+			"the switch reads the names the user sees everywhere else",
+		)
 	})
 
 	t.Run("keeps a long switch inside the row", func(t *testing.T) {

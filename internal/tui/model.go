@@ -1877,8 +1877,11 @@ func (m *model) buildTree() {
 	m.tree.entries = m.session.Tree()
 	m.tree.branch = m.session.Branch()
 	m.tree.owner = m.session.Info().Agent
+	m.tree.name = m.modelNamer()
 	m.tree.folded = make(map[string]bool)
-	m.tree.nodes = treeNodes(m.tree.entries, m.tree.branch, m.tree.folded, m.session.Info().Agent)
+	m.tree.nodes = treeNodes(
+		m.tree.entries, m.tree.branch, m.tree.folded, m.session.Info().Agent, m.modelNamer(),
+	)
 	m.tree.filter.setCount(len(m.tree.nodes))
 	m.tree.filter.reset()
 	m.tree.editing = false
@@ -2629,7 +2632,7 @@ func (m *model) reloadTranscript() {
 	m.identity = identityFrom(m.session)
 	m.refreshRunnable()
 	m.transcript = transcript{}
-	m.transcript.load(m.session.DisplayedBranch(), m.session.Info().Agent)
+	m.transcript.load(m.session.DisplayedBranch(), m.session.Info().Agent, m.modelNamer())
 	m.invalidateTranscript()
 	m.refreshTranscript()
 }
