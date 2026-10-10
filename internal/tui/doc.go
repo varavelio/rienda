@@ -64,7 +64,15 @@
 // conversation on demand, and holds the options of the harness. What a
 // conversation runs is also reachable through the leader key: ctrl+x followed
 // by a opens the picker over the agents and ctrl+x m the picker over the models
-// of the configuration. Both pickers mark what the session already runs, and
+// of the configuration, and ctrl+x p pins or unpins the model under the
+// highlight of the model list. The pinned models lead the model list under the
+// pin mark, in the order they were pinned, and tab on the prompt cycles the
+// model of the conversation through them, the same switch the list performs,
+// announced in the status line. Since the roster of a well-stocked install runs
+// long, the pins are how the few models a user moves between stay one key
+// apart; a pin the roster no longer holds is left out of the cycle and kept in
+// the state file, so the record of what was pinned survives a provider that
+// moves its models around. Both pickers mark what the session already runs, and
 // choosing an entry appends the selection to the branch, so the turns written
 // before it keep the agent and the model that produced them, another branch of
 // the session keeps its own, and the tree and the conversation label every

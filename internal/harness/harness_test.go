@@ -962,6 +962,92 @@ func TestSession(t *testing.T) {
 	})
 }
 
+// TestPinnedModels verifies the session side of the feature: the pins the
+// interface cycles are read from the state file, validated against the roster
+// the session may run, and written back through the same file.
+func TestPinnedModels(t *testing.T) {
+	t.Run("an absent state file holds no pins", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		prepared := env.prepare(t)
+
+		require.Empty(t, prepared.PinnedModels())
+	})
+
+	t.Run("pins survive in the order they were pinned", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+		prepared := env.prepare(t)
+
+		_, err := prepared.TogglePin("fake/gpt-second")
+		require.NoError(t, err)
+		_, err = prepared.TogglePin("fake/test-model")
+		require.NoError(t, err)
+
+		require.Equal(t, []string{"fake/gpt-second", "fake/test-model"}, prepared.PinnedModels())
+	})
+
+	t.Run("a pin names a provider and a model the session knows", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		prepared := env.prepare(t)
+		require.NoError(t, state.Write(env.statePath, state.Doc{PinnedModels: []string{
+			"fake/ghost",
+			"ghost/test-model",
+			"fake/test-model",
+		}}))
+
+		require.Equal(t, []string{"fake/test-model"}, prepared.PinnedModels())
+	})
+
+	t.Run("a duplicate counts once at its first occurrence", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		env.writeSecondModel(t, "second-model", "gpt-second")
+		prepared := env.prepare(t)
+		require.NoError(t, state.Write(env.statePath, state.Doc{PinnedModels: []string{
+			"fake/test-model",
+			"fake/gpt-second",
+			"fake/test-model",
+		}}))
+
+		require.Equal(t, []string{"fake/test-model", "fake/gpt-second"}, prepared.PinnedModels())
+	})
+
+	t.Run("a malformed state file degrades to no pins", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		prepared := env.prepare(t)
+		require.NoError(t, os.WriteFile(env.statePath, []byte("{{{"), 0o600))
+
+		require.Empty(t, prepared.PinnedModels())
+	})
+
+	t.Run("unpinning through the session removes the reference", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		prepared := env.prepare(t)
+
+		pinned, err := prepared.TogglePin("fake/test-model")
+		require.NoError(t, err)
+		require.True(t, pinned)
+		require.Equal(t, []string{"fake/test-model"}, prepared.PinnedModels())
+
+		pinned, err = prepared.TogglePin("fake/test-model")
+		require.NoError(t, err)
+		require.False(t, pinned)
+		require.Empty(t, prepared.PinnedModels())
+	})
+
+	t.Run("a malformed state file refuses the toggle", func(t *testing.T) {
+		env := newTestEnvironment(t, textScript("one"))
+		prepared := env.prepare(t)
+		require.NoError(t, os.WriteFile(env.statePath, []byte("{{{"), 0o600))
+
+		_, err := prepared.TogglePin("fake/test-model")
+
+		require.Error(t, err)
+		data, err := os.ReadFile(env.statePath)
+		require.NoError(t, err)
+		require.Equal(t, "{{{", string(data), "the corrupt file is never overwritten")
+	})
+}
+
 // TestSessions verifies session listing.
 func TestSessions(t *testing.T) {
 	t.Run("lists the sessions of the workspace", func(t *testing.T) {

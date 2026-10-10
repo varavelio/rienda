@@ -142,6 +142,12 @@ const (
 
 	// keyLeaderModel changes the model the branch runs.
 	keyLeaderModel = "m"
+
+	// keyLeaderPin pins or unpins the model under the highlight of the model
+	// list. It belongs to the leader key like the other chords, so it can
+	// never collide with a key a phase uses, and it acts only where there is
+	// a model to pin.
+	keyLeaderPin = "p"
 )
 
 // pickerMode selects what the picker offers, which the interface shows and what
@@ -450,6 +456,17 @@ type Session interface {
 	// runs on the model that was in effect there.
 	SetModel(ctx context.Context, ref string) error
 
+	// PinnedModels returns the model references the user pinned, in pin
+	// order, which is the order the cycle runs them in. The session keeps
+	// only the references of the roster it may run, so a pin whose provider
+	// or model is gone never reaches the interface.
+	PinnedModels() []string
+
+	// TogglePin pins the reference when it is not pinned and unpins it when
+	// it is, reporting whether it ended up pinned. The failure of the write
+	// is returned, because pinning is an explicit action.
+	TogglePin(ref string) (bool, error)
+
 	// ActiveThinking returns the thinking mode the branch runs: empty for
 	// off, otherwise the level the user picked for it.
 	ActiveThinking() string
@@ -717,6 +734,18 @@ type model struct {
 	// agent of the open conversation, or the model of the open conversation.
 	pickerMode pickerMode
 
+	// pinned holds the pinned models the open session may run, in pin order,
+	// which is the order tab cycles them in and the model list marks them in.
+	// It is read from the session when one opens and recomputed after every
+	// pin toggle, the only change the user can make while the interface runs.
+	pinned []string
+
+	// pickerRoster is the model roster the open picker shows, with the pinned
+	// models first. It is built once when the picker opens and rebuilt after
+	// every pin toggle, because the list reads it for each entry it filters
+	// and the ordering must cost one pass, not one pass per entry.
+	pickerRoster []string
+
 	// rewound reports that the session was moved back to an earlier turn, which
 	// the block above the prompt announces until the next message is sent.
 	rewound bool
@@ -849,7 +878,7 @@ func (m *model) startText(index int) string {
 // what describes it as well as by the reference that names it.
 func (m *model) pickerText(index int) string {
 	if m.pickerMode == pickerModel {
-		ref := m.session.Models()[index]
+		ref := m.roster()[index]
 		return modelLabel(ref, m.session.ModelInfo(ref))
 	}
 	definition := m.agents[index]
@@ -1126,9 +1155,14 @@ func (m *model) handleLeaderKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		return m.openSwitchPicker(pickerAgent), true
 	case keyLeaderModel:
 		return m.openSwitchPicker(pickerModel), true
+	case keyLeaderPin:
+		return m.togglePinnedModel(), true
 	}
 	return nil, true
 }
+
+// modelStatus opens the line a model cycle announces its result in.
+const modelStatus = "model: "
 
 // thinkingOff names the mode the cycling rests on when no thinking reaches
 // the wire at all. It starts the roster, so a model with modes cycles off
@@ -1168,6 +1202,46 @@ func (m *model) cycleThinking() {
 func (m *model) cycleThinkingCommand() tea.Cmd {
 	m.cycleThinking()
 	return nil
+}
+
+// cyclePinnedModel moves the model of the branch one step forward through the
+// pinned models the session may run and reports the model it landed on, so the
+// press reads what the conversation runs now without leaving it. It is the
+// same switch the model list performs, announced in one line.
+func (m *model) cyclePinnedModel() {
+	if !m.switchReady() {
+		return
+	}
+
+	next, ok := nextPinned(pinnedRoster(m.session.Models(), m.pinned), m.session.ActiveModel())
+	if !ok {
+		return
+	}
+	if err := m.switchModel(next); err != nil {
+		m.status = err.Error()
+		return
+	}
+	m.status = modelStatus + modelLabel(next, m.session.ModelInfo(next))
+}
+
+// nextPinned returns the pinned model a cycle lands on: the successor of
+// active, wrapping to the first, or the first pinned model when active carries
+// no pin. It reports false when the cycle holds nothing or would land on
+// active itself, which makes the press a no-op instead of a switch that only
+// redraws what already runs.
+func nextPinned(cycled []string, active string) (string, bool) {
+	if len(cycled) == 0 {
+		return "", false
+	}
+	index := slices.Index(cycled, active)
+	if index < 0 {
+		return cycled[0], true
+	}
+	next := cycled[(index+1)%len(cycled)]
+	if next == active {
+		return "", false
+	}
+	return next, true
 }
 
 // currentThinking names the mode the thinking of the branch runs: the one it
@@ -1220,6 +1294,9 @@ func (m *model) openSwitchPicker(mode pickerMode) tea.Cmd {
 	}
 
 	m.pickerMode = mode
+	if mode == pickerModel {
+		m.refreshPickerRoster()
+	}
 	m.picker.setCount(len(m.roster()))
 	m.picker.reset()
 	if index := slices.Index(m.roster(), m.activeRef()); index >= 0 {
@@ -1242,17 +1319,90 @@ func (m *model) openModelPicker() tea.Cmd {
 	return m.openSwitchPicker(pickerModel)
 }
 
+// refreshPickerRoster rebuilds the ordered model roster the open picker shows
+// from the models the session offers and the pins it holds. It is called when
+// the picker opens and after every pin toggle.
+func (m *model) refreshPickerRoster() {
+	if m.session == nil {
+		m.pickerRoster = nil
+		return
+	}
+	m.pickerRoster = orderPinned(m.session.Models(), m.pinned)
+}
+
+// orderPinned returns the roster with the pinned models first, in pin order,
+// followed by the rest of the roster in its own order. A pin the roster does
+// not hold is skipped and a duplicate counts once, at its first occurrence, so
+// a hand-edited state file never shows a model twice and never shows one the
+// session cannot run.
+func orderPinned(roster, pins []string) []string {
+	ordered := pinnedRoster(roster, pins)
+	for _, ref := range roster {
+		if !slices.Contains(ordered, ref) {
+			ordered = append(ordered, ref)
+		}
+	}
+	return ordered
+}
+
+// pinnedRoster returns the pinned models the roster offers, in pin order,
+// which is the list the tab cycle runs through. A pin the roster does not hold
+// is skipped and a duplicate counts once, at its first occurrence, so a
+// hand-edited state file never cycles to a model twice or to one the session
+// cannot run.
+func pinnedRoster(roster, pins []string) []string {
+	held := make([]string, 0, len(pins))
+	for _, ref := range pins {
+		if slices.Contains(roster, ref) && !slices.Contains(held, ref) {
+			held = append(held, ref)
+		}
+	}
+	return held
+}
+
 // roster returns the entries the picker offers in its current mode: the agent
-// definitions of the interface, or the model references of the session.
+// definitions of the interface, or the model references the open picker shows,
+// with the pinned models first in pin order.
 func (m *model) roster() []string {
 	if m.pickerMode == pickerModel && m.session != nil {
-		return m.session.Models()
+		return m.pickerRoster
 	}
 	ids := make([]string, 0, len(m.agents))
 	for _, definition := range m.agents {
 		ids = append(ids, definition.ID)
 	}
 	return ids
+}
+
+// togglePinnedModel pins or unpins the model under the highlight of the model
+// list, the only place the chord has a model to act on. The session writes the
+// state file and the list is rebuilt around the new order, with the highlight
+// left on the model it was on before its row moved. A failed write reaches the
+// status line, where the user reads why nothing was pinned.
+func (m *model) togglePinnedModel() tea.Cmd {
+	if m.phase != phasePicker || m.pickerMode != pickerModel || m.session == nil {
+		return nil
+	}
+	index := m.picker.selected()
+	if index < 0 {
+		return nil
+	}
+	ref := m.roster()[index]
+
+	if _, err := m.session.TogglePin(ref); err != nil {
+		m.status = err.Error()
+		return nil
+	}
+
+	// The pins are read back from the session rather than toggled in place, so
+	// the list shows the same validated order the tab cycle runs through.
+	m.pinned = m.session.PinnedModels()
+	m.refreshPickerRoster()
+	m.picker.setCount(len(m.roster()))
+	if position := slices.Index(m.roster(), ref); position >= 0 {
+		m.selectPickerEntry(position)
+	}
+	return nil
 }
 
 // activeRef returns what the session runs in the current mode, so the picker
@@ -1446,10 +1596,9 @@ func (m *model) applySwitch(ref string) tea.Cmd {
 	m.pickerMode = pickerNewAgent
 
 	var err error
-	switch mode {
-	case pickerModel:
-		err = m.session.SetModel(context.Background(), ref)
-	default:
+	if mode == pickerModel {
+		err = m.switchModel(ref)
+	} else {
 		err = m.session.SetAgent(context.Background(), ref)
 	}
 	if err != nil {
@@ -1459,10 +1608,32 @@ func (m *model) applySwitch(ref string) tea.Cmd {
 
 	// The conversation keeps its turns and changes what runs them from here
 	// on, so the transcript is rebuilt to label and measure it with the
-	// selection.
+	// selection. A model switch already refreshed it in switchModel, which the
+	// agent selection repeats so both selections leave the same state behind.
+	m.refreshBranch()
+	return m.showChat()
+}
+
+// switchModel moves the branch of the session to ref and refreshes what the
+// interface reads of it. It is the one path a model change takes, shared by
+// the model list and the tab cycle, so the two can never disagree about what
+// changing a model does.
+func (m *model) switchModel(ref string) error {
+	//nolint:wrapcheck // the interface surfaces the session failure as it is.
+	if err := m.session.SetModel(context.Background(), ref); err != nil {
+		return err
+	}
+	m.refreshBranch()
+	return nil
+}
+
+// refreshBranch rebuilds everything the interface derives from the branch:
+// the transcript, which also refreshes the identity it labels the header
+// with, and the measurement of the context the footer shows. Every change to
+// the branch calls it, so what the interface reads never lags the session.
+func (m *model) refreshBranch() {
 	m.reloadTranscript()
 	m.refreshContext()
-	return m.showChat()
 }
 
 // toggleSettings opens the command center, or closes it when it is already
@@ -1921,6 +2092,11 @@ func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
 		return m.requestInterrupt()
 	case keyEnter:
 		return m.submit()
+	case keyTab:
+		// The mention menu already took the key when it was open, so a tab
+		// that reaches this point belongs to the model cycle.
+		m.cyclePinnedModel()
+		return nil
 	case keyUp, keyDown:
 		// A multi-line prompt owns the arrows; a single-line one leaves them
 		// to the transcript.
@@ -2050,6 +2226,7 @@ func sessionCommand(prepare func() (Session, error)) tea.Cmd {
 // enterChat switches the interface to the conversation of a ready session.
 func (m *model) enterChat(prepared Session) tea.Cmd {
 	m.session = prepared
+	m.pinned = prepared.PinnedModels()
 	m.phase = phaseChat
 	m.cancel = nil
 	m.events = nil

@@ -41,6 +41,93 @@ func showAllPreferences() preferences {
 }
 
 // TestView verifies the rendering of every phase of the interface.
+// TestPickerMarks verifies how the model list shows the pins: the pinned
+// models first in pin order, every row opening at the same column, and the
+// running model still marked.
+func TestPickerMarks(t *testing.T) {
+	modelPicker := func(t *testing.T, pinned []string) *model {
+		t.Helper()
+		scripted := newFakeSession()
+		scripted.models = []string{"fake/a", "fake/b", "fake/c"}
+		scripted.activeModel = "fake/b"
+		scripted.pinned = pinned
+		scripted.modelInfo = map[string]engine.ModelInfo{
+			"fake/a": {ID: "a-real"},
+			"fake/b": {ID: "b-real"},
+			"fake/c": {ID: "c-real"},
+		}
+		m := newTestModel(
+			t,
+			[]agent.Agent{{ID: "coder", Description: "A test agent"}},
+			0,
+			func(string) (Session, error) { return scripted, nil },
+		)
+		run(t, m, m.Init())
+		update(t, m, windowMsg(80, 24))
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+		require.Equal(t, phasePicker, m.phase)
+		return m
+	}
+
+	t.Run("pinned models come first and carry the mark", func(t *testing.T) {
+		view := plain(modelPicker(t, []string{"fake/c"}).render())
+
+		require.Contains(t, view, "● fake: c-real")
+		require.Less(t, strings.Index(view, "● fake: c-real"), strings.Index(view, "fake: a-real"),
+			"the pinned model leads the list")
+	})
+
+	t.Run("every row starts at the same column", func(t *testing.T) {
+		view := plain(modelPicker(t, []string{"fake/c"}).render())
+
+		// Two rows that carry no cursor mark, one pinned and one not, so the
+		// measured column holds the pin prefix alone.
+		prefixWidth := func(ref string) int {
+			line := lineOf(view, ref)
+			start := strings.Index(line, ref)
+			require.GreaterOrEqual(t, start, 0, "the row of %s is rendered", ref)
+			return ansi.StringWidth(line[:start])
+		}
+		require.Equal(t, prefixWidth("fake: a-real"), prefixWidth("fake: c-real"),
+			"the pin prefix keeps the rows aligned")
+	})
+
+	t.Run("the running model keeps its current mark", func(t *testing.T) {
+		view := plain(modelPicker(t, []string{"fake/c"}).render())
+
+		require.Contains(t, lineOf(view, "fake: b-real"), "current")
+	})
+
+	t.Run("an unpinned list shows no pin mark", func(t *testing.T) {
+		view := plain(modelPicker(t, nil).render())
+
+		require.NotContains(t, view, "●")
+	})
+
+	t.Run("the model list names the pin chord", func(t *testing.T) {
+		view := plain(modelPicker(t, nil).render())
+
+		require.Contains(t, view,
+			"type to filter · ↑/↓ move · enter select · ctrl+x p pin/unpin")
+	})
+
+	t.Run("the agent list leaves the pin chord out", func(t *testing.T) {
+		m := newTestModel(
+			t,
+			[]agent.Agent{{ID: "coder", Description: "Writes code"}},
+			-1,
+			func(string) (Session, error) { return newFakeSession(), nil },
+		)
+		update(t, m, windowMsg(80, 24))
+
+		view := plain(m.render())
+
+		require.Contains(t, view, "enter select")
+		require.NotContains(t, view, "ctrl+x p")
+	})
+}
+
 func TestView(t *testing.T) {
 	t.Run("renders the agent picker", func(t *testing.T) {
 		m := newTestModel(

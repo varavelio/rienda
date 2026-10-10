@@ -282,6 +282,25 @@ func (m *model) row(highlighted bool, label string) string {
 	return m.clip(cursorMark(false) + label)
 }
 
+// pinMark opens the row of a pinned model, the solid glyph the tree already
+// uses for its own marks, so the two lists read alike.
+const pinMark = "●"
+
+// pinPrefix returns what opens a row of the model list: the pin mark for a
+// pinned model, and a blank of the same width for any other entry, so every
+// row starts at the same column. It is nothing outside the model list.
+func (m *model) pinPrefix(entry string) string {
+	if m.pickerMode != pickerModel {
+		return ""
+	}
+	if slices.Contains(m.pinned, entry) {
+		return pinMark + " "
+	}
+	// The blank matches the mark in columns, not in bytes: the glyph is more
+	// than one byte long.
+	return strings.Repeat(" ", utf8.RuneCountInString(pinMark)+1)
+}
+
 // listRows returns the list rows that fit on screen outside the fixed lines of
 // the list phases.
 func (m *model) listRows() int {
@@ -361,6 +380,9 @@ func (m *model) viewPicker() string {
 	// which is the case whenever the workspace holds a previous session and
 	// the list is not changing what the open conversation runs.
 	hint := "type to filter · ↑/↓ move · enter select"
+	if m.pickerMode == pickerModel {
+		hint += " · ctrl+x p pin/unpin"
+	}
 	if m.pickerMode == pickerNewAgent && len(m.starts) > 1 {
 		hint += " · esc back"
 	}
@@ -396,7 +418,10 @@ func (m *model) pickerLine(position int) string {
 		label = modelLabel(entry, m.session.ModelInfo(entry))
 	}
 
-	line := m.row(position == m.picker.cursor, label)
+	// A pinned model opens its row with the pin marker, and a model that is
+	// not pinned opens it with a blank of the same width, so the rows of the
+	// list stay aligned whatever the user pins.
+	line := m.row(position == m.picker.cursor, m.pinPrefix(entry)+label)
 	if m.pickerMode != pickerNewAgent && m.session != nil && entry == m.activeRef() {
 		line += "  " + m.styles.on.Render("current")
 	}

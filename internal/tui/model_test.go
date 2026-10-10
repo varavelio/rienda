@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"image/color"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -46,6 +47,8 @@ type fakeSession struct {
 	thinkingErr   error
 	thinking      string
 	thinkingModes map[string][]string
+	pinned        []string
+	pinErr        error
 	leafErr       error
 	tagErr        error
 	titleErr      error
@@ -186,6 +189,23 @@ func (s *fakeSession) SetModel(_ context.Context, ref string) error {
 	return nil
 }
 
+// PinnedModels returns the scripted pinned models of the session.
+func (s *fakeSession) PinnedModels() []string { return s.pinned }
+
+// TogglePin toggles the reference in the scripted pins, recording the outcome
+// so a test reads what the interface asked for.
+func (s *fakeSession) TogglePin(ref string) (bool, error) {
+	if s.pinErr != nil {
+		return false, s.pinErr
+	}
+	if slices.Contains(s.pinned, ref) {
+		s.pinned = slices.DeleteFunc(s.pinned, func(entry string) bool { return entry == ref })
+		return false, nil
+	}
+	s.pinned = append(s.pinned, ref)
+	return true, nil
+}
+
 // Run records the prompt and returns the scripted event channel.
 func (s *fakeSession) Run(ctx context.Context, prompt string) <-chan engine.Event {
 	s.prompts = append(s.prompts, prompt)
@@ -221,6 +241,7 @@ var (
 	pressShiftTab = tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 	pressA        = tea.KeyPressMsg{Code: 'a'}
 	pressM        = tea.KeyPressMsg{Code: 'm'}
+	pressP        = tea.KeyPressMsg{Code: 'p'}
 	pressPgUp     = tea.KeyPressMsg{Code: tea.KeyPgUp}
 	pressPgDown   = tea.KeyPressMsg{Code: tea.KeyPgDown}
 	wheelUp       = tea.MouseWheelMsg{Button: tea.MouseWheelUp}
@@ -354,6 +375,13 @@ func (s *storeSession) SetModel(ctx context.Context, ref string) error {
 	return s.store.SetModel(ctx, ref)
 }
 
+// PinnedModels reports no pins: the store holds no state file, so the tests
+// that need pins script them through a fakeSession.
+func (s *storeSession) PinnedModels() []string { return nil }
+
+// TogglePin reports no pins for the same reason PinnedModels does.
+func (s *storeSession) TogglePin(string) (bool, error) { return false, nil }
+
 // SetAgent selects the agent of the active branch of the store.
 func (s *storeSession) SetAgent(ctx context.Context, id string) error {
 	//nolint:wrapcheck // the session reports the failure of the store as it is.
@@ -378,6 +406,41 @@ func (s *storeSession) Close() error { return s.store.Close() }
 // textMessage builds a message carrying a single text block.
 func textMessage(role llm.Role, text string) llm.Message {
 	return llm.Message{Role: role, Blocks: []llm.Block{{Type: llm.BlockText, Text: text}}}
+}
+
+// TestOrderPinned verifies the order the model list shows and the cycle runs:
+// the pinned models the roster holds first, in pin order, then the rest.
+func TestOrderPinned(t *testing.T) {
+	roster := []string{"a/1", "b/2", "c/3"}
+
+	t.Run("no pins keeps the roster as it is", func(t *testing.T) {
+		require.Equal(t, roster, orderPinned(roster, nil))
+	})
+
+	t.Run("pinned models come first in pin order", func(t *testing.T) {
+		got := orderPinned(roster, []string{"c/3", "a/1"})
+		require.Equal(t, []string{"c/3", "a/1", "b/2"}, got)
+	})
+
+	t.Run("a pin the roster does not hold is skipped", func(t *testing.T) {
+		got := orderPinned(roster, []string{"ghost/9", "b/2"})
+		require.Equal(t, []string{"b/2", "a/1", "c/3"}, got)
+	})
+
+	t.Run("a duplicate counts once at its first occurrence", func(t *testing.T) {
+		got := orderPinned(roster, []string{"b/2", "a/1", "b/2"})
+		require.Equal(t, []string{"b/2", "a/1", "c/3"}, got)
+	})
+
+	t.Run("every roster entry survives exactly once", func(t *testing.T) {
+		got := orderPinned(roster, []string{"c/3"})
+		require.ElementsMatch(t, roster, got)
+		require.Len(t, got, len(roster))
+	})
+
+	t.Run("an empty roster stays empty", func(t *testing.T) {
+		require.Empty(t, orderPinned(nil, []string{"a/1"}))
+	})
 }
 
 // storeChat opens an interface over a store-backed session holding the given
@@ -3541,6 +3604,318 @@ func lineOf(view, text string) string {
 		}
 	}
 	return ""
+}
+
+// TestCyclePinnedModel verifies what the tab cycle does when it runs: the
+// step to the next pinned model, the wrap at the end of the list, the landing
+// on the first pin from an unpinned model, and the silent no-op when there is
+// nothing to cycle. The key that reaches it is covered by TestTabCycle.
+func TestCyclePinnedModel(t *testing.T) {
+	// pinnedChat opens a conversation whose session offers a roster of three
+	// models and pins two of them, the way the state file would.
+	pinnedChat := func(t *testing.T) (*model, *fakeSession) {
+		t.Helper()
+		scripted := newFakeSession()
+		scripted.models = []string{"fake/a", "fake/b", "fake/c"}
+		scripted.activeModel = "fake/b"
+		scripted.pinned = []string{"fake/b", "fake/a"}
+		scripted.modelInfo = map[string]engine.ModelInfo{
+			"fake/a": {ID: "a-real"},
+			"fake/b": {ID: "b-real"},
+			"fake/c": {ID: "c-real"},
+		}
+		m := newTestModel(
+			t,
+			[]agent.Agent{{ID: "coder", Description: "A test agent"}},
+			0,
+			func(string) (Session, error) { return scripted, nil },
+		)
+		run(t, m, m.Init())
+		require.Equal(t, phaseChat, m.phase)
+		update(t, m, windowMsg(80, 24))
+		return m, scripted
+	}
+
+	t.Run("opens holding the pins the session reported", func(t *testing.T) {
+		m, _ := pinnedChat(t)
+		require.Equal(t, []string{"fake/b", "fake/a"}, m.pinned)
+	})
+
+	t.Run("cycles to the next pinned model and wraps", func(t *testing.T) {
+		m, scripted := pinnedChat(t)
+
+		m.cyclePinnedModel()
+		require.Equal(t, "fake/a", scripted.activeModel)
+
+		m.cyclePinnedModel()
+		require.Equal(t, "fake/b", scripted.activeModel, "the list wraps to the head")
+	})
+
+	t.Run("announces the model it landed on", func(t *testing.T) {
+		m, _ := pinnedChat(t)
+
+		m.cyclePinnedModel()
+
+		require.Equal(t, "model: fake: a-real", m.status)
+	})
+
+	t.Run("an unpinned active model lands on the first pin", func(t *testing.T) {
+		m, scripted := pinnedChat(t)
+		scripted.activeModel = "fake/c"
+
+		m.cyclePinnedModel()
+
+		require.Equal(t, "fake/b", scripted.activeModel)
+	})
+
+	t.Run("an empty pin list is a silent no-op", func(t *testing.T) {
+		m, scripted := pinnedChat(t)
+		scripted.pinned = nil
+		m.pinned = nil
+
+		m.cyclePinnedModel()
+
+		require.Equal(t, "fake/b", scripted.activeModel)
+		require.Empty(t, m.status)
+		require.Empty(t, scripted.modelRefs)
+	})
+
+	t.Run("a single pin already active is a silent no-op", func(t *testing.T) {
+		m, scripted := pinnedChat(t)
+		scripted.pinned = []string{"fake/b"}
+		m.pinned = []string{"fake/b"}
+
+		m.cyclePinnedModel()
+
+		require.Equal(t, "fake/b", scripted.activeModel)
+		require.Empty(t, m.status)
+		require.Empty(t, scripted.modelRefs)
+	})
+
+	t.Run("a pin the roster does not hold is skipped", func(t *testing.T) {
+		m, scripted := pinnedChat(t)
+		scripted.pinned = []string{"fake/b", "ghost/9", "fake/a"}
+		m.pinned = []string{"fake/b", "ghost/9", "fake/a"}
+
+		m.cyclePinnedModel()
+
+		require.Equal(t, "fake/a", scripted.activeModel)
+	})
+
+	t.Run("a running session does not cycle", func(t *testing.T) {
+		m, scripted := pinnedChat(t)
+		m.running = true
+
+		m.cyclePinnedModel()
+
+		require.Equal(t, "fake/b", scripted.activeModel)
+		require.Empty(t, m.status)
+	})
+
+	t.Run("a failing switch reaches the status line", func(t *testing.T) {
+		m, scripted := pinnedChat(t)
+		scripted.modelErr = errors.New("boom")
+
+		m.cyclePinnedModel()
+
+		require.Equal(t, "boom", m.status)
+	})
+}
+
+// TestTabCycle verifies the key that reaches the cycle: tab cycles the pinned
+// models on the chat prompt, and every context that owns the key keeps it.
+func TestTabCycle(t *testing.T) {
+	// cycleChat opens a conversation over a roster of three models with two
+	// of them pinned, and a project the mention menu completes against.
+	cycleChat := func(t *testing.T) (*model, *fakeSession) {
+		t.Helper()
+		scripted := newFakeSession()
+		scripted.models = []string{"fake/a", "fake/b", "fake/c"}
+		scripted.activeModel = "fake/b"
+		scripted.pinned = []string{"fake/b", "fake/a"}
+		m := newTestModel(
+			t,
+			[]agent.Agent{{ID: "coder", Description: "A test agent"}},
+			0,
+			func(string) (Session, error) { return scripted, nil },
+		)
+		run(t, m, m.Init())
+		require.Equal(t, phaseChat, m.phase)
+		update(t, m, windowMsg(80, 24))
+		m.candidates = mentionSuggestions()
+		m.scanFiles = testProject().scan
+		return m, scripted
+	}
+
+	t.Run("tab on the chat prompt cycles the pinned models", func(t *testing.T) {
+		m, scripted := cycleChat(t)
+
+		update(t, m, pressTab)
+
+		require.Equal(t, "fake/a", scripted.activeModel)
+	})
+
+	t.Run("tab with the mention menu open completes the mention", func(t *testing.T) {
+		m, scripted := cycleChat(t)
+		typeText(t, m, "@")
+		require.True(t, m.mention.active)
+
+		update(t, m, pressTab)
+
+		require.Equal(t, "fake/b", scripted.activeModel, "the mention owns the key")
+		require.Contains(t, m.input.Value(), "internal/tui/model.go")
+	})
+
+	t.Run("tab in the picker keeps the picker behavior", func(t *testing.T) {
+		m, scripted := cycleChat(t)
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+		require.Equal(t, phasePicker, m.phase)
+
+		update(t, m, pressTab)
+
+		require.Equal(t, phasePicker, m.phase, "the picker still owns tab")
+		require.Equal(t, "fake/b", scripted.activeModel)
+	})
+}
+
+// TestTogglePinnedModel verifies the chord that manages the pins from the
+// model list: it toggles the highlighted model, it acts nowhere else, and a
+// failed write reaches the status line instead of being swallowed.
+func TestTogglePinnedModel(t *testing.T) {
+	// pickerChat opens the model list of a conversation over a roster of
+	// three models.
+	pickerChat := func(t *testing.T) (*model, *fakeSession) {
+		t.Helper()
+		scripted := newFakeSession()
+		scripted.models = []string{"fake/a", "fake/b", "fake/c"}
+		scripted.activeModel = "fake/b"
+		m := newTestModel(
+			t,
+			[]agent.Agent{{ID: "coder", Description: "A test agent"}},
+			0,
+			func(string) (Session, error) { return scripted, nil },
+		)
+		run(t, m, m.Init())
+		require.Equal(t, phaseChat, m.phase)
+		update(t, m, windowMsg(80, 24))
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+		require.Equal(t, phasePicker, m.phase)
+		return m, scripted
+	}
+
+	t.Run("pins the highlighted model", func(t *testing.T) {
+		m, scripted := pickerChat(t)
+		m.selectPickerEntry(0)
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressP)
+
+		require.Equal(t, []string{"fake/a"}, scripted.pinned)
+		require.Equal(t, []string{"fake/a"}, m.pinned)
+	})
+
+	t.Run("unpins a pinned model", func(t *testing.T) {
+		m, scripted := pickerChat(t)
+		m.pinned = []string{"fake/a"}
+		scripted.pinned = []string{"fake/a"}
+		m.picker.setCount(len(m.roster()))
+		m.selectPickerEntry(0)
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressP)
+
+		require.Empty(t, scripted.pinned)
+		require.Empty(t, m.pinned)
+	})
+
+	t.Run("keeps the highlight on the same model across the reorder", func(t *testing.T) {
+		m, _ := pickerChat(t)
+		// Highlight fake/c, which sits last in roster order.
+		m.selectPickerEntry(2)
+		require.Equal(t, "fake/c", m.roster()[m.picker.selected()])
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressP)
+
+		require.Equal(t, "fake/c", m.roster()[m.picker.selected()],
+			"the highlight follows the model, not the row index")
+	})
+
+	t.Run("keeps the highlight while a query narrows the list", func(t *testing.T) {
+		m, _ := pickerChat(t)
+		typeText(t, m, "fake/c")
+		require.Equal(t, "fake/c", m.roster()[m.picker.selected()])
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressP)
+
+		require.Equal(t, "fake/c", m.roster()[m.picker.selected()],
+			"the narrowed list follows the model too")
+	})
+
+	t.Run("does nothing in the agent list", func(t *testing.T) {
+		m, scripted := pickerChat(t)
+		update(t, m, pressEscape)
+		update(t, m, pressCtrlX)
+		update(t, m, pressA)
+		require.Equal(t, phasePicker, m.phase)
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressP)
+
+		require.Empty(t, scripted.pinned, "the agent list has no model to pin")
+	})
+
+	t.Run("a failed write reaches the status line", func(t *testing.T) {
+		m, scripted := pickerChat(t)
+		scripted.pinErr = errors.New("pin boom")
+		m.selectPickerEntry(0)
+
+		update(t, m, pressCtrlX)
+		update(t, m, pressP)
+
+		require.Equal(t, "pin boom", m.status)
+	})
+}
+
+// TestNextPinned verifies the pure cycle step: the successor of the active
+// model, the wrap, and the refusals that make a press a no-op.
+func TestNextPinned(t *testing.T) {
+	t.Run("returns the successor", func(t *testing.T) {
+		next, ok := nextPinned([]string{"a/1", "b/2", "c/3"}, "a/1")
+		require.True(t, ok)
+		require.Equal(t, "b/2", next)
+	})
+
+	t.Run("wraps from the last to the first", func(t *testing.T) {
+		next, ok := nextPinned([]string{"a/1", "b/2", "c/3"}, "c/3")
+		require.True(t, ok)
+		require.Equal(t, "a/1", next)
+	})
+
+	t.Run("an unpinned active model lands on the first", func(t *testing.T) {
+		next, ok := nextPinned([]string{"a/1", "b/2"}, "z/9")
+		require.True(t, ok)
+		require.Equal(t, "a/1", next)
+	})
+
+	t.Run("an empty cycle reports false", func(t *testing.T) {
+		_, ok := nextPinned(nil, "a/1")
+		require.False(t, ok)
+	})
+
+	t.Run("a single entry that is already active reports false", func(t *testing.T) {
+		_, ok := nextPinned([]string{"a/1"}, "a/1")
+		require.False(t, ok)
+	})
+
+	t.Run("a single entry that is not active is selected", func(t *testing.T) {
+		next, ok := nextPinned([]string{"a/1"}, "z/9")
+		require.True(t, ok)
+		require.Equal(t, "a/1", next)
+	})
 }
 
 // TestCycleThinking verifies the thinking selection of an open conversation:

@@ -273,6 +273,44 @@ func rememberLastModel(path, ref string) {
 	}
 }
 
+// PinnedModels returns the model references the user pinned, in the order
+// they pinned them, which is the order the interface cycles them in. Every
+// reference is validated against the models the session may run: one whose
+// provider or model is gone is omitted, and a hand-edited duplicate counts
+// once, at its first occurrence. A document that cannot be read degrades to
+// no pins and a logged warning, because the pins are a startup convenience
+// and never a run error.
+func (s *Session) PinnedModels() []string {
+	if s.statePath == "" {
+		return nil
+	}
+	doc, err := state.Load(s.statePath)
+	if err != nil {
+		logProvider("state %s: %v; the pinned models are not read", s.statePath, err)
+		return nil
+	}
+
+	pins := make([]string, 0, len(doc.PinnedModels))
+	for _, ref := range doc.PinnedModels {
+		if s.engine.KnowsModel(ref) && !slices.Contains(pins, ref) {
+			pins = append(pins, ref)
+		}
+	}
+	return pins
+}
+
+// TogglePin pins ref when it is not pinned and unpins it when it is, and
+// reports whether ref ended up pinned. The failure of the write is returned
+// to the caller, because pinning is an explicit action whose outcome the
+// user must see.
+func (s *Session) TogglePin(ref string) (bool, error) {
+	if s.statePath == "" {
+		return false, errors.New("harness: no state file to pin models in")
+	}
+	//nolint:wrapcheck // the state layer reports the failure of the write as it is.
+	return state.TogglePin(s.statePath, ref)
+}
+
 // ActiveThinking returns the thinking level the branch runs: the level the
 // newest thinking selection of the branch carries, empty for off. The caller
 // resolves the level against the declaration of the model the branch runs.
