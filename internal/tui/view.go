@@ -447,24 +447,15 @@ func providerOf(ref string) string {
 }
 
 // modelDescription returns what describes a model beyond the reference that
-// addresses it: the display name the provider module declares, falling back to
-// the wire identifier, plus the extended thinking level, joined by a space, as
-// in "DeepSeek v4.1 max". It is empty when the configuration no longer holds
-// the reference, so a caller falls back to the reference rather than showing a
-// bare separator.
+// addresses it: the display name the provider module declares, falling back
+// to the wire identifier. It is empty when the configuration no longer holds
+// the reference, so a caller falls back to the reference rather than showing
+// a bare separator.
 func modelDescription(info engine.ModelInfo) string {
-	parts := make([]string, 0, 2)
-	name := info.Name
-	if name == "" {
-		name = info.ID
+	if name := info.Name; name != "" {
+		return name
 	}
-	if name != "" {
-		parts = append(parts, name)
-	}
-	if info.ThinkingLevel != "" {
-		parts = append(parts, info.ThinkingLevel)
-	}
-	return strings.Join(parts, " ")
+	return info.ID
 }
 
 // viewSettings renders the command center: the screens it opens, the options
@@ -923,11 +914,14 @@ type identity struct {
 	// agent is the agent the branch runs.
 	agent string
 
-	// model names the model the branch runs: its wire identifier, which is the
-	// real model the provider receives, with the extended thinking level the
-	// configuration declares, as in "deepseek-v4.1 max", or the reference that
-	// addresses it when the configuration no longer holds one.
+	// model names the model the branch runs: its wire identifier, which is
+	// the real model the provider receives, or the reference that addresses
+	// it when the configuration no longer holds one.
 	model string
+
+	// thinking names the thinking mode the branch runs: the level the user
+	// picked, empty for off, which the header shows as its own segment.
+	thinking string
 
 	// named reports that the user named the session, so title is the name the
 	// user chose rather than the one derived from the first message.
@@ -944,19 +938,27 @@ func identityFrom(s Session) identity {
 	info := s.Info()
 	ref := s.ActiveModel()
 	return identity{
-		agent: s.ActiveAgent(),
-		model: modelName(ref, s.ModelInfo(ref)),
-		named: info.Named,
-		title: info.Title,
+		agent:    s.ActiveAgent(),
+		model:    modelName(ref, s.ModelInfo(ref)),
+		thinking: s.ActiveThinking(),
+		named:    info.Named,
+		title:    info.Title,
 	}
 }
 
 // chatIdentity renders the identity of the session: the brand followed by the
-// agent, the model and, when the user named it, the name, which closes the line
-// so the reader sees the name the session is found under in the list. It renders
-// the cached identity, so it never reads the session.
+// agent, the model, the thinking mode of the branch and, when the user named
+// it, the name, which closes the line so the reader sees the name the session
+// is found under in the list. The thinking mode is always on the line, off
+// included, so a cycle or a selection reads where the conversation stands
+// without leaving it. It renders the cached identity, so it never reads the
+// session.
 func (m *model) chatIdentity() string {
-	parts := []string{m.identity.agent, m.identity.model}
+	thinking := m.identity.thinking
+	if thinking == "" {
+		thinking = thinkingOff
+	}
+	parts := []string{m.identity.agent, m.identity.model, "thinking " + thinking}
 	if m.identity.named {
 		parts = append(parts, m.identity.title)
 	}

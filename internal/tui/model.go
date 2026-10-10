@@ -1192,21 +1192,13 @@ func (m *model) applyThinking(level string, announce bool) {
 		return
 	}
 
-	m.status = m.thinkingStatus(level)
+	// The header carries the thinking mode as its own segment, so the change
+	// is read there instead of in a notice over the prompt.
+	m.identity = identityFrom(m.session)
 	if announce {
 		m.reloadTranscript()
 		m.refreshContext()
 	}
-}
-
-// thinkingStatus renders the status line a cycle pressed or a selection made
-// reads: what the conversation runs now, so an off picked through the roster
-// never looks like a lost press.
-func (m *model) thinkingStatus(level string) string {
-	if level == "" {
-		return "thinking off"
-	}
-	return "thinking " + level
 }
 
 // openSwitchPicker opens the picker over the roster of what the conversation

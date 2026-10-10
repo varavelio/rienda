@@ -2877,7 +2877,7 @@ func TestRenameSession(t *testing.T) {
 		update(t, m, pressEscape)
 
 		require.Equal(t, phaseChat, m.phase)
-		require.Contains(t, plain(m.render()), "fake/test-model · Fix the parser")
+		require.Contains(t, plain(m.render()), "fake/test-model · thinking off · Fix the parser")
 	})
 
 	t.Run("names the session of the store from an empty input", func(t *testing.T) {
@@ -3111,16 +3111,12 @@ func TestSwitchModel(t *testing.T) {
 	})
 
 	t.Run(
-		"describes every model with its name or identifier and thinking level",
+		"describes every model with its name or identifier",
 		func(t *testing.T) {
 			m, stored := modelChat(t)
 			stored.modelInfo = map[string]engine.ModelInfo{
-				"fake/test-model": {
-					ID:            "deepseek-v4.1",
-					Name:          "DeepSeek v4.1",
-					ThinkingLevel: "max",
-				},
-				"fake/other-model": {ID: "kimi-k2", ThinkingLevel: "low"},
+				"fake/test-model":  {ID: "deepseek-v4.1", Name: "DeepSeek v4.1"},
+				"fake/other-model": {ID: "kimi-k2"},
 			}
 
 			update(t, m, pressCtrlX)
@@ -3129,8 +3125,8 @@ func TestSwitchModel(t *testing.T) {
 			view := plain(m.render())
 			// A model a provider names reads by its name; one left unnamed reads
 			// by the wire identifier.
-			require.Contains(t, view, "fake: DeepSeek v4.1 max")
-			require.Contains(t, view, "fake: kimi-k2 low")
+			require.Contains(t, view, "fake: DeepSeek v4.1")
+			require.Contains(t, view, "fake: kimi-k2")
 		},
 	)
 
@@ -3583,22 +3579,22 @@ func TestCycleThinking(t *testing.T) {
 		require.Equal(t, "", scripted.thinking, "the roster wraps to off")
 	})
 
-	t.Run("reads what it landed on in the status line", func(t *testing.T) {
+	t.Run("reads what it landed on in the header", func(t *testing.T) {
 		m, _ := thinkingChat(t)
 
 		update(t, m, pressCtrlX)
 		update(t, m, tea.KeyPressMsg{Code: 't'})
-		require.Contains(t, plain(m.activityLine()), "thinking low")
+		require.Contains(t, plain(m.render()), "thinking low")
 
 		update(t, m, pressCtrlX)
 		update(t, m, tea.KeyPressMsg{Code: 't'})
-		require.Contains(t, plain(m.activityLine()), "thinking high")
+		require.Contains(t, plain(m.render()), "thinking high")
 
 		update(t, m, pressCtrlX)
 		update(t, m, tea.KeyPressMsg{Code: 't'})
 		update(t, m, pressCtrlX)
 		update(t, m, tea.KeyPressMsg{Code: 't'})
-		require.Contains(t, plain(m.activityLine()), "thinking off")
+		require.Contains(t, plain(m.render()), "thinking off")
 	})
 
 	t.Run("keeps cycling from a level the model no longer declares", func(t *testing.T) {
@@ -3611,7 +3607,7 @@ func TestCycleThinking(t *testing.T) {
 		update(t, m, pressCtrlX)
 		update(t, m, tea.KeyPressMsg{Code: 't'})
 		require.Empty(t, scripted.thinking, "the stale level is turned off first")
-		require.Contains(t, plain(m.activityLine()), "thinking off")
+		require.Contains(t, plain(m.render()), "thinking off")
 	})
 
 	t.Run("does nothing on a model that declares no thinking", func(t *testing.T) {
@@ -3621,7 +3617,7 @@ func TestCycleThinking(t *testing.T) {
 		update(t, m, tea.KeyPressMsg{Code: 't'})
 
 		require.Empty(t, scripted.thinking, "off is the whole roster")
-		require.Empty(t, plain(m.activityLine()))
+		require.Contains(t, plain(m.render()), "thinking off", "the header still shows the mode")
 	})
 
 	t.Run("runs from the command center", func(t *testing.T) {

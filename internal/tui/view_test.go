@@ -915,14 +915,15 @@ func TestChatIdentity(t *testing.T) {
 	t.Run("names the model by its identifier and thinking level", func(t *testing.T) {
 		m, scripted := chatModel(t)
 		scripted.modelInfo = map[string]engine.ModelInfo{
-			"fake/test-model": {ID: "deepseek-v4.1", ThinkingLevel: "max"},
+			"fake/test-model": {ID: "deepseek-v4.1"},
 		}
+		scripted.thinking = "max"
 		update(t, m, windowMsg(80, 24))
 
 		m.identity = identityFrom(scripted)
 
 		view := plain(m.render())
-		require.Contains(t, view, "coder · deepseek-v4.1 max")
+		require.Contains(t, view, "coder · deepseek-v4.1 · thinking max")
 		require.NotContains(t, view, "fake/test-model", "the reference never reaches the header")
 	})
 
