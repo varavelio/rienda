@@ -42,6 +42,12 @@ const (
 	// StreamThinkingRedacted carries the opaque data of a redacted reasoning
 	// block in ThinkingRedactedData.
 	StreamThinkingRedacted StreamEventType = "thinking_redacted"
+	// StreamThinkingBoundary closes the reasoning block the thinking deltas
+	// have been building, because the provider opened another one: a response
+	// may carry several reasoning blocks, each with its own signature, and a
+	// signature accumulates into one block alone, which no provider accepts
+	// on a later turn.
+	StreamThinkingBoundary StreamEventType = "thinking_boundary"
 	// StreamToolCallStart announces a new tool call. ToolCallID and ToolCallName
 	// are populated.
 	StreamToolCallStart StreamEventType = "tool_call_start"

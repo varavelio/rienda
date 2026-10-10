@@ -40,6 +40,38 @@ func generateTurn(t *testing.T, engine *Engine) (turn, []Event) {
 
 // TestGenerate verifies streamed response assembly.
 func TestGenerate(t *testing.T) {
+	t.Run("seals every thinking segment at its boundary", func(t *testing.T) {
+		engine, _ := newGenerateTest(t, []llm.StreamEvent{
+			{Type: llm.StreamThinkingDelta, Thinking: "first idea"},
+			{Type: llm.StreamThinkingDelta, ThinkingSignature: "sig-A"},
+			{Type: llm.StreamThinkingBoundary},
+			{Type: llm.StreamThinkingDelta, Thinking: "second idea"},
+			{Type: llm.StreamThinkingDelta, ThinkingSignature: "sig-B"},
+		})
+
+		response, _ := generateTurn(t, engine)
+
+		require.Equal(t, []llm.Block{
+			{Type: llm.BlockThinking, Thinking: "first idea", ThinkingSignature: "sig-A"},
+			{Type: llm.BlockThinking, Thinking: "second idea", ThinkingSignature: "sig-B"},
+		}, response.blocks, "one signature per thinking block, never a concatenation")
+	})
+
+	t.Run("carries the redacted payload of a boundary", func(t *testing.T) {
+		engine, _ := newGenerateTest(t, []llm.StreamEvent{
+			{Type: llm.StreamThinkingDelta, Thinking: "before"},
+			{Type: llm.StreamThinkingDelta, ThinkingSignature: "sig-A"},
+			{Type: llm.StreamThinkingBoundary, ThinkingRedactedData: "opaque"},
+		})
+
+		response, _ := generateTurn(t, engine)
+
+		require.Equal(t, []llm.Block{
+			{Type: llm.BlockThinking, Thinking: "before", ThinkingSignature: "sig-A"},
+			{Type: llm.BlockRedactedThinking, ThinkingRedactedData: "opaque"},
+		}, response.blocks)
+	})
+
 	t.Run("assembles text, thinking, redacted reasoning and tool calls", func(t *testing.T) {
 		engine, _ := newGenerateTest(t, []llm.StreamEvent{
 			{Type: llm.StreamMessageStart, ID: "resp_1", Model: "wire-model"},

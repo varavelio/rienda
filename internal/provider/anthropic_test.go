@@ -382,6 +382,7 @@ func TestAnthropicStream(t *testing.T) {
 
 		require.Equal(t, []llm.StreamEvent{
 			{Type: llm.StreamMessageStart, ID: "msg_1", Model: "c"},
+			{Type: llm.StreamThinkingBoundary},
 			{Type: llm.StreamThinkingDelta, Thinking: "Hmm"},
 			{Type: llm.StreamThinkingDelta, ThinkingSignature: "sig-9"},
 			{Type: llm.StreamTextDelta, Text: "Hi"},
@@ -466,7 +467,7 @@ func TestAnthropicStream(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, llm.StreamEvent{
-			Type:                 llm.StreamThinkingRedacted,
+			Type:                 llm.StreamThinkingBoundary,
 			ThinkingRedactedData: "opaque",
 		}, event)
 	})
@@ -525,6 +526,47 @@ func TestAnthropicStream(t *testing.T) {
 		require.ErrorContains(t, err, "read stream")
 		require.ErrorContains(t, err, "boom")
 	})
+}
+
+// TestAnthropicReplaysEmptyThinkingBlocks verifies the thinking block shape
+// of a follow-up turn: the thinking and signature keys are written even when
+// the model left the thinking text empty, because the API rejects a thinking
+// block that omits either.
+func TestAnthropicReplaysEmptyThinkingBlocks(t *testing.T) {
+	fixture := newAnthropicTestServer(t)
+	fixture.response = `{
+		"id": "msg_2", "type": "message", "role": "assistant", "model": "claude-test",
+		"content": [{"type": "text", "text": "Hello again!"}],
+		"stop_reason": "end_turn",
+		"usage": {"input_tokens": 10, "output_tokens": 5}
+	}`
+
+	_, err := fixture.client().Generate(t.Context(), &llm.Request{
+		Model:     "claude-test",
+		MaxTokens: 512,
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Hi"}}},
+			{Role: llm.RoleAssistant, Blocks: []llm.Block{
+				{Type: llm.BlockThinking, ThinkingSignature: "sig-1"},
+				{Type: llm.BlockText, Text: "Hello!"},
+			}},
+			{Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockText, Text: "Go on"}}},
+		},
+	})
+
+	require.NoError(t, err)
+	assistant, ok := fixture.requestBody["messages"].([]any)[1].(map[string]any)
+	require.True(t, ok)
+	blocks, ok := assistant["content"].([]any)
+	require.True(t, ok)
+	thinking, ok := blocks[0].(map[string]any)
+	require.True(t, ok)
+
+	// Both keys are present with their values: the thinking one is the empty
+	// string, never absent.
+	require.Equal(t, "thinking", thinking["type"])
+	require.Empty(t, thinking["thinking"])
+	require.Equal(t, "sig-1", thinking["signature"])
 }
 
 func TestAnthropicToolChoiceFrom(t *testing.T) {

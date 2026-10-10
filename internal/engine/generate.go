@@ -48,17 +48,18 @@ type streamedCall struct {
 
 // accumulator assembles the stream events of one model response into a turn.
 type accumulator struct {
-	text          strings.Builder
-	thinking      strings.Builder
-	signature     strings.Builder
-	thinkingID    string
-	messageItemID string
-	redacted      []string
-	calls         []*streamedCall
-	callsByID     map[string]*streamedCall
-	model         string
-	stopReason    llm.StopReason
-	usage         llm.Usage
+	text            strings.Builder
+	thinking        strings.Builder
+	signature       strings.Builder
+	thinkingID      string
+	messageItemID   string
+	redacted        []string
+	calls           []*streamedCall
+	callsByID       map[string]*streamedCall
+	model           string
+	stopReason      llm.StopReason
+	usage           llm.Usage
+	pendingThinking []llm.Block
 }
 
 // newAccumulator returns an empty response accumulator.
@@ -81,6 +82,11 @@ func (a *accumulator) observe(event llm.StreamEvent) {
 		}
 	case llm.StreamThinkingRedacted:
 		a.redacted = append(a.redacted, event.ThinkingRedactedData)
+	case llm.StreamThinkingBoundary:
+		a.closeThinking()
+		if event.ThinkingRedactedData != "" {
+			a.redacted = append(a.redacted, event.ThinkingRedactedData)
+		}
 	case llm.StreamToolCallStart:
 		a.startCall(event)
 	case llm.StreamToolCallArgsDelta:
@@ -90,6 +96,23 @@ func (a *accumulator) observe(event llm.StreamEvent) {
 		a.usage = event.Usage
 		a.messageItemID = event.ItemID
 	}
+}
+
+// closeThinking seals the reasoning block the thinking deltas have been
+// building into the assembled turn, dropping one that carries neither text
+// nor signature, and starts a fresh one for the block that follows.
+func (a *accumulator) closeThinking() {
+	if a.thinking.Len() > 0 || a.signature.Len() > 0 {
+		a.pendingThinking = append(a.pendingThinking, llm.Block{
+			Type:              llm.BlockThinking,
+			Thinking:          a.thinking.String(),
+			ThinkingSignature: a.signature.String(),
+			ThinkingID:        a.thinkingID,
+		})
+	}
+	a.thinking.Reset()
+	a.signature.Reset()
+	a.thinkingID = ""
 }
 
 // startCall records the beginning of a tool call, ignoring starts without an
@@ -118,15 +141,9 @@ func (a *accumulator) appendArguments(event llm.StreamEvent) {
 // turn returns the assembled model response. It fails when the response
 // carries no content at all.
 func (a *accumulator) turn(fallbackModel string) (turn, error) {
+	a.closeThinking()
 	blocks := make([]llm.Block, 0, 4)
-	if a.thinking.Len() > 0 || a.signature.Len() > 0 {
-		blocks = append(blocks, llm.Block{
-			Type:              llm.BlockThinking,
-			Thinking:          a.thinking.String(),
-			ThinkingSignature: a.signature.String(),
-			ThinkingID:        a.thinkingID,
-		})
-	}
+	blocks = append(blocks, a.pendingThinking...)
 	for _, data := range a.redacted {
 		blocks = append(
 			blocks,

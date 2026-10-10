@@ -128,6 +128,32 @@ type anthropicBlock struct {
 	IsError   bool            `json:"is_error,omitempty"`
 }
 
+// MarshalJSON writes the block with the fields its Type requires. A thinking
+// block carries the thinking and signature keys unconditionally, because the
+// API rejects a thinking block that omits either, even when the model left
+// the thinking text empty and only its signature carried the proof.
+func (b anthropicBlock) MarshalJSON() ([]byte, error) {
+	type plain anthropicBlock
+	if b.Type == wireBlockThinking {
+		body, err := json.Marshal(struct {
+			plain
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature"`
+		}{plain(b), b.Thinking, b.Signature})
+		if err != nil {
+			//nolint:wrapcheck // the alias cannot carry the block context.
+			return nil, err
+		}
+		return body, nil
+	}
+	body, err := json.Marshal(plain(b))
+	if err != nil {
+		//nolint:wrapcheck // the alias cannot carry the block context.
+		return nil, err
+	}
+	return body, nil
+}
+
 // anthropicTool is a wire tool definition.
 type anthropicTool struct {
 	Name        string          `json:"name"`
@@ -480,11 +506,18 @@ func (s *anthropicStream) translate(
 			}, false, nil
 		}
 	case "content_block_start":
-		if envelope.ContentBlock != nil && envelope.ContentBlock.Type == wireBlockRedactedThinking {
+		switch {
+		case envelope.ContentBlock == nil:
+			// A start without a block carries nothing to translate.
+		case envelope.ContentBlock.Type == wireBlockRedactedThinking:
 			return &llm.StreamEvent{
-				Type:                 llm.StreamThinkingRedacted,
+				Type:                 llm.StreamThinkingBoundary,
 				ThinkingRedactedData: envelope.ContentBlock.Data,
 			}, false, nil
+		case envelope.ContentBlock.Type == wireBlockThinking:
+			// Every reasoning block of the response owns one signature, so a
+			// new reasoning block closes the one the deltas have built.
+			return &llm.StreamEvent{Type: llm.StreamThinkingBoundary}, false, nil
 		}
 		if envelope.ContentBlock != nil && envelope.ContentBlock.Type == wireBlockToolUse &&
 			envelope.Index != nil {
