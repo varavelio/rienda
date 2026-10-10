@@ -184,12 +184,9 @@ func TestRunReportsConfigurationFailures(t *testing.T) {
 		// The installation owns its directory and shadows the built-in with
 		// an empty roster, exactly as a user module would.
 		providerDir := filepath.Join(t.TempDir(), "providers")
-		shadow := filepath.Join(providerDir, "opencode-go")
-		writeTestModule(
-			t,
-			shadow,
-			"module.exports = function (ctx) { return {protocol: 'openai_chat_completions', base_url: 'https://example.invalid', auth: 'none', models: []}; };",
-		)
+		stub := "module.exports = function (ctx) { return {protocol: 'openai_chat_completions', base_url: 'https://example.invalid', auth: 'none', models: []}; };"
+		writeTestModule(t, filepath.Join(providerDir, "opencode-go"), stub)
+		writeTestModule(t, filepath.Join(providerDir, "z-ai"), stub)
 		app := harness.New(t, harness.Options{
 			Agents:         []harness.Agent{coderAgent()},
 			SkipConfigFile: true,

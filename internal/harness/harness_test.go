@@ -20,6 +20,7 @@ import (
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/llm"
+	"github.com/varavelio/rienda/internal/provider/native"
 	"github.com/varavelio/rienda/internal/session"
 	"github.com/varavelio/rienda/internal/state"
 )
@@ -237,15 +238,16 @@ func newTestEnvironment(t *testing.T, scripts ...[]string) *testEnvironment {
 	return env
 }
 
-// shadowBuiltin shadows the embedded opencode-go with a starved module, so
+// shadowBuiltin shadows every embedded provider with a starved module, so
 // the roster the tests see is exactly what their fixtures declare.
 func (e *testEnvironment) shadowBuiltin(t *testing.T) {
 	t.Helper()
-	shadow := filepath.Join(e.providersDir, "opencode-go")
-	require.NoError(t, os.MkdirAll(shadow, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(shadow, "index.js"), []byte(
-		"module.exports = function (ctx) { return {protocol: 'openai_chat_completions', base_url: 'https://127.0.0.1:1', auth: 'none', models: []}; };",
-	), 0o600))
+	stub := "module.exports = function (ctx) { return {protocol: 'openai_chat_completions', base_url: 'https://127.0.0.1:1', auth: 'none', models: []}; };"
+	for name := range native.Builtin() {
+		shadow := filepath.Join(e.providersDir, name)
+		require.NoError(t, os.MkdirAll(shadow, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(shadow, "index.js"), []byte(stub), 0o600))
+	}
 }
 
 // writeConfig writes the empty configuration of the environment: the
