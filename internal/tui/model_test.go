@@ -3651,14 +3651,6 @@ func TestCyclePinnedModel(t *testing.T) {
 		require.Equal(t, "fake/b", scripted.activeModel, "the list wraps to the head")
 	})
 
-	t.Run("announces the model it landed on", func(t *testing.T) {
-		m, _ := pinnedChat(t)
-
-		m.cyclePinnedModel()
-
-		require.Equal(t, "model: fake: a-real", m.status)
-	})
-
 	t.Run("an unpinned active model lands on the first pin", func(t *testing.T) {
 		m, scripted := pinnedChat(t)
 		scripted.activeModel = "fake/c"

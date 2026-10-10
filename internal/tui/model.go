@@ -1161,9 +1161,6 @@ func (m *model) handleLeaderKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	return nil, true
 }
 
-// modelStatus opens the line a model cycle announces its result in.
-const modelStatus = "model: "
-
 // thinkingOff names the mode the cycling rests on when no thinking reaches
 // the wire at all. It starts the roster, so a model with modes cycles off
 // through them and back, and a level the model no longer declares reads as
@@ -1205,9 +1202,9 @@ func (m *model) cycleThinkingCommand() tea.Cmd {
 }
 
 // cyclePinnedModel moves the model of the branch one step forward through the
-// pinned models the session may run and reports the model it landed on, so the
-// press reads what the conversation runs now without leaving it. It is the
-// same switch the model list performs, announced in one line.
+// pinned models the session may run. It is the same switch the model list
+// performs: the header and the conversation already read the model the branch
+// runs, so the press needs no line of its own.
 func (m *model) cyclePinnedModel() {
 	if !m.switchReady() {
 		return
@@ -1219,9 +1216,7 @@ func (m *model) cyclePinnedModel() {
 	}
 	if err := m.switchModel(next); err != nil {
 		m.status = err.Error()
-		return
 	}
-	m.status = modelStatus + modelLabel(next, m.session.ModelInfo(next))
 }
 
 // nextPinned returns the pinned model a cycle lands on: the successor of
