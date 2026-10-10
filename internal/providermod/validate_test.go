@@ -46,6 +46,12 @@ func TestValidate(t *testing.T) {
 		require.Empty(t, validate(decl))
 	})
 
+	t.Run("accepts a named model", func(t *testing.T) {
+		decl := okDeclaration()
+		decl.Models[0].Name = "DeepSeek v4.1"
+		require.Empty(t, validate(decl))
+	})
+
 	t.Run("rejects", func(t *testing.T) {
 		cases := []struct {
 			name string

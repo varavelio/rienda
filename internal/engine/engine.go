@@ -50,6 +50,10 @@ type ModelInfo struct {
 	// the reference names when the configuration declares none.
 	ID string
 
+	// Name is the display name the provider module declares for the model,
+	// empty when the model is shown by its ID.
+	Name string
+
 	// ThinkingLevel is the extended thinking level the configuration declares,
 	// empty when the model uses its provider default.
 	ThinkingLevel string

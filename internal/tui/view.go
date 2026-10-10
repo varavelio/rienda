@@ -423,27 +423,43 @@ func modelName(ref string, info engine.ModelInfo) string {
 	return ref
 }
 
-// modelLabel renders a model reference with the description the configuration
-// declares for it, as in "customprovider/mymodel: deepseek-v4.1 max", which is
-// what the picker shows so a selection reads what it would run. A model the
-// configuration describes with nothing beyond the reference reads as the
-// reference alone.
+// modelLabel renders a model reference with the display name the provider
+// module declares for it, falling back to the wire identifier, as in
+// "customprovider: DeepSeek v4.1" or "opencode-go: gpt-5.2", which is what the
+// picker shows so a selection reads what it would run. A model the
+// configuration no longer holds reads as the reference alone.
 func modelLabel(ref string, info engine.ModelInfo) string {
 	if description := modelDescription(info); description != "" {
-		return ref + ": " + description
+		return providerOf(ref) + ": " + description
 	}
 	return ref
 }
 
+// providerOf returns the provider name, the first half of a model reference.
+// A reference that fails to split reads whole, so a malformed entry still
+// shows something.
+func providerOf(ref string) string {
+	provider, _, _ := strings.Cut(ref, "/")
+	if provider == "" {
+		return ref
+	}
+	return provider
+}
+
 // modelDescription returns what describes a model beyond the reference that
-// addresses it: the wire identifier the provider receives and the extended
-// thinking level, joined by a space, as in "deepseek-v4.1 max". It is empty when
-// the configuration no longer holds the reference, so a caller falls back to the
-// reference rather than showing a bare separator.
+// addresses it: the display name the provider module declares, falling back to
+// the wire identifier, plus the extended thinking level, joined by a space, as
+// in "DeepSeek v4.1 max". It is empty when the configuration no longer holds
+// the reference, so a caller falls back to the reference rather than showing a
+// bare separator.
 func modelDescription(info engine.ModelInfo) string {
 	parts := make([]string, 0, 2)
-	if info.ID != "" {
-		parts = append(parts, info.ID)
+	name := info.Name
+	if name == "" {
+		name = info.ID
+	}
+	if name != "" {
+		parts = append(parts, name)
 	}
 	if info.ThinkingLevel != "" {
 		parts = append(parts, info.ThinkingLevel)

@@ -3110,20 +3110,29 @@ func TestSwitchModel(t *testing.T) {
 		require.NotContains(t, view, "A test agent", "the model rows carry no description")
 	})
 
-	t.Run("describes every model with its identifier and thinking level", func(t *testing.T) {
-		m, stored := modelChat(t)
-		stored.modelInfo = map[string]engine.ModelInfo{
-			"fake/test-model":  {ID: "deepseek-v4.1", ThinkingLevel: "max"},
-			"fake/other-model": {ID: "kimi-k2", ThinkingLevel: "low"},
-		}
+	t.Run(
+		"describes every model with its name or identifier and thinking level",
+		func(t *testing.T) {
+			m, stored := modelChat(t)
+			stored.modelInfo = map[string]engine.ModelInfo{
+				"fake/test-model": {
+					ID:            "deepseek-v4.1",
+					Name:          "DeepSeek v4.1",
+					ThinkingLevel: "max",
+				},
+				"fake/other-model": {ID: "kimi-k2", ThinkingLevel: "low"},
+			}
 
-		update(t, m, pressCtrlX)
-		update(t, m, pressM)
+			update(t, m, pressCtrlX)
+			update(t, m, pressM)
 
-		view := plain(m.render())
-		require.Contains(t, view, "fake/test-model: deepseek-v4.1 max")
-		require.Contains(t, view, "fake/other-model: kimi-k2 low")
-	})
+			view := plain(m.render())
+			// A model a provider names reads by its name; one left unnamed reads
+			// by the wire identifier.
+			require.Contains(t, view, "fake: DeepSeek v4.1 max")
+			require.Contains(t, view, "fake: kimi-k2 low")
+		},
+	)
 
 	t.Run("keeps the reference alone for a model with nothing to describe it", func(t *testing.T) {
 		m, _ := modelChat(t)

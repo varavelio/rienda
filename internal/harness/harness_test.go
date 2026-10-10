@@ -274,7 +274,7 @@ func (e *testEnvironment) writeCredentials() error {
 func (e *testEnvironment) writeFakeProvider(t *testing.T) {
 	t.Helper()
 
-	models := `[{ id: "test-model", context_window: 128000, reasoning: false }]`
+	models := `[{ id: "test-model", name: "Test Model", context_window: 128000, reasoning: false }]`
 	ids := make([]string, 0, len(e.extraModels))
 	for alias := range e.extraModels {
 		ids = append(ids, alias)
@@ -1048,12 +1048,12 @@ func writeCompactionConfig(t *testing.T, env *testEnvironment, compactionBlock s
 // reference itself, which is what the interface shows for the model a branch
 // runs and for every model the picker offers.
 func TestModelInfo(t *testing.T) {
-	t.Run("reports the wire identifier", func(t *testing.T) {
+	t.Run("reports the wire identifier and the declared name", func(t *testing.T) {
 		env := newTestEnvironment(t)
 
 		info := env.prepare(t).ModelInfo("fake/test-model")
 
-		require.Equal(t, engine.ModelInfo{ID: "test-model"}, info,
+		require.Equal(t, engine.ModelInfo{ID: "test-model", Name: "Test Model"}, info,
 			"a reference names its model by the wire id, which is the second half")
 	})
 
@@ -1062,7 +1062,11 @@ func TestModelInfo(t *testing.T) {
 		env.writeSecondModel(t, "second-model", "gpt-second")
 
 		prepared := env.prepare(t)
-		require.Equal(t, engine.ModelInfo{ID: "test-model"}, prepared.ModelInfo("fake/test-model"))
+		require.Equal(
+			t,
+			engine.ModelInfo{ID: "test-model", Name: "Test Model"},
+			prepared.ModelInfo("fake/test-model"),
+		)
 
 		// The description belongs to the model the branch runs, so selecting
 		// another model moves it with it.

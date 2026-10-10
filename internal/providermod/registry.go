@@ -60,6 +60,10 @@ type ModelDeclaration struct {
 	// half of every model reference of this model.
 	ID string `json:"id"`
 
+	// Name is the display name the interface shows the model by. It is
+	// optional: a model without one is shown by its ID.
+	Name string `json:"name,omitempty"`
+
 	// Protocol overrides the provider protocol for this model, empty to
 	// inherit.
 	Protocol provider.Protocol `json:"protocol,omitempty"`
