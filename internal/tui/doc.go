@@ -72,8 +72,12 @@
 // model that runs it. A selection the agent directory or the configuration no
 // longer holds leaves the branch with nothing to run: the conversation is
 // still walked and read, but sending waits until another agent or model is
-// selected. A session whose agent is gone is offered like any other, marked in
-// the start list so the reader knows before opening it, and the conversation
+// selected. The thinking of the conversation takes no picker: ctrl+x t moves
+// it to the next mode of the model, off first, and the status line above the
+// prompt reads what it landed on, so the press is seen without leaving the
+// conversation. A session whose agent is gone is offered like any other,
+// marked in the start list so the reader knows before opening it, and the
+// conversation
 // says in the status line which agent or model is missing, so a definition that
 // was renamed or removed never hides the sessions that ran on it. Naming the
 // session gives it the title the start list

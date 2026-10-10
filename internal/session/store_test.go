@@ -1656,8 +1656,9 @@ func TestStoreConcurrency(t *testing.T) {
 }
 
 // TestThinkingSelection verifies the thinking selection of a branch: the
-// newest entry wins, it hangs from the branch that wrote it, off is the
-// absence of an entry and a level the branch already holds writes nothing.
+// newest entry wins, it hangs from the branch that wrote it, off is an entry
+// of its own that turns an earlier level off from that turn onward and a
+// level the branch already holds writes nothing.
 func TestThinkingSelection(t *testing.T) {
 	t.Run("selects a level on a branch and reads it back", func(t *testing.T) {
 		dir := t.TempDir()
@@ -1679,12 +1680,27 @@ func TestThinkingSelection(t *testing.T) {
 		require.Equal(t, "high", reloaded.ActiveThinking())
 	})
 
-	t.Run("off writes nothing", func(t *testing.T) {
-		store := newTestStore(t)
+	t.Run("off is an entry that turns an earlier level off", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent:   "coder",
+			Model:   "test/model",
+			Workdir: dir,
+		}, &stubGenerator{})
+		require.NoError(t, err)
 
-		before := len(store.Entries())
+		require.NoError(t, store.SetThinking(context.Background(), "high"))
 		require.NoError(t, store.SetThinking(context.Background(), ""))
-		require.Equal(t, "", store.ActiveThinking())
-		require.Equal(t, before, len(store.Entries()))
+		require.Equal(t, "", store.ActiveThinking(), "the newest entry wins")
+
+		id := store.ID()
+		require.NoError(t, store.Close())
+		reloaded, err := Open(dir, id, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reloaded.Close()) })
+		require.Equal(t, "", reloaded.ActiveThinking())
+
+		// A repeated off writes nothing, like a repeated level.
+		require.NoError(t, reloaded.SetThinking(context.Background(), ""))
 	})
 }

@@ -790,16 +790,13 @@ func (s *Store) activeThinking() string {
 }
 
 // SetThinking selects the thinking level the branch runs from now on. An
-// empty level is off: it appends no entry, because the absence of one is
-// already the off state of a branch, and the semantic result is the same as
-// turning the mode off at any earlier point of the branch. A level the branch
-// already holds is a no-op. The selection belongs to the branch that wrote
-// it, exactly like a model selection.
+// empty level is off and writes an entry of its own, so the newest one of the
+// branch wins at that turn: turning the thinking off never wakes an earlier
+// level when the reader returns to that turn of the conversation. A level the
+// branch already holds is a no-op. The selection belongs to the branch that
+// wrote it, exactly like a model selection.
 func (s *Store) SetThinking(ctx context.Context, level string) error {
 	level = strings.TrimSpace(level)
-	if level == "" {
-		return nil
-	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -161,7 +161,7 @@ func (s *fakeSession) ModelInfo(ref string) engine.ModelInfo { return s.modelInf
 // ActiveThinking returns the scripted thinking of the branch, empty for off.
 func (s *fakeSession) ActiveThinking() string { return s.thinking }
 
-// SetThinking records the thinking the branch is moved to.
+// SetThinking records the thinking the branch is moved to, off included.
 func (s *fakeSession) SetThinking(_ context.Context, level string) error {
 	if s.thinkingErr != nil {
 		return s.thinkingErr
@@ -3544,4 +3544,116 @@ func lineOf(view, text string) string {
 		}
 	}
 	return ""
+}
+
+// TestCycleThinking verifies the thinking selection of an open conversation:
+// the leader chord that cycles through the roster of the model, off first,
+// and the command center entry that reaches the same place. The cycle reads
+// in the status line what the conversation runs, and a model that declares
+// nothing stays off whatever the chord repeats.
+func TestCycleThinking(t *testing.T) {
+	// thinkingChat opens a conversation whose model declares three levels in
+	// the order its provider module lists them.
+	thinkingChat := func(t *testing.T) (*model, *fakeSession) {
+		t.Helper()
+		m, scripted := chatModel(t)
+		scripted.thinkingModes = map[string][]string{
+			"fake/test-model": {"low", "high", "max"},
+		}
+		return m, scripted
+	}
+
+	t.Run("cycles through the roster and wraps to off", func(t *testing.T) {
+		m, scripted := thinkingChat(t)
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+		require.Equal(t, "low", scripted.thinking)
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+		require.Equal(t, "high", scripted.thinking)
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+		require.Equal(t, "max", scripted.thinking)
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+		require.Equal(t, "", scripted.thinking, "the roster wraps to off")
+	})
+
+	t.Run("reads what it landed on in the status line", func(t *testing.T) {
+		m, _ := thinkingChat(t)
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+		require.Contains(t, plain(m.activityLine()), "thinking low")
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+		require.Contains(t, plain(m.activityLine()), "thinking high")
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+		require.Contains(t, plain(m.activityLine()), "thinking off")
+	})
+
+	t.Run("keeps cycling from a level the model no longer declares", func(t *testing.T) {
+		m, scripted := thinkingChat(t)
+		// A stale level from an earlier declaration of the model is turned
+		// off first, so the first press lands on low again.
+		scripted.thinking = "ultra"
+		m.status = ""
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+		require.Empty(t, scripted.thinking, "the stale level is turned off first")
+		require.Contains(t, plain(m.activityLine()), "thinking off")
+	})
+
+	t.Run("does nothing on a model that declares no thinking", func(t *testing.T) {
+		m, scripted := chatModel(t)
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+
+		require.Empty(t, scripted.thinking, "off is the whole roster")
+		require.Empty(t, plain(m.activityLine()))
+	})
+
+	t.Run("runs from the command center", func(t *testing.T) {
+		m, scripted := thinkingChat(t)
+
+		update(t, m, pressCtrlP)
+		typeFilter(t, m, "Cycle thinking")
+		update(t, m, pressEnter)
+
+		require.Equal(t, "low", scripted.thinking)
+		require.Equal(t, phaseSettings, m.phase)
+	})
+
+	t.Run("stays away while the agent works", func(t *testing.T) {
+		m, scripted := thinkingChat(t)
+		m.input.SetValue("hello")
+		require.NotNil(t, update(t, m, pressEnter))
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+
+		require.Empty(t, scripted.thinking, "a run in flight holds the roster")
+	})
+
+	t.Run("reports a selection the session cannot write", func(t *testing.T) {
+		m, scripted := thinkingChat(t)
+		scripted.thinkingErr = errors.New("store closed")
+
+		update(t, m, pressCtrlX)
+		update(t, m, tea.KeyPressMsg{Code: 't'})
+
+		require.Error(t, m.fatal)
+		require.Contains(t, plain(m.activityLine()), "store closed")
+	})
 }

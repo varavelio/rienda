@@ -663,9 +663,9 @@ func decodeThinking(lineNumber int, line []byte, known map[string]int) (Entry, e
 			stored.ParentID,
 		)
 	}
-	if strings.TrimSpace(stored.ThinkingLevel) == "" {
-		return Entry{}, fmt.Errorf("line %d: the thinking level is required", lineNumber)
-	}
+	// An empty level is the off entry: it selects no thinking from this entry
+	// onward, which is what lets the newest selection of a branch beat any
+	// earlier one, turning the mode off at the turn it was picked at.
 	return stored.entry(), nil
 }
 

@@ -842,6 +842,9 @@ func (m *model) activityBlock() string {
 // session was moved back to, and stays blank otherwise.
 func (m *model) activityLine() string {
 	if !m.running {
+		if m.status != "" {
+			return m.clip(m.styles.notice.Render(m.status))
+		}
 		switch {
 		case m.runnable != nil:
 			return m.clip(m.styles.notice.Render(

@@ -252,11 +252,11 @@ func (s *Session) ThinkingModes(ref string) []string {
 	return s.resolver.ThinkingLevels(ref)
 }
 
-// SetThinking selects the thinking mode the branch runs from now on. An empty
-// level is off: it removes no entry, because the absence of a selection is
-// already the off state of a branch and turning the mode off at any point of
-// the branch reads the same as never having turned it on. A level the branch
-// already holds is a no-op.
+// SetThinking selects the thinking mode the branch runs from now on. An
+// empty level is off and writes an entry of its own, so the newest selection
+// of the branch wins at that turn: turning the mode off never wakes an
+// earlier level when the reader returns to that turn of the conversation. A
+// level the branch already holds is a no-op.
 func (s *Session) SetThinking(ctx context.Context, level string) error {
 	if err := s.store.SetThinking(ctx, level); err != nil {
 		return fmt.Errorf("harness: %w", err)
