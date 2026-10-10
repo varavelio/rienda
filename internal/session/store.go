@@ -768,6 +768,63 @@ func (s *Store) SetModel(ctx context.Context, ref string) error {
 	return err
 }
 
+// ActiveThinking returns the thinking level the branch runs at its active
+// leaf: the level the newest KindThinking entry selects, empty for off. Like
+// ActiveModel, a caller resolves the level against the declaration of the
+// model it runs; the store never holds one.
+func (s *Store) ActiveThinking() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeThinking()
+}
+
+// activeThinking resolves the thinking level of the branch, assuming the
+// caller holds the lock.
+func (s *Store) activeThinking() string {
+	for _, entry := range slices.Backward(s.branch()) {
+		if entry.Kind == KindThinking {
+			return entry.ThinkingLevel
+		}
+	}
+	return ""
+}
+
+// SetThinking selects the thinking level the branch runs from now on. An
+// empty level is off: it appends no entry, because the absence of one is
+// already the off state of a branch, and the semantic result is the same as
+// turning the mode off at any earlier point of the branch. A level the branch
+// already holds is a no-op. The selection belongs to the branch that wrote
+// it, exactly like a model selection.
+func (s *Store) SetThinking(ctx context.Context, level string) error {
+	level = strings.TrimSpace(level)
+	if level == "" {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.activeThinking() == level {
+		return nil
+	}
+
+	_, err := appendSelection(
+		s,
+		ctx,
+		Entry{Kind: KindThinking, ThinkingLevel: level},
+		func(entry Entry) storedThinking {
+			return storedThinking{
+				Kind:          KindThinking,
+				ID:            entry.ID,
+				ParentID:      entry.ParentID,
+				CreatedAt:     entry.CreatedAt,
+				ThinkingLevel: entry.ThinkingLevel,
+			}
+		},
+	)
+	return err
+}
+
 // appendSelection persists a selection entry after the active leaf and advances
 // the leaf to it, which binds the selection to the branch that wrote it and
 // makes it the state of the session from there on. Every selection shares this

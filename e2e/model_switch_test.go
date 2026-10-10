@@ -12,16 +12,13 @@ import (
 
 // secondModelRef is the reference of the second model the scenario switches
 // to, added to the default configuration of the instance.
-const secondModelRef = harness.FakeProviderName + "/second"
+const secondModelRef = harness.FakeProviderName + "/gpt-test"
 
 // modelSwitchConfig returns the default configuration with a second model, so a
 // run can switch the model of a session.
 func modelSwitchConfig() *harness.Config {
 	cfg := harness.DefaultConfig()
-	cfg.Providers[0].Models = append(cfg.Providers[0].Models, harness.Model{
-		Alias: "second",
-		ID:    "gpt-second",
-	})
+	cfg.Providers[0].Models = append(cfg.Providers[0].Models, harness.Model{ID: "gpt-second"})
 	return &cfg
 }
 
@@ -46,9 +43,9 @@ func TestModelSwitchDrivesTheWholeFeature(t *testing.T) {
 	sessionID := first.SessionID(t)
 
 	stored := app.Session(t, sessionID)
-	require.Equal(t, harness.FakeModelRef, stored.Header.Model)
+	require.Equal(t, chainHeadModelRef, stored.Header.Model)
 	require.Empty(t, stored.Models)
-	require.Equal(t, harness.DefaultModelID, app.Provider().Requests()[0].Chat(t).Model)
+	require.Equal(t, chainHeadModelID, app.Provider().Requests()[0].Chat(t).Model)
 
 	// Continuing the session on another model appends the selection and sends
 	// the wire identifier of the new model.
@@ -56,12 +53,12 @@ func TestModelSwitchDrivesTheWholeFeature(t *testing.T) {
 	second.RequireSuccess(t)
 
 	stored = app.Session(t, sessionID)
-	require.Equal(t, harness.FakeModelRef, stored.Header.Model,
+	require.Equal(t, chainHeadModelRef, stored.Header.Model,
 		"the header keeps the model the session was created with")
 	require.Len(t, stored.Models, 1)
 	selection := stored.Models[0]
 	require.Equal(t, secondModelRef, selection.ModelRef)
-	require.Equal(t, harness.FakeModelRef, selection.PreviousModelRef,
+	require.Equal(t, chainHeadModelRef, selection.PreviousModelRef,
 		"the selection records the model it replaced, so the transition reads off the file")
 	require.NotEmpty(t, selection.ID)
 	require.Contains(t, entryIDs(stored), selection.ParentID,
@@ -69,7 +66,7 @@ func TestModelSwitchDrivesTheWholeFeature(t *testing.T) {
 
 	requests := app.Provider().Requests()
 	require.Len(t, requests, 2)
-	require.Equal(t, "gpt-second", requests[1].Chat(t).Model)
+	require.Equal(t, harness.DefaultModelID, requests[1].Chat(t).Model)
 	require.Contains(t, joinedMessages(requests[1].Chat(t)), "first prompt",
 		"the conversation the session holds is replayed")
 
@@ -79,7 +76,7 @@ func TestModelSwitchDrivesTheWholeFeature(t *testing.T) {
 	third := app.Run(t, "run", "-s", sessionID, "-p", "keep going")
 	third.RequireSuccess(t)
 	require.Len(t, app.Session(t, sessionID).Models, 1, "no second selection is written")
-	require.Equal(t, "gpt-second", app.Provider().Requests()[2].Chat(t).Model)
+	require.Equal(t, harness.DefaultModelID, app.Provider().Requests()[2].Chat(t).Model)
 }
 
 // TestModelSwitchRejectsAnUnknownModel verifies that a model the configuration
@@ -106,3 +103,10 @@ func TestModelSwitchRejectsAnUnknownModel(t *testing.T) {
 		"nothing was written to the session")
 	require.Empty(t, app.Session(t, sessionID).Models)
 }
+
+// chainHead names the model the roster head carries in this scenario: the
+// alphabetical first reference of the roster, second model included.
+const chainHeadModelRef = harness.FakeProviderName + "/gpt-second"
+
+// chainHeadModelID is the wire identifier of the roster head.
+const chainHeadModelID = "gpt-second"

@@ -53,7 +53,7 @@ func TestDefaultDir(t *testing.T) {
 func TestLoad(t *testing.T) {
 	t.Run("loads a definition from disk", func(t *testing.T) {
 		dir := t.TempDir()
-		writeDefinition(t, dir, "coder.md", "---\ndescription: Coder\nmodel: a/b\n---\nPrompt\n")
+		writeDefinition(t, dir, "coder.md", "---\ndescription: Coder\n---\nPrompt\n")
 
 		loaded, err := Load(dir, "coder")
 
@@ -83,10 +83,10 @@ func TestLoad(t *testing.T) {
 func TestLoadAll(t *testing.T) {
 	t.Run("loads definitions sorted by id and skips unrelated files", func(t *testing.T) {
 		dir := t.TempDir()
-		writeDefinition(t, dir, "zeta.md", "---\ndescription: Z\nmodel: a/b\n---\n")
-		writeDefinition(t, dir, "alpha.md", "---\ndescription: A\nmodel: a/b\n---\n")
+		writeDefinition(t, dir, "zeta.md", "---\ndescription: Z\n---\n")
+		writeDefinition(t, dir, "alpha.md", "---\ndescription: A\n---\n")
 		writeDefinition(t, dir, "notes.txt", "not an agent")
-		writeDefinition(t, dir, ".hidden.md", "---\ndescription: H\nmodel: a/b\n---\n")
+		writeDefinition(t, dir, ".hidden.md", "---\ndescription: H\n---\n")
 		require.NoError(t, os.Mkdir(filepath.Join(dir, "nested.md"), 0o750))
 
 		agents, err := LoadAll(dir)
@@ -106,8 +106,8 @@ func TestLoadAll(t *testing.T) {
 
 	t.Run("keeps valid definitions and collects the invalid ones", func(t *testing.T) {
 		dir := t.TempDir()
-		writeDefinition(t, dir, "good.md", "---\ndescription: G\nmodel: a/b\n---\n")
-		writeDefinition(t, dir, "broken.md", "---\nmodel: a/b\n---\n")
+		writeDefinition(t, dir, "good.md", "---\ndescription: G\n---\n")
+		writeDefinition(t, dir, "broken.md", "---\ndescription: ''\n---\n")
 
 		agents, err := LoadAll(dir)
 

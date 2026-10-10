@@ -73,3 +73,35 @@ Four rules explain almost everything about writing an extension:
    file to asking the user a question, is a member of the `ctx` object. The
    [Tools](/docs/advanced/tools/#the-context) page documents it completely, and
    hooks receive the same one.
+
+### Provider modules
+
+A provider is a directory with an `index.js` under `~/.rienda/providers`. The
+built ones ship inside the binary; a user module of the same name replaces the
+built one entirely. Every module exports one synchronous function receiving
+the same `ctx` a hook receives and returning the canonical declaration of the
+provider:
+
+```js
+module.exports = function(ctx) {
+  var catalogue = JSON.parse(
+    ctx.http.fetch("https://models.dev/api.json").body,
+  );
+  // pick the models of the provider you serve, filter to the adapters
+  // Rienda speaks, and return the declaration:
+  return {
+    protocol: "openai_chat_completions", // one of openai_responses,
+    // openai_chat_completions, anthropic
+    base_url: "https://opencode.ai/zen/go/v1",
+    session_header: "x-opencode-session",
+    headers: {},
+    auth: "api_key",
+    models: [{ id: "kimi-k2", context_window: 128000, reasoning: false }],
+  };
+};
+```
+
+The declarations that reach the modules are the roster the picker offers and
+the connections every run uses; the module owns its catalog, and the caches it
+writes sit beside its declaration, inside its own directory. Keys travel
+through `rienda auth`, which stores them at `~/.rienda/credentials.json`.

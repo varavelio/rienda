@@ -7,7 +7,6 @@
 //
 //	---
 //	description: Writes and reviews Go code
-//	model: openrouter/kimi-k2
 //	tools: [read, edit]
 //	hooks: [approve, notify]
 //	config:
@@ -16,10 +15,12 @@
 //
 //	You are a senior Go engineer.
 //
-// Description and Model are required. Model is a provider/model reference and
-// every generation setting of the run, such as the token limit, the sampling
-// parameters or the thinking level, comes from that model in the
-// configuration; agents never declare them.
+// Description is required. Agents never name a model: the model a session
+// runs comes from the conversation itself — the user picks it live or a
+// deterministic chain seeds a new session — and every generation setting,
+// such as the token limit, the sampling parameters or the thinking mode,
+// comes from the model declaration of the provider. A frontmatter that
+// declares a model key is an error named by Parse.
 //
 // The frontmatter also declares the extensions of the agent: the ordered hook
 // names in Hooks and the per-extension settings in Config, a map of maps that

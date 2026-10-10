@@ -73,6 +73,17 @@ type Options struct {
 	// of relative paths.
 	Workdir string
 
+	// MaxOutputBytes raises the payload cap the ctx primitives honor when a
+	// module reads payloads larger than the default. Zero keeps the default,
+	// which is what every tool and hook uses.
+	MaxOutputBytes int64
+
+	// FileRoot confines the file system scope of the extension when set:
+	// relative ctx.file paths resolve against it and absolute ones are
+	// rejected. Empty leaves the workspace behavior: relative paths resolve
+	// against Workdir and absolute ones are honored.
+	FileRoot string
+
 	// Config is the global configuration as plain data: ctx.config.
 	Config any
 }
@@ -193,4 +204,15 @@ func (rt *Runtime) canceled(ctx context.Context) {
 	if ctx.Err() != nil {
 		panic(rt.vm.ToValue(canceledMessage))
 	}
+}
+
+// CompileSource compiles a module from its source text. Built-in extensions
+// embedded in the binary compile here, with a display name and no file of
+// their own.
+func CompileSource(name, source string) (*Module, error) {
+	program, err := goja.Compile(name, source, false)
+	if err != nil {
+		return nil, fmt.Errorf("extension %q: %w", name, sanitize(name, err))
+	}
+	return &Module{program: program, name: name}, nil
 }

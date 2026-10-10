@@ -17,7 +17,7 @@ func responsesProvider() harness.Provider {
 		Name:     harness.FakeProviderName,
 		Protocol: harness.ProtocolResponses,
 		APIKey:   harness.TestAPIKey,
-		Models:   []harness.Model{{Alias: harness.DefaultModelAlias, ID: harness.DefaultModelID}},
+		Models:   []harness.Model{{ID: harness.DefaultModelID}},
 	}
 }
 
@@ -62,8 +62,7 @@ func TestResponsesAnswersAPrompt(t *testing.T) {
 // OpenAI preset speaks the Responses protocol.
 func TestResponsesUsesThePresetProtocol(t *testing.T) {
 	provider := responsesProvider()
-	provider.Preset = "openai"
-	provider.Protocol = ""
+	provider.Protocol = harness.ProtocolResponses
 
 	app := harness.New(t, harness.Options{
 		Script: []harness.Turn{harness.Text("hello")},

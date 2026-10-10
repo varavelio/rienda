@@ -3,8 +3,12 @@
 package harness
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -14,7 +18,13 @@ import (
 // configuration, the agent definitions and the sessions of an instance.
 const riendaDirName = ".rienda"
 
-// Wire protocol names accepted by the protocol field of a provider.
+// providersEnv names the environment variable that points the binary at the
+// provider modules of the instance, so no invocation reads the home of the
+// developer running the suite.
+const providersEnv = "RIENDA_PROVIDERS"
+
+// Protocol names a provider speaks, the same values the provider modules
+// declare in their canonical shape.
 const (
 	// ProtocolChat is the OpenAI Chat Completions protocol.
 	ProtocolChat = "openai_chat_completions"
@@ -24,40 +34,44 @@ const (
 	ProtocolResponses = "openai_responses"
 )
 
-// Values of the default configuration of an instance.
+// Values of the default provider of an instance.
 const (
-	// FakeProviderName is the provider the default configuration declares.
+	// FakeProviderName is the provider the default instance declares.
 	FakeProviderName = "fake"
-	// DefaultModelAlias is the model alias the default configuration declares.
-	DefaultModelAlias = "model"
-	// DefaultModelID is the wire identifier the default model maps to.
+	// DefaultModelID is the wire identifier the default model sends, and the
+	// second half of the reference it answers to.
 	DefaultModelID = "gpt-test"
-	// TestAPIKey is the credential the default configuration sends.
+	// TestAPIKey is the credential the default instance sends.
 	TestAPIKey = "test-key"
 )
 
-// FakeModelRef is the model reference of the default configuration, the value
-// the model field of an agent definition declares.
-const FakeModelRef = FakeProviderName + "/" + DefaultModelAlias
+// FakeModelRef is the model reference of the default instance, the model a
+// run starts on when nothing names one.
+const FakeModelRef = FakeProviderName + "/" + DefaultModelID
 
-// Config describes the rienda configuration file of one instance, written in
-// the exact YAML format the binary reads.
+// Reasoning models default the window to this value, which is about what the
+// suite is willing to fill.
+const defaultFixtureWindow = 1_000_000
+
+// Config describes the fixture of one instance: the provider modules written
+// under ~/.rienda/providers and the compaction block of the configuration.
 type Config struct {
-	// Providers lists the provider connections available to the agents.
+	// Providers lists the provider modules of the instance.
 	Providers []Provider
 
-	// Compaction overrides the compaction block of the configuration. A nil
-	// value leaves the block absent, which the binary fills with its defaults.
+	// Compaction writes the compaction block of the configuration. A nil
+	// value leaves the block absent, which the binary fills with its
+	// defaults.
 	Compaction *Compaction
 
-	// ExtensionConfig writes the free config block for extension settings.
+	// ExtensionConfig writes the free config block of the configuration.
 	ExtensionConfig map[string]map[string]any
 }
 
-// Compaction describes the compaction block of a configuration, written in the
-// exact YAML format the binary reads.
+// Compaction describes the compaction block of the configuration.
 type Compaction struct {
-	// Enabled switches the automatic compaction on and off.
+	// Enabled switches the automatic compaction on and off. It is nil when
+	// the test leaves the value to the default, which is on.
 	Enabled *bool
 
 	// ReserveTokens is the room the threshold leaves in the window.
@@ -65,52 +79,50 @@ type Compaction struct {
 
 	// KeepRecentTokens is the budget of the conversation tail kept verbatim.
 	KeepRecentTokens int
-
-	// Model is the summarization model reference.
-	Model string
 }
 
-// Provider declares one entry of the providers map of the configuration.
+// Provider declares one provider module: a connection and the models it
+// offers, in the exact shape the provider declaration carries.
 type Provider struct {
-	// Name is the key of the provider, the first half of the model references
-	// of the agents that use it.
+	// Name is the key of the provider, the first half of its model references.
 	Name string
 
-	// Preset names a built-in connection template. It is mutually exclusive
-	// with Protocol.
-	Preset string
-
-	// Protocol names the wire protocol of a custom endpoint. It requires
-	// BaseURL and is mutually exclusive with Preset.
+	// Protocol is the wire protocol models without their own protocol run.
 	Protocol string
 
-	// BaseURL overrides the endpoint root. An empty value points the provider
-	// at the fake provider of the harness, whichever connection it declares.
+	// BaseURL is the endpoint root. An empty value points the provider at the
+	// fake provider, whichever protocol it speaks.
 	BaseURL string
 
-	// APIKey authenticates every request against the provider.
+	// APIKey authenticates every request against the provider. It travels
+	// through the credentials file of the instance, where the product reads
+	// it from.
 	APIKey string
 
-	// Headers adds static headers to every request against the provider.
+	// Headers adds static headers to every request.
 	Headers map[string]string
 
-	// SessionHeader overrides the header that carries the harness session id.
-	// When nil the provider inherits the header of its connection, and a
-	// pointer to an empty string disables it.
+	// SessionHeader carries the harness session ID, disabled when the
+	// pointer names an empty string and inherited otherwise.
 	SessionHeader *string
 
-	// Models maps the model aliases of the provider to their settings.
+	// Models lists the roster of the provider.
 	Models []Model
 }
 
-// Model declares one entry of the models map of a provider.
+// Model declares one model of a roster: the wire identifier it sends and its
+// generation settings. The reference of a model is provider/id.
 type Model struct {
-	// Alias is the key of the model, the second half of a model reference.
-	Alias string
-
-	// ID is the provider model identifier sent on the wire. It defaults to
-	// the alias when empty.
+	// ID is the wire identifier and the second half of the reference.
 	ID string
+
+	// Protocol overrides the provider protocol for this model.
+	Protocol string
+
+	// ContextWindow declares the window of the model, which the compaction of
+	// the conversation resolves. It defaults to a value large enough that the
+	// suite never waits for a threshold unless a test asks for one.
+	ContextWindow int
 
 	// MaxTokens caps the response token limit when greater than zero.
 	MaxTokens int
@@ -121,158 +133,201 @@ type Model struct {
 	// TopP controls nucleus sampling when set.
 	TopP *float64
 
-	// ThinkingLevel selects the extended thinking level of the model.
-	ThinkingLevel string
-
-	// ThinkingMaxTokens reserves a token budget for thinking.
-	ThinkingMaxTokens int
+	// Thinking declares the thinking modes of a reasoning model.
+	Thinking []Thinking
 }
 
-// DefaultConfig returns the configuration of a fresh instance: a single
-// provider that talks to the fake provider of the harness and offers one
-// model.
+// Thinking declares one thinking mode of a model.
+type Thinking struct {
+	// Level is the level the level-based protocols receive.
+	Level string
+
+	// MaxTokens is the budget the budget-based protocols receive.
+	MaxTokens int
+}
+
+// DefaultConfig returns the fixture of a fresh instance: a single provider
+// that talks to the fake provider and offers one chat model.
 func DefaultConfig() Config {
 	return Config{Providers: []Provider{{
 		Name:     FakeProviderName,
 		Protocol: ProtocolChat,
 		APIKey:   TestAPIKey,
-		Models:   []Model{{Alias: DefaultModelAlias, ID: DefaultModelID}},
+		Models:   []Model{{ID: DefaultModelID}},
 	}}}
 }
 
-// ConfigPath returns the path of the default configuration file of the
-// instance, the one the binary reads when nothing overrides it.
+// DefaultCompaction returns the compaction block the fixtures declare: on,
+// with the documented threshold and tail.
+func DefaultCompaction() Compaction {
+	enabled := true
+	return Compaction{Enabled: &enabled}
+}
+
+// ConfigPath returns the path of the configuration file of the instance, the
+// one the binary reads when nothing overrides it.
 func (h *Harness) ConfigPath() string {
-	return filepath.Join(h.home, riendaDirName, configFileName)
+	return filepath.Join(h.home, riendaDirName, "config.yaml")
 }
 
 // AgentsDir returns the directory holding the agent definitions of the
 // instance.
 func (h *Harness) AgentsDir() string {
-	return filepath.Join(h.home, riendaDirName, agentsDirName)
+	return filepath.Join(h.home, riendaDirName, "agents")
 }
 
-// WriteConfig writes another configuration file of the instance, with every
-// fake provider pointing at the fake provider of the harness, and returns its
-// path. Tests use it to point an invocation at a configuration of their own
-// through --config or RIENDA_CONFIG.
+// ProvidersDir returns the directory holding the provider modules of the
+// instance.
+func (h *Harness) ProvidersDir() string {
+	if h.providers != "" {
+		return h.providers
+	}
+	return filepath.Join(h.home, riendaDirName, "providers")
+}
+
+// WriteConfig writes the configuration of the provider modules that each test
+// needs, with every provider that declares no BaseURL pointing at the fake
+// provider, and returns the path of the resulting config.yaml.
 func (h *Harness) WriteConfig(t *testing.T, dir string, cfg Config) string {
 	t.Helper()
-	path := filepath.Join(dir, configFileName)
-	cfg.write(t, path, h.provider.BaseURL())
+	h.install(t, cfg, h.ProvidersDir())
+	path := filepath.Join(dir, "config.yaml")
+	writeInstanceConfig(t, path, cfg)
 	return path
 }
 
-// write stores the configuration document at path, with every provider that
-// declares no base URL pointing at the given fake endpoint.
-func (c Config) write(t *testing.T, path, fakeBaseURL string) {
+// install writes one provider module per entry and the credentials of its
+// key, into the directory the instance reads.
+func (h *Harness) install(t *testing.T, cfg Config, dir string) {
 	t.Helper()
 
-	document := configDocument{
-		Providers:  make(map[string]providerDocument, len(c.Providers)),
-		Compaction: c.Compaction.document(),
-		Config:     c.ExtensionConfig,
-	}
-	for _, provider := range c.Providers {
+	seen := make(map[string]bool, len(cfg.Providers))
+	for _, provider := range cfg.Providers {
 		if provider.Name == "" {
 			t.Fatal("harness: every provider declaration needs a name")
 		}
-		if _, taken := document.Providers[provider.Name]; taken {
+		if seen[provider.Name] {
 			t.Fatalf("harness: duplicate provider name %q", provider.Name)
 		}
-		document.Providers[provider.Name] = provider.document(t, fakeBaseURL)
+		seen[provider.Name] = true
+		module := providerModule(t, provider, h.provider.BaseURL())
+		providerDir := filepath.Join(dir, provider.Name)
+		writeFile(t, filepath.Join(providerDir, "index.js"), module)
+		if provider.APIKey != "" {
+			h.writeCredential(t, provider.Name, provider.APIKey)
+		}
 	}
-
-	contents, err := yaml.Marshal(document)
-	if err != nil {
-		t.Fatalf("harness: encode configuration: %v", err)
-	}
-	writeFile(t, path, string(contents))
 }
 
-// document converts a provider declaration into its YAML form.
-func (p Provider) document(t *testing.T, fakeBaseURL string) providerDocument {
+// writeCredential stores one api key into the credentials file of the
+// instance, the exact file the product reads.
+func (h *Harness) writeCredential(t *testing.T, name, apiKey string) {
+	t.Helper()
+	path := filepath.Join(h.home, riendaDirName, "credentials.json")
+	document := map[string]map[string]string{}
+	if raw, err := os.ReadFile(path); err == nil { //nolint:gosec // the test owns the path.
+		_ = json.Unmarshal(raw, &document)
+	}
+	document[name] = map[string]string{"api_key": apiKey}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("harness: encode credentials: %v", err)
+	}
+	writeFile(t, path, string(encoded)+"\n")
+}
+
+// modelEntry serializes one model into the canonical shape the module
+// returns; a window of zero means the fixture default.
+func modelEntry(model Model, indent string) string {
+	window := model.ContextWindow
+	if window == 0 {
+		window = defaultFixtureWindow
+	}
+	var entry strings.Builder
+	entry.WriteString(indent)
+	entry.WriteString(`{ id: `)
+	entry.WriteString(quote(model.ID))
+	entry.WriteString(`, protocol: `)
+	entry.WriteString(quote(model.Protocol))
+	entry.WriteString(`, context_window: `)
+	entry.WriteString(strconv.Itoa(window))
+	entry.WriteString(`, reasoning: `)
+	entry.WriteString(strconv.FormatBool(len(model.Thinking) > 0))
+	entry.WriteString(`, thinking_modes: [`)
+	for i, mode := range model.Thinking {
+		if i > 0 {
+			entry.WriteString(", ")
+		}
+		entry.WriteString(`{ level: `)
+		entry.WriteString(quote(mode.Level))
+		entry.WriteString(`, max_tokens: `)
+		entry.WriteString(strconv.Itoa(mode.MaxTokens))
+		entry.WriteString(" }")
+	}
+	entry.WriteString("]")
+	if model.MaxTokens > 0 {
+		entry.WriteString(`, max_tokens: `)
+		entry.WriteString(strconv.Itoa(model.MaxTokens))
+	}
+	if model.Temperature != nil {
+		fmt.Fprintf(&entry, ", temperature: %g", *model.Temperature)
+	}
+	if model.TopP != nil {
+		fmt.Fprintf(&entry, ", top_p: %g", *model.TopP)
+	}
+	return entry.String() + " }"
+}
+
+// providerModule renders one provider declaration into a provider module: a
+// function receiving ctx and returning the canonical shape.
+func providerModule(t *testing.T, provider Provider, fakeURL string) string {
 	t.Helper()
 
-	baseURL := p.BaseURL
+	baseURL := provider.BaseURL
 	if baseURL == "" {
-		baseURL = fakeBaseURL
+		baseURL = fakeURL
 	}
-
-	models := make(map[string]modelDocument, len(p.Models))
-	for _, model := range p.Models {
-		if model.Alias == "" {
-			t.Fatalf("harness: provider %q declares a model without an alias", p.Name)
+	sessionHeader := ""
+	if provider.SessionHeader != nil {
+		sessionHeader = *provider.SessionHeader
+	}
+	roster := make([]string, 0, len(provider.Models))
+	for _, model := range provider.Models {
+		roster = append(roster, modelEntry(model, "\t\t\t"))
+	}
+	models := "[]"
+	if len(roster) > 0 {
+		models = "[\n" + strings.Join(roster, ",\n") + ",\n\t\t]"
+	}
+	headers := "{}"
+	if len(provider.Headers) > 0 {
+		A := make([]string, 0, len(provider.Headers))
+		for key, value := range provider.Headers {
+			A = append(A, quote(key)+": "+quote(value))
 		}
-		models[model.Alias] = modelDocument{
-			ID:                model.ID,
-			MaxTokens:         model.MaxTokens,
-			Temperature:       model.Temperature,
-			TopP:              model.TopP,
-			ThinkingLevel:     model.ThinkingLevel,
-			ThinkingMaxTokens: model.ThinkingMaxTokens,
-		}
+		headers = "{ " + strings.Join(A, ", ") + " }"
 	}
-
-	return providerDocument{
-		Preset:        p.Preset,
-		Protocol:      p.Protocol,
-		BaseURL:       baseURL,
-		APIKey:        p.APIKey,
-		Headers:       p.Headers,
-		SessionHeader: p.SessionHeader,
-		Models:        models,
-	}
+	return "\n" + strings.Join([]string{
+		"module.exports = function (ctx) {",
+		"\treturn {",
+		"\t\tprotocol: " + quote(provider.Protocol) + ",",
+		"\t\tbase_url: " + quote(baseURL) + ",",
+		"\t\tsession_header: " + quote(sessionHeader) + ",",
+		"\t\theaders: " + headers + ",",
+		"\t\tauth: 'api_key',",
+		"\t\tmodels: " + models + ",",
+		"\t};",
+		"};",
+	}, "\n")
 }
 
-// configDocument mirrors the YAML document of a configuration file.
-type configDocument struct {
-	Providers  map[string]providerDocument `yaml:"providers"`
-	Compaction *compactionDocument         `yaml:"compaction,omitempty"`
-	Config     map[string]map[string]any   `yaml:"config,omitempty"`
-}
-
-// document converts a compaction block into its YAML form, nil when the test
-// declares none.
-func (c *Compaction) document() *compactionDocument {
-	if c == nil {
-		return nil
-	}
-	return &compactionDocument{
-		Enabled:          c.Enabled,
-		ReserveTokens:    c.ReserveTokens,
-		KeepRecentTokens: c.KeepRecentTokens,
-		Model:            c.Model,
-	}
-}
-
-// compactionDocument mirrors the YAML form of the compaction block.
-type compactionDocument struct {
-	Enabled          *bool  `yaml:"enabled,omitempty"`
-	ReserveTokens    int    `yaml:"reserve_tokens,omitempty"`
-	KeepRecentTokens int    `yaml:"keep_recent_tokens,omitempty"`
-	Model            string `yaml:"model,omitempty"`
-}
-
-// providerDocument mirrors one entry of the providers map.
-type providerDocument struct {
-	Preset        string                   `yaml:"preset,omitempty"`
-	Protocol      string                   `yaml:"protocol,omitempty"`
-	BaseURL       string                   `yaml:"base_url,omitempty"`
-	APIKey        string                   `yaml:"api_key,omitempty"`
-	Headers       map[string]string        `yaml:"headers,omitempty"`
-	SessionHeader *string                  `yaml:"session_header,omitempty"`
-	Models        map[string]modelDocument `yaml:"models,omitempty"`
-}
-
-// modelDocument mirrors one entry of the models map.
-type modelDocument struct {
-	ID                string   `yaml:"id,omitempty"`
-	MaxTokens         int      `yaml:"max_tokens,omitempty"`
-	Temperature       *float64 `yaml:"temperature,omitempty"`
-	TopP              *float64 `yaml:"top_p,omitempty"`
-	ThinkingLevel     string   `yaml:"thinking_level,omitempty"`
-	ThinkingMaxTokens int      `yaml:"thinking_max_tokens,omitempty"`
+// WithConfig writes the given contents as a configuration file and returns
+// its path, for tests that exercise configurations the binary must reject.
+func (h *Harness) WithConfig(t *testing.T, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, contents)
+	return path
 }
 
 // writeFile writes contents into path, creating its parent directory, and
@@ -285,4 +340,51 @@ func writeFile(t *testing.T, path, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("harness: write %s: %v", path, err)
 	}
+}
+
+// writeYAML writes a document as YAML, for the configuration file.
+func writeYAML(t *testing.T, path string, document map[string]any) {
+	t.Helper()
+	encoded, err := yaml.Marshal(document)
+	if err != nil {
+		t.Fatalf("harness: encode configuration: %v", err)
+	}
+	writeFile(t, path, string(encoded))
+}
+
+// writeInstanceConfig writes the configuration file of an instance: the
+// compaction block and the free config block, nothing else, since providers
+// live in the modules.
+func writeInstanceConfig(t *testing.T, path string, cfg Config) {
+	t.Helper()
+
+	c := DefaultCompaction()
+	if cfg.Compaction != nil && cfg.Compaction.Enabled != nil {
+		c = *cfg.Compaction
+	}
+	// A block the test declares fully keeps every value it carries; one it
+	// leaves to the defaults holds the documented ones.
+	if cfg.Compaction == nil {
+		c = Compaction{Enabled: &enabledTrue}
+	}
+	document := map[string]any{
+		"compaction": map[string]any{
+			"enabled":            c.Enabled != nil && *c.Enabled,
+			"reserve_tokens":     c.ReserveTokens,
+			"keep_recent_tokens": c.KeepRecentTokens,
+		},
+	}
+	if cfg.ExtensionConfig != nil {
+		document["config"] = cfg.ExtensionConfig
+	}
+	writeYAML(t, path, document)
+}
+
+// enabledTrue names the value a compaction block the fixture did not write
+// carries.
+var enabledTrue = true
+
+// quote turns a Go string into a JavaScript single-quoted string literal.
+func quote(value string) string {
+	return "'" + strings.ReplaceAll(strings.ReplaceAll(value, "\\", "\\\\"), "'", "\\'") + "'"
 }

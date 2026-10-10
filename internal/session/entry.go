@@ -41,6 +41,12 @@ const (
 	// active leaf, it belongs to the branch that wrote it, and the newest one
 	// of a branch wins.
 	KindModel Kind = "model"
+	// KindThinking selects the thinking mode the branch runs from this entry
+	// onward, the branch-scope counterpart of KindModel: it hangs from the
+	// active leaf, it belongs to the branch that wrote it, and the newest one
+	// of a branch wins. The entry carries the level only; the absence of any
+	// entry is the off state of a branch.
+	KindThinking Kind = "thinking"
 )
 
 // Entry is a single node of the session tree. Only the fields valid for the
@@ -113,6 +119,12 @@ type Entry struct {
 	// user and must never reach a session file. The entry carries no message:
 	// it only moves the branch it hangs from onto another model.
 	ModelRef string
+
+	// ThinkingLevel is the thinking level a KindThinking entry selects, the
+	// wire level the level-based protocols receive and the budget carrier the
+	// budget-based ones resolve. It behaves exactly like ModelRef: it is a
+	// branch-owned selection, and the newest one of the branch wins.
+	ThinkingLevel string
 
 	// PreviousModelRef is the provider/model reference the branch ran before a
 	// KindModel entry selected ModelRef. It is recorded like PreviousAgentID,

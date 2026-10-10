@@ -11,7 +11,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/varavelio/rienda/internal/agent"
-	"github.com/varavelio/rienda/internal/catalog"
 	"github.com/varavelio/rienda/internal/filecomplete"
 	"github.com/varavelio/rienda/internal/files"
 	"github.com/varavelio/rienda/internal/harness"
@@ -45,14 +44,6 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 	selected, err := selectAgent(definitions, opts.AgentID)
 	if err != nil {
 		return err
-	}
-
-	// The catalog keeps the model facts the context measurement resolves its
-	// window from current while the interface runs, and stops when it returns.
-	catalogCtx, stopCatalog := context.WithCancel(context.Background())
-	defer stopCatalog()
-	if facts, err := catalog.New(catalog.Options{}); err == nil {
-		go facts.Run(catalogCtx)
 	}
 
 	// The interactor answers the questions the extensions of a run ask the

@@ -152,8 +152,7 @@ func TestSkillsSurviveACompaction(t *testing.T) {
 			Description: "Handle PDFs.",
 			Body:        "Read the PDF.",
 		}},
-		Catalog: map[string]int{"gpt-test": 300},
-		Config:  compactionConfig(),
+		Config: compactionConfig(),
 	})
 	require.NoError(t, os.WriteFile(
 		filepath.Join(app.Workdir(), "AGENTS.md"),

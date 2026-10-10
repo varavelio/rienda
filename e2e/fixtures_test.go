@@ -3,7 +3,11 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/varavelio/rienda/e2e/harness"
 )
@@ -14,18 +18,9 @@ func coderAgent() harness.Agent {
 	return harness.Agent{
 		ID:           "coder",
 		Description:  "A test agent",
-		Model:        harness.FakeModelRef,
 		Tools:        []string{"shell"},
 		SystemPrompt: "You answer briefly.",
 	}
-}
-
-// modelFor returns the coder agent definition running the given model
-// reference.
-func modelFor(ref string) harness.Agent {
-	definition := coderAgent()
-	definition.Model = ref
-	return definition
 }
 
 // roles returns the roles of the entries of a session, in order.
@@ -54,4 +49,12 @@ func newApp(t *testing.T, turns ...harness.Turn) *harness.Harness {
 		Script: turns,
 		Agents: []harness.Agent{coderAgent()},
 	})
+}
+
+// writeTestModule writes one provider module into dir, for tests that need a
+// roster the fixtures own.
+func writeTestModule(t *testing.T, dir, source string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.js"), []byte(source), 0o600))
 }

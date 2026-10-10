@@ -28,35 +28,38 @@ import (
 // active branch too: the tests that exercise branching open a session over a
 // real store instead.
 type fakeSession struct {
-	info         session.Info
-	entries      []session.Entry
-	events       chan engine.Event
-	prompts      []string
-	leaves       []string
-	tags         map[string]string
-	titles       []string
-	agents       []string
-	activeAgent  string
-	modelRefs    []string
-	models       []string
-	activeModel  string
-	modelInfo    map[string]engine.ModelInfo
-	agentErr     error
-	modelErr     error
-	leafErr      error
-	tagErr       error
-	titleErr     error
-	context      tokens.Report
-	contextErr   error
-	runnable     engine.RunnableRefusal
-	stopped      bool
-	refusal      compaction.Refusal
-	refused      bool
-	compact      chan engine.Event
-	compacted    int
-	canceled     chan struct{}
-	canceledOnce sync.Once
-	closed       bool
+	info          session.Info
+	entries       []session.Entry
+	events        chan engine.Event
+	prompts       []string
+	leaves        []string
+	tags          map[string]string
+	titles        []string
+	agents        []string
+	activeAgent   string
+	modelRefs     []string
+	models        []string
+	activeModel   string
+	modelInfo     map[string]engine.ModelInfo
+	agentErr      error
+	modelErr      error
+	thinkingErr   error
+	thinking      string
+	thinkingModes map[string][]string
+	leafErr       error
+	tagErr        error
+	titleErr      error
+	context       tokens.Report
+	contextErr    error
+	runnable      engine.RunnableRefusal
+	stopped       bool
+	refusal       compaction.Refusal
+	refused       bool
+	compact       chan engine.Event
+	compacted     int
+	canceled      chan struct{}
+	canceledOnce  sync.Once
+	closed        bool
 }
 
 // newFakeSession builds a session with a buffered event channel.
@@ -154,6 +157,21 @@ func (s *fakeSession) ActiveModel() string { return s.activeModel }
 
 // ModelInfo returns the scripted description of a model reference.
 func (s *fakeSession) ModelInfo(ref string) engine.ModelInfo { return s.modelInfo[ref] }
+
+// ActiveThinking returns the scripted thinking of the branch, empty for off.
+func (s *fakeSession) ActiveThinking() string { return s.thinking }
+
+// SetThinking records the thinking the branch is moved to.
+func (s *fakeSession) SetThinking(_ context.Context, level string) error {
+	if s.thinkingErr != nil {
+		return s.thinkingErr
+	}
+	s.thinking = level
+	return nil
+}
+
+// ThinkingModes returns the scripted modes of a model reference.
+func (s *fakeSession) ThinkingModes(ref string) []string { return s.thinkingModes[ref] }
 
 // Models returns the scripted model roster of the session.
 func (s *fakeSession) Models() []string { return s.models }
@@ -310,6 +328,19 @@ func (s *storeSession) ActiveModel() string { return s.store.ActiveModel() }
 // store-backed session never declares one, so tests that need one set it on the
 // model.
 func (s *storeSession) ModelInfo(ref string) engine.ModelInfo { return s.modelInfo[ref] }
+
+// ActiveThinking returns the thinking of the underlying store.
+func (s *storeSession) ActiveThinking() string { return s.store.ActiveThinking() }
+
+// SetThinking selects the thinking of the underlying store.
+func (s *storeSession) SetThinking(ctx context.Context, level string) error {
+	//nolint:wrapcheck // the fixture surfaces the error as it is.
+	return s.store.SetThinking(ctx, level)
+}
+
+// ThinkingModes is empty in this fixture; the modes live in the tests that
+// script them through a fakeSession.
+func (s *storeSession) ThinkingModes(string) []string { return nil }
 
 // Models reports the models a store-backed session may run. The store itself
 // holds no roster, so the interface tests that need one set it on the model.
@@ -1021,14 +1052,15 @@ func TestModel(t *testing.T) {
 		update(t, m, pressCtrlP)
 		require.Equal(t, 0, m.commands.cursor, "the commands that open a screen lead the list")
 
-		update(t, m, pressDown)
-		update(t, m, pressDown)
-		update(t, m, pressDown)
-		update(t, m, pressDown)
-		update(t, m, pressDown)
-		update(t, m, pressDown)
-		update(t, m, pressDown)
-		require.Equal(t, 7, m.commands.cursor, "the options follow the commands")
+		for range 8 {
+			update(t, m, pressDown)
+		}
+		require.Equal(
+			t,
+			8,
+			m.commands.cursor,
+			"the options follow the commands, after the thinking mode entry",
+		)
 		update(t, m, pressEnter)
 		require.True(t, m.preferences.ExpandToolOutput)
 
@@ -1043,7 +1075,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressEnter)
 		require.False(t, m.preferences.RenderMarkdown)
 
-		require.Equal(t, 9, m.commands.cursor)
+		require.Equal(t, 10, m.commands.cursor)
 
 		update(t, m, pressDown)
 		require.Equal(
@@ -1056,7 +1088,7 @@ func TestModel(t *testing.T) {
 		update(t, m, pressUp)
 		require.Equal(
 			t,
-			9,
+			10,
 			m.commands.cursor,
 			"stepping up from the first command wraps to the last",
 		)

@@ -23,7 +23,7 @@ func anthropicApp(t *testing.T, turns ...harness.Turn) *harness.Harness {
 				Protocol: harness.ProtocolAnthropic,
 				APIKey:   harness.TestAPIKey,
 				Models: []harness.Model{
-					{Alias: harness.DefaultModelAlias, ID: harness.DefaultModelID},
+					{ID: harness.DefaultModelID},
 				},
 			},
 		}},
@@ -156,16 +156,15 @@ func TestAnthropicAppliesTheThinkingBudget(t *testing.T) {
 				Protocol: harness.ProtocolAnthropic,
 				APIKey:   harness.TestAPIKey,
 				Models: []harness.Model{{
-					Alias:             harness.DefaultModelAlias,
-					ID:                harness.DefaultModelID,
-					Temperature:       new(0.4),
-					ThinkingMaxTokens: 4096,
+					ID:          harness.DefaultModelID,
+					Temperature: new(0.4),
+					Thinking:    []harness.Thinking{{Level: "high", MaxTokens: 4096}},
 				}},
 			},
 		}},
 	})
 
-	result := app.Run(t, "run", "-a", "coder", "-p", "think hard")
+	result := app.Run(t, "run", "-a", "coder", "--thinking", "high", "-p", "think hard")
 	result.RequireSuccess(t)
 
 	anthropic := app.Provider().LastRequest(t).Anthropic(t)

@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/varavelio/rienda/internal/compaction"
-	"github.com/varavelio/rienda/internal/config"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/session"
 )
@@ -24,7 +22,6 @@ const compactionPromptFile = "COMPACTION.md"
 // runs.
 type compactor struct {
 	resolver engine.Resolver
-	pinned   string
 	settings compaction.Settings
 	prompt   string
 }
@@ -55,14 +52,10 @@ func (c *compactor) Compact(
 		return compaction.Result{}, false, fmt.Errorf("harness: %w", err)
 	}
 
-	// The model of the summary is the one the configuration pins, or the one
-	// the branch runs at this moment, so a session that switched model is
-	// summarized by the model the user selected.
-	ref := c.pinned
-	if ref == "" {
-		ref = modelRef
-	}
-	model, client, err := c.resolver.Resolve(ref)
+	// The model of the summary is the one the branch runs at this moment, so
+	// a session that switched model is summarized by the model the user
+	// selected.
+	model, client, err := c.resolver.Resolve(modelRef)
 	if err != nil {
 		return compaction.Result{}, false, fmt.Errorf("harness: %w", err)
 	}
@@ -83,14 +76,13 @@ func (c *compactor) Compact(
 // session, which is what turns a provider/model reference into a client:
 //
 //   - when the configuration declares compaction.model, the summary runs on it,
-//     which is how a user pins a cheap model to summarize;
 //   - otherwise the summary runs on the model the branch is running, so a
 //     conversation that switched model summarizes with the model the user
 //     selected, and nothing changes behind their back.
 //
 // The reference of the branch is resolved on every compaction, so a session
 // that switched model is summarized by the model it runs at that moment.
-func newCompactor(cfg *config.Config, resolver engine.Resolver) (engine.Compactor, error) {
+func newCompactor(resolver engine.Resolver, keepRecentTokens int) (engine.Compactor, error) {
 	promptPath, err := compactionPromptPath()
 	if err != nil {
 		return nil, err
@@ -98,8 +90,7 @@ func newCompactor(cfg *config.Config, resolver engine.Resolver) (engine.Compacto
 
 	return &compactor{
 		resolver: resolver,
-		pinned:   strings.TrimSpace(cfg.Compaction.Model),
-		settings: compaction.Settings{KeepRecentTokens: cfg.Compaction.KeepRecentTokens},
+		settings: compaction.Settings{KeepRecentTokens: keepRecentTokens},
 		prompt:   promptPath,
 	}, nil
 }

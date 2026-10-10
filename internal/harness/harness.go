@@ -39,11 +39,16 @@ type Options struct {
 	SessionID string
 
 	// ModelRef overrides the model the session runs, as a provider/model
-	// reference the configuration holds. For a new session it replaces the
-	// model of the agent definition, which is what the header records; for a
-	// resumed one it selects the model of the branch that continues the
-	// conversation.
+	// reference the roster holds. For a new session it is the model the
+	// session is created with; for a resumed one it selects the model of the
+	// branch that continues the conversation.
 	ModelRef string
+
+	// ThinkingLevel seeds the thinking mode of the branch that continues the
+	// conversation: a new session selects it on its first branch, a resumed
+	// one appends the selection, and an empty one leaves whatever the branch
+	// runs. An empty level can also mean off: seeding off writes nothing.
+	ThinkingLevel string
 
 	// Workdir is the directory the session runs commands in. It defaults to
 	// the process working directory.
@@ -68,6 +73,18 @@ type Options struct {
 	// HooksDir overrides the directory holding the user hook extensions. It
 	// defaults to the global hooks directory.
 	HooksDir string
+
+	// ProvidersDir overrides the directory holding the user provider
+	// modules. It defaults to the global providers directory.
+	ProvidersDir string
+
+	// CredentialsPath overrides the provider credentials file. It defaults to
+	// the global one.
+	CredentialsPath string
+
+	// StatePath overrides the global state file that remembers the last used
+	// model and thinking. It defaults to the global one.
+	StatePath string
 
 	// Interactor answers the questions extensions ask the user and shows
 	// their notices. It is nil for headless runs, which refuse every
@@ -193,7 +210,11 @@ func (s *Session) ActiveModel() string {
 // the stored conversation, and a reference the configuration no longer holds
 // describes nothing.
 func (s *Session) ModelInfo(ref string) engine.ModelInfo {
-	return s.resolver.Info(ref)
+	info := s.resolver.Info(ref)
+	if level := s.store.ActiveThinking(); level != "" {
+		info.ThinkingLevel = level
+	}
+	return info
 }
 
 // Models returns the provider/model references the session may run, sorted,
@@ -215,6 +236,40 @@ func (s *Session) SetModel(ctx context.Context, ref string) error {
 		return fmt.Errorf("harness: %w", err)
 	}
 	return nil
+}
+
+// ActiveThinking returns the thinking level the branch runs: the level the
+// newest thinking selection of the branch carries, empty for off. The caller
+// resolves the level against the declaration of the model the branch runs.
+func (s *Session) ActiveThinking() string {
+	return s.store.ActiveThinking()
+}
+
+// ThinkingModes returns the levels the model reference declares, in the
+// declaration order of its provider module. It is the roster the thinking
+// picker offers; a reference the providers do not hold declares none.
+func (s *Session) ThinkingModes(ref string) []string {
+	return s.resolver.ThinkingLevels(ref)
+}
+
+// SetThinking selects the thinking mode the branch runs from now on. An empty
+// level is off: it removes no entry, because the absence of a selection is
+// already the off state of a branch and turning the mode off at any point of
+// the branch reads the same as never having turned it on. A level the branch
+// already holds is a no-op.
+func (s *Session) SetThinking(ctx context.Context, level string) error {
+	if err := s.store.SetThinking(ctx, level); err != nil {
+		return fmt.Errorf("harness: %w", err)
+	}
+	return nil
+}
+
+// ThinkingMode returns the budget carrier of a level of a model reference,
+// which is the budget the budget-based protocols receive for it. Zero means
+// the level sends no budget. A reference the providers do not hold describes
+// nothing.
+func (s *Session) ThinkingMode(ref, level string) (int, bool) {
+	return s.resolver.ThinkingMode(ref, level)
 }
 
 // Runnable reports why the branch of the session holds nothing to run and
@@ -253,13 +308,9 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
-	configPath, err := resolveConfigPath(opts.ConfigPath)
+	providers, cfg, err := discoverProviders(ctx, opts)
 	if err != nil {
-		return nil, err
-	}
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("harness: load configuration: %w", err)
+		return nil, fmt.Errorf("harness: load providers: %w", err)
 	}
 
 	agentsDir, err := resolveAgentsDir(opts.AgentsDir)
@@ -284,23 +335,38 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		return nil, fmt.Errorf("harness: load agents: %w", err)
 	}
 
-	store, err := openSession(ctx, opts, cfg, sessionDir{
-		dir:     projectDir,
-		workdir: workdir,
-		agents:  agentsDir,
-		roster:  definitions,
-		models:  cfg.ModelRefs(),
-	})
+	roster := modelRoster(providers)
+
+	// The credential store is read once here and refreshed on demand by the
+	// resolver, so a key another instance stores while Rienda runs is honored
+	// before the run that needs it fails.
+	credStore, err := credentialStore(opts)
+	if err != nil {
+		return nil, fmt.Errorf("harness: load credentials: %w", err)
+	}
+
+	sessionModel, err := initialModel(opts, credStore, roster, projectDir)
 	if err != nil {
 		return nil, err
 	}
 
-	// Every model the configuration holds is resolvable by the engine, and the
-	// resolver caches one client per reference, so a session that switches
-	// model reuses the connections of the models it already talked to. The
-	// resolver stamps every client with the identity of the session, so every
-	// call identifies itself with it, the summarizations included.
-	resolver := newModelResolver(cfg, store.ID())
+	store, err := openSession(ctx, opts, roster, sessionDir{
+		dir:     projectDir,
+		workdir: workdir,
+		agents:  agentsDir,
+		roster:  definitions,
+		models:  roster,
+	}, sessionModel)
+	if err != nil {
+		return nil, err
+	}
+
+	// Every model the discovered providers hold is resolvable by the engine,
+	// and the resolver caches one client per reference, so a session that
+	// switches model reuses the connections of the models it already talked
+	// to. The resolver stamps every client with the identity of the session,
+	// so every call identifies itself with it, the summarizations included.
+	resolver := newModelResolver(providers, credStore, store.ID())
 
 	toolsDir, err := resolveToolsDir(opts.ToolsDir)
 	if err != nil {
@@ -330,7 +396,7 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		Config:  cfg.Data(),
 	})
 
-	summarizer, err := newCompactor(cfg, resolver)
+	summarizer, err := newCompactor(resolver, cfg.Compaction.KeepRecentTokens)
 	if err != nil {
 		closeStore(store)
 		return nil, err
@@ -340,6 +406,7 @@ func Prepare(ctx context.Context, opts Options) (*Session, error) {
 		Store:    store,
 		Agents:   definitions,
 		Resolver: resolver,
+		Thinking: resolver.ThinkingMode,
 		Registry: registry,
 		Hooks:    hookResolver{registry: hookRegistry},
 		Diagnostics: append(
@@ -421,12 +488,14 @@ type sessionDir struct {
 func openSession(
 	ctx context.Context,
 	opts Options,
-	cfg *config.Config,
+	roster []string,
 	place sessionDir,
+	sessionModel string,
 ) (*session.Store, error) {
 	sessionID := strings.TrimSpace(opts.SessionID)
 	agentID := strings.TrimSpace(opts.AgentID)
 	modelRef := strings.TrimSpace(opts.ModelRef)
+	thinkingLevel := strings.TrimSpace(opts.ThinkingLevel)
 	if sessionID == "" && agentID == "" {
 		return nil, errors.New("harness: an agent id is required")
 	}
@@ -456,6 +525,12 @@ func openSession(
 				return nil, fmt.Errorf("harness: %w", err)
 			}
 		}
+		if thinkingLevel != "" {
+			if err := store.SetThinking(ctx, thinkingLevel); err != nil {
+				closeStore(store)
+				return nil, fmt.Errorf("harness: %w", err)
+			}
+		}
 		return store, nil
 	}
 
@@ -463,20 +538,12 @@ func openSession(
 	if !found {
 		return nil, undefinedAgent(place.agents, agentID)
 	}
-	// A model named for a new session is the model the session is created with,
-	// which is what its header records.
-	model := definition.Model
-	if modelRef != "" {
-		if !slices.Contains(place.models, modelRef) {
-			return nil, undefinedModel(modelRef)
-		}
-		model = modelRef
-	}
-	// The model the session is created with is resolved here, so a definition
-	// that declares a model the configuration does not hold fails before the
-	// session is written rather than at its first run.
-	if _, err := cfg.Resolve(model); err != nil {
-		return nil, fmt.Errorf("harness: model %q: %w", model, err)
+	// A session is created on the model the chain selected, which its header
+	// records. An empty roster sees every path fail before anything is
+	// written, which is how a fresh install with no providers behaves.
+	model := sessionModel
+	if model == "" {
+		return nil, errors.New("harness: no model available; no provider offers models")
 	}
 	store, err := session.Create(ctx, place.dir, session.Header{
 		Agent:   definition.ID,
@@ -485,6 +552,12 @@ func openSession(
 	}, id.NewIDGenerator())
 	if err != nil {
 		return nil, fmt.Errorf("harness: create session: %w", err)
+	}
+	if thinkingLevel != "" {
+		if err := store.SetThinking(ctx, thinkingLevel); err != nil {
+			closeStore(store)
+			return nil, fmt.Errorf("harness: %w", err)
+		}
 	}
 	return store, nil
 }

@@ -84,7 +84,7 @@ func TestRun(t *testing.T) {
 				stderr,
 			)
 
-			require.ErrorContains(t, err, "does not exist", flag)
+			require.ErrorContains(t, err, "is not defined", flag)
 		}
 	})
 
@@ -105,6 +105,6 @@ func TestRun(t *testing.T) {
 			stderr,
 		)
 
-		require.ErrorContains(t, err, "does not exist")
+		require.ErrorContains(t, err, "is not defined")
 	})
 }

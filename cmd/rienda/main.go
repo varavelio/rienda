@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/varavelio/rienda/internal/authui"
 	"github.com/varavelio/rienda/internal/cli"
 	"github.com/varavelio/rienda/internal/tui"
 	"github.com/varavelio/rienda/internal/version"
@@ -33,6 +34,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "run":
 		//nolint:wrapcheck // the command produces user-facing messages.
 		return cli.Run(args[1:], stdout, stderr)
+	case "auth":
+		//nolint:wrapcheck // the command surfaces the error verbatim.
+		return authui.Auth(args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return nil
@@ -62,6 +66,7 @@ Usage:
 
 Commands:
   run    Run an agent once and print its answer
+  auth   Manage the credentials of the discovered providers
 
 Global flags:
   -h, --help      Print this overview

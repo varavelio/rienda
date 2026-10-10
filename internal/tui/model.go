@@ -134,6 +134,9 @@ const (
 
 	// keyLeaderModel changes the model the branch runs.
 	keyLeaderModel = "m"
+
+	// keyLeaderThinking changes the thinking mode the branch runs.
+	keyLeaderThinking = "t"
 )
 
 // pickerMode selects what the picker offers, which the interface shows and what
@@ -149,6 +152,9 @@ const (
 	pickerAgent
 	// pickerModel changes the model the open conversation runs from now on.
 	pickerModel
+	// pickerThinking changes the thinking mode the open branch runs from now
+	// on; off is always the first entry, marked as its own picker entry.
+	pickerThinking
 )
 
 // Key names the interface handles, shared by the phase handlers.
@@ -326,6 +332,13 @@ var commandList = []command{
 		Enabled: (*model).switchReady,
 	},
 	{
+		Label:   "Thinking mode",
+		Note:    "run the conversation with another thinking mode, off first",
+		NoteOff: (*model).switchNote,
+		Open:    (*model).openThinkingPicker,
+		Enabled: (*model).switchReady,
+	},
+	{
 		Label:   "Compact context",
 		Note:    "summarize the oldest turns into a checkpoint",
 		NoteOff: (*model).compactNote,
@@ -434,6 +447,20 @@ type Session interface {
 	// The selection belongs to the branch, so returning to an earlier turn
 	// runs on the model that was in effect there.
 	SetModel(ctx context.Context, ref string) error
+
+	// ActiveThinking returns the thinking mode the branch runs: empty for
+	// off, otherwise the level the user picked for it.
+	ActiveThinking() string
+
+	// SetThinking selects the thinking mode the branch of the session runs
+	// from now on: an empty level is off, an already-held one a no-op. The
+	// selection belongs to the branch, exactly like SetModel does.
+	SetThinking(ctx context.Context, level string) error
+
+	// ThinkingModes returns the levels the model reference declares, in
+	// declaration order, which is the roster the thinking picker offers,
+	// "off" excluded. A reference the roster does not hold declares any.
+	ThinkingModes(ref string) []string
 
 	// Run starts a run and returns the channel carrying its events.
 	Run(ctx context.Context, prompt string) <-chan engine.Event
@@ -813,6 +840,9 @@ func (m *model) startText(index int) string {
 // the text follows the mode the picker was opened in, and a model is found by
 // what describes it as well as by the reference that names it.
 func (m *model) pickerText(index int) string {
+	if m.pickerMode == pickerThinking {
+		return m.thinkingRoster()[index]
+	}
 	if m.pickerMode == pickerModel {
 		ref := m.session.Models()[index]
 		return modelLabel(ref, m.session.ModelInfo(ref))
@@ -1084,9 +1114,42 @@ func (m *model) handleLeaderKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		return m.openSwitchPicker(pickerAgent), true
 	case keyLeaderModel:
 		return m.openSwitchPicker(pickerModel), true
+	case keyLeaderThinking:
+		return m.openThinkingPickerMode(), true
 	}
 	return nil, true
 }
+
+// openThinkingPicker opens the picker over the thinking modes of the model the
+// branch runs, off first. A model that declares no thinking runs off, which is
+// what the picker offers alone, with the hint that names why.
+func (m *model) openThinkingPickerMode() tea.Cmd {
+	if !m.switchReady() {
+		return nil
+	}
+
+	m.pickerMode = pickerThinking
+	m.picker.setCount(len(m.thinkingRoster()))
+	m.picker.reset()
+	if index := slices.Index(m.thinkingRoster(), m.session.ActiveThinking()); index >= 0 {
+		m.selectPickerEntry(index)
+	}
+	m.phase = phasePicker
+	m.input.Blur()
+	return nil
+}
+
+// thinkingRoster returns what the thinking picker offers, off first, then the
+// levels the model the branch runs declares in declaration order.
+func (m *model) thinkingRoster() []string {
+	ref := m.session.ActiveModel()
+	roster := append([]string{thinkingOff}, m.session.ThinkingModes(ref)...)
+	return roster
+}
+
+// thinkingOff names the entry the thinking picker opens with: no thinking on
+// the wire at all.
+const thinkingOff = "off"
 
 // openSwitchPicker opens the picker over the roster of what the conversation
 // runs, which is where the leader chords and the command center lead. It needs
@@ -1120,9 +1183,16 @@ func (m *model) openModelPicker() tea.Cmd {
 	return m.openSwitchPicker(pickerModel)
 }
 
+// openThinkingPickerCommand adapts openThinkingPicker to the command center
+// signature; the picker itself lives next to the other leader chords.
+func (m *model) openThinkingPicker() tea.Cmd { return m.openThinkingPickerMode() }
+
 // roster returns the entries the picker offers in its current mode: the agent
 // definitions of the interface, or the model references of the session.
 func (m *model) roster() []string {
+	if m.pickerMode == pickerThinking && m.session != nil {
+		return m.thinkingRoster()
+	}
 	if m.pickerMode == pickerModel && m.session != nil {
 		return m.session.Models()
 	}
@@ -1138,6 +1208,9 @@ func (m *model) roster() []string {
 func (m *model) activeRef() string {
 	if m.session == nil {
 		return ""
+	}
+	if m.pickerMode == pickerThinking {
+		return m.session.ActiveThinking()
 	}
 	if m.pickerMode == pickerModel {
 		return m.session.ActiveModel()
@@ -1324,9 +1397,15 @@ func (m *model) applySwitch(ref string) tea.Cmd {
 	m.pickerMode = pickerNewAgent
 
 	var err error
-	if mode == pickerModel {
+	switch mode {
+	case pickerModel:
 		err = m.session.SetModel(context.Background(), ref)
-	} else {
+	case pickerThinking:
+		if ref == thinkingOff {
+			ref = ""
+		}
+		err = m.session.SetThinking(context.Background(), ref)
+	default:
 		err = m.session.SetAgent(context.Background(), ref)
 	}
 	if err != nil {

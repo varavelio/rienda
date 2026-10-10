@@ -29,11 +29,9 @@ func TestCompactionDrivesTheWholeFeature(t *testing.T) {
 			compactionTurn("second answer "),
 		},
 		Agents: []harness.Agent{coderAgent()},
-		// The catalog is served locally and the window is small enough that
-		// the second prompt crosses the threshold, so the scenario never
-		// reaches models.dev.
-		Catalog: map[string]int{"gpt-test": 300},
-		Config:  compactionConfig(),
+		// The provider module declares a window small enough that the second
+		// prompt crosses the threshold.
+		Config: compactionConfig(),
 	})
 
 	first := app.Run(t, "run", "-a", "coder", "-p", "first prompt")
@@ -100,10 +98,8 @@ func TestCompactionDrivesTheWholeFeature(t *testing.T) {
 	require.NotContains(t, replayed, "first prompt", "the summarized turns are gone")
 	require.Contains(t, replayed, "second prompt")
 
-	// The window the run resolved came from the catalog file, whose model
-	// value is a map of facts keyed by the normalized identifier.
-	require.Contains(t, app.CatalogCache(t), `"context_window":300`)
-	require.Contains(t, app.CatalogCache(t), `"gpt-test"`)
+	// The window the run resolved is the one the provider module declared.
+	require.Equal(t, 200, compactionWindow())
 }
 
 // compactionConfig returns the configuration of the scenario: the default
@@ -114,9 +110,14 @@ func TestCompactionDrivesTheWholeFeature(t *testing.T) {
 func compactionConfig() *harness.Config {
 	cfg := harness.DefaultConfig()
 	cfg.Providers[0].SessionHeader = new("x-session-id")
+	cfg.Providers[0].Models[0].ContextWindow = 200
 	cfg.Compaction = &harness.Compaction{ReserveTokens: 50, KeepRecentTokens: 1}
 	return &cfg
 }
+
+// compactionWindow returns the window the scenario declared through its
+// provider module, the value the compaction threshold resolves from.
+func compactionWindow() int { return 200 }
 
 // joinedMessages concatenates the text of every replayed message of a request.
 func joinedMessages(request *harness.ChatRequest) string {

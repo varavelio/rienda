@@ -16,7 +16,6 @@ const frontmatterDelimiter = "---"
 // frontmatter mirrors the YAML frontmatter of an agent definition.
 type frontmatter struct {
 	Description string   `yaml:"description"`
-	Model       string   `yaml:"model"`
 	Tools       []string `yaml:"tools"`
 	Hooks       []string `yaml:"hooks"`
 	Config      any      `yaml:"config"`
@@ -60,7 +59,6 @@ func Parse(id string, data []byte) (Agent, error) {
 	return Agent{
 		ID:           id,
 		Description:  meta.Description,
-		Model:        meta.Model,
 		Tools:        meta.Tools,
 		Hooks:        meta.Hooks,
 		Config:       config,
@@ -118,18 +116,6 @@ func (m *frontmatter) normalize() error {
 	if m.Description == "" {
 		return errors.New("description is required")
 	}
-
-	m.Model = strings.TrimSpace(m.Model)
-	if m.Model == "" {
-		return errors.New("model is required")
-	}
-
-	providerName, modelName, found := strings.Cut(m.Model, "/")
-	providerName, modelName = strings.TrimSpace(providerName), strings.TrimSpace(modelName)
-	if !found || providerName == "" || modelName == "" {
-		return fmt.Errorf("model %q must have the form provider/model", m.Model)
-	}
-	m.Model = providerName + "/" + modelName
 
 	for i, tool := range m.Tools {
 		m.Tools[i] = strings.TrimSpace(tool)

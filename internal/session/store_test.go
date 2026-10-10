@@ -1654,3 +1654,37 @@ func TestStoreConcurrency(t *testing.T) {
 	writing.Wait()
 	reading.Wait()
 }
+
+// TestThinkingSelection verifies the thinking selection of a branch: the
+// newest entry wins, it hangs from the branch that wrote it, off is the
+// absence of an entry and a level the branch already holds writes nothing.
+func TestThinkingSelection(t *testing.T) {
+	t.Run("selects a level on a branch and reads it back", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent:   "coder",
+			Model:   "test/model",
+			Workdir: dir,
+		}, &stubGenerator{})
+		require.NoError(t, err)
+
+		require.NoError(t, store.SetThinking(context.Background(), "high"))
+		require.Equal(t, "high", store.ActiveThinking())
+		id := store.ID()
+		require.NoError(t, store.Close())
+
+		reloaded, err := Open(dir, id, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reloaded.Close()) })
+		require.Equal(t, "high", reloaded.ActiveThinking())
+	})
+
+	t.Run("off writes nothing", func(t *testing.T) {
+		store := newTestStore(t)
+
+		before := len(store.Entries())
+		require.NoError(t, store.SetThinking(context.Background(), ""))
+		require.Equal(t, "", store.ActiveThinking())
+		require.Equal(t, before, len(store.Entries()))
+	})
+}

@@ -26,12 +26,17 @@ extend Rienda beyond its built-in behavior:
 Everything in Rienda reduces to three inputs, and it helps to keep them separate
 in your head from the beginning:
 
-- **Configuration** (`~/.rienda/config.yaml`) declares the providers Rienda
-  talks to and the models it may run, with their generation settings. It is the
-  single place where connection details and sampling parameters live.
+- **Provider modules** (`~/.rienda/providers/<name>/index.js`) are JavaScript
+  functions returning a canonical declaration of the connection and the model
+  roster of the provider; the ones built in ship inside the binary, and a user
+  module of the same name replaces them. `rienda auth` stores the keys the
+  modules ask for. Declare nothing twice: models are not listed in a config
+  file, and an agent does not name a model either.
 - **Agent definitions** (`~/.rienda/agents/*.md`) are Markdown files whose YAML
-  frontmatter declares the description, the model, and the tools and hooks the
-  agent may use, and whose body is the system prompt. An agent is the unit you
+  frontmatter declares the description and the tools and hooks the agent may
+  use, and whose body is the system prompt. Agents never name a model: a
+  session picks the model it runs, and `ctrl+x m` or `ctrl+x t` switch it or
+  its thinking mode while the conversation goes. An agent is the unit you
   run.
 - **Sessions** (`~/.rienda/sessions`) are the transcripts Rienda writes as you
   work. They are what the start list offers back, and they let a conversation be

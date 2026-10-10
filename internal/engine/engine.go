@@ -69,6 +69,11 @@ type Resolver interface {
 	Refs() []string
 }
 
+// ThinkingResolver reports the wire budget of one thinking level of a model
+// reference. False when the level is not one the model declares: a level the
+// model dropped runs off instead of sending it.
+type ThinkingResolver func(ref, level string) (budget int, ok bool)
+
 // Config configures an Engine.
 type Config struct {
 	// Store is the session the engine runs on. It is required and must stay
@@ -84,6 +89,12 @@ type Config struct {
 	// the client of the turn. It is required, and it is called for the model
 	// the session starts on and for every model a branch selects.
 	Resolver Resolver
+
+	// Thinking informs the wire thinking of a turn: a branch that selects a
+	// level hands it over with the reference it belongs to, so the engine
+	// renders the level and the budget of the selection together. It is
+	// required when the front end can switch thinking modes.
+	Thinking ThinkingResolver
 
 	// Registry holds the tools the agent may use. It is required when the
 	// agent declares tools.
@@ -128,6 +139,7 @@ type Engine struct {
 	resolver    Resolver
 	registry    *tool.Registry
 	hooks       HookResolver
+	thinking    ThinkingResolver
 	diagnostics []string
 	workdir     string
 	compactor   Compactor
@@ -188,6 +200,7 @@ func New(cfg Config) (*Engine, error) {
 		store:       cfg.Store,
 		agents:      agents,
 		resolver:    cfg.Resolver,
+		thinking:    cfg.Thinking,
 		registry:    cfg.Registry,
 		hooks:       cfg.Hooks,
 		diagnostics: slices.Clone(cfg.Diagnostics),
@@ -337,7 +350,7 @@ func (e *Engine) plan() (turnPlan, error) {
 			MaxTokens:   model.MaxTokens,
 			Temperature: model.Temperature,
 			TopP:        model.TopP,
-			Thinking:    thinking(model),
+			Thinking:    e.turnThinking(model),
 		},
 		tools:       tools,
 		hooks:       hooks,
@@ -371,9 +384,22 @@ func (e *Engine) emitContext(events chan<- Event) {
 	emit(events, Event{Type: EventContext, Context: contextFrom(report)})
 }
 
-// thinking returns the extended thinking configuration of a model. It is nil
-// when the model configures no thinking.
-func thinking(model Model) *llm.ThinkingConfig {
+// branchThinking returns the extended thinking configuration the turn runs:
+// the level the branch selects when it selects one, the level of the model
+// declaration otherwise. The selection is resolved against the declaration of
+// the model, so a stale level on a model that dropped it runs off, and the
+// budget of the level is the mode the branch picked when it picked one.
+// turnThinking returns the extended thinking configuration the turn sends:
+// the thinking the branch selected when it did, the thinking the model
+// declaration carries otherwise. Off never reaches the wire.
+func (e *Engine) turnThinking(model Model) *llm.ThinkingConfig {
+	level := e.store.ActiveThinking()
+	if level != "" && e.thinking != nil {
+		ref := e.store.ActiveModel()
+		if budget, ok := e.thinking(ref, level); ok {
+			return &llm.ThinkingConfig{Level: level, MaxTokens: budget}
+		}
+	}
 	if model.Thinking.Level == "" && model.Thinking.MaxTokens == 0 {
 		return nil
 	}

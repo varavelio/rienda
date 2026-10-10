@@ -11,7 +11,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/varavelio/rienda/internal/catalog"
 	"github.com/varavelio/rienda/internal/harness"
 )
 
@@ -26,7 +25,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	flags.Usage = func() { runUsage(stderr) }
 
-	var agentID, modelRef, sessionID, prompt, configPath, workdir string
+	var agentID, modelRef, sessionID, prompt, configPath, workdir, thinkingLevel string
 	var autoApprove bool
 	flags.StringVar(&agentID, "agent", "", "agent definition to run")
 	flags.StringVar(&agentID, "a", "", "shorthand for --agent")
@@ -37,6 +36,12 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	flags.StringVar(&prompt, "prompt", "", "prompt to send to the agent (required)")
 	flags.StringVar(&prompt, "p", "", "shorthand for --prompt")
 	flags.StringVar(&configPath, "config", "", "path of the configuration file")
+	flags.StringVar(
+		&thinkingLevel,
+		"thinking",
+		"",
+		"thinking mode of the conversation, empty for off",
+	)
 	flags.StringVar(&workdir, "workdir", "", "directory the session runs in")
 	flags.StringVar(&workdir, "C", "", "shorthand for --workdir")
 	flags.BoolVar(&autoApprove, "auto-approve", false, "answer every confirmation without asking")
@@ -63,19 +68,14 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The catalog keeps the model facts the context measurement resolves its
-	// window from current while the run lasts, and stops with the context.
-	if facts, err := catalog.New(catalog.Options{}); err == nil {
-		go facts.Run(ctx)
-	}
-
 	session, err := harness.Prepare(ctx, harness.Options{
-		AgentID:     agentID,
-		ModelRef:    modelRef,
-		SessionID:   sessionID,
-		Workdir:     workdir,
-		ConfigPath:  configPath,
-		AutoApprove: autoApprove,
+		AgentID:       agentID,
+		ModelRef:      modelRef,
+		ThinkingLevel: thinkingLevel,
+		SessionID:     sessionID,
+		Workdir:       workdir,
+		ConfigPath:    configPath,
+		AutoApprove:   autoApprove,
 	})
 	if err != nil {
 		return fmt.Errorf("run: prepare session: %w", err)

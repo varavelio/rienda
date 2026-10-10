@@ -39,7 +39,6 @@ func runCtx(t *testing.T) (context.Context, Options) {
 		Agent: agent.Agent{
 			ID:           "coder",
 			Description:  "Writes code.",
-			Model:        "fake/model",
 			Tools:        []string{"shell"},
 			Hooks:        []string{"guard"},
 			Config:       map[string]map[string]any{"guard": {"level": "strict"}},

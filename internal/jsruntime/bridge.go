@@ -160,3 +160,9 @@ func callError(recovered any) error {
 		return fmt.Errorf("%v", value)
 	}
 }
+
+// Self returns the exports value itself: for extensions whose module.exports
+// is the callable or the data, with no field to name.
+func (e *Exports) Self() Value {
+	return Value{vm: e.vm, value: e.value}
+}

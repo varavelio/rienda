@@ -8,455 +8,97 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mustParse parses a configuration for the test to consume.
-func mustParse(t *testing.T, data string) *Config {
-	t.Helper()
-	cfg, err := Parse([]byte(data))
-	require.NoError(t, err)
-	return cfg
-}
-
-func TestParse(t *testing.T) {
-	t.Run("parses presets, custom endpoints and models", func(t *testing.T) {
-		cfg := mustParse(t, `
-providers:
-  openrouter:
-    preset: openrouter
-    api_key: sk-or-test
-    headers:
-      X-Title: rienda
-    models:
-      kimi-k2:
-        id: moonshotai/kimi-k2
-        context_window: 262144
-        max_tokens: 8192
-        temperature: 0.7
-        top_p: 0.9
-        thinking_level: Medium
-        thinking_max_tokens: 2048
-  local:
-    protocol: openai_chat_completions
-    base_url: http://127.0.0.1:8080/v1
-    session_header: X-Session-Id
-    models:
-      small: {}
-`)
-
-		require.Equal(t, map[string]Provider{
-			"openrouter": {
-				Preset:  "openrouter",
-				APIKey:  "sk-or-test",
-				Headers: map[string]string{"X-Title": "rienda"},
-				Models: map[string]Model{
-					"kimi-k2": {
-						ID:                "moonshotai/kimi-k2",
-						ContextWindow:     262144,
-						MaxTokens:         8192,
-						Temperature:       new(0.7),
-						TopP:              new(0.9),
-						ThinkingLevel:     "Medium",
-						ThinkingMaxTokens: 2048,
-					},
-				},
-			},
-			"local": {
-				Protocol:      "openai_chat_completions",
-				BaseURL:       "http://127.0.0.1:8080/v1",
-				SessionHeader: new("X-Session-Id"),
-				Models:        map[string]Model{"small": {}},
-			},
-		}, cfg.Providers)
-	})
-
-	t.Run("accepts an empty api key for credential-less services", func(t *testing.T) {
-		cfg := mustParse(
-			t,
-			"providers:\n  local:\n    preset: ollama\n    models:\n      llama: {}\n",
-		)
-
-		require.Empty(t, cfg.Providers["local"].APIKey)
-	})
-
-	t.Run("defaults the compaction settings", func(t *testing.T) {
-		cfg := mustParse(t, "providers:\n  local:\n    preset: ollama\n")
-
-		require.Equal(t, Compaction{
-			Enabled:          true,
-			ReserveTokens:    16384,
-			KeepRecentTokens: 20000,
-		}, cfg.Compaction)
-	})
-
-	t.Run("reads an explicit compaction block", func(t *testing.T) {
-		cfg := mustParse(t, `
-providers:
-  openrouter:
-    preset: openrouter
-    models:
-      kimi-k2: {}
-compaction:
-  enabled: false
-  reserve_tokens: 4096
-  keep_recent_tokens: 1000
-  model: openrouter/kimi-k2
-`)
-
-		require.Equal(t, Compaction{
-			Enabled:          false,
-			ReserveTokens:    4096,
-			KeepRecentTokens: 1000,
-			Model:            "openrouter/kimi-k2",
-		}, cfg.Compaction)
-	})
-
-	t.Run("accepts a provider without models", func(t *testing.T) {
-		cfg := mustParse(t, "providers:\n  ollama:\n    preset: ollama\n")
-
-		require.Empty(t, cfg.Providers["ollama"].Models)
-	})
-
-	t.Run("rejects invalid configurations", func(t *testing.T) {
-		cases := []struct {
-			name string
-			data string
-			want string
-		}{
-			{"empty file", "", "file is empty"},
-			{"unknown top-level key", "providers: {}\nother: true\n", "invalid configuration"},
-			{
-				"unknown provider key",
-				"providers:\n  p:\n    preset: openrouter\n    other: true\n",
-				"invalid configuration",
-			},
-			{
-				"unknown model key",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        other: true\n",
-				"invalid configuration",
-			},
-			{
-				"multiple documents",
-				"providers:\n  p:\n    preset: openrouter\n---\nproviders: {}\n",
-				"single YAML document",
-			},
-			{"no providers", "providers: {}\n", "at least one provider is required"},
-			{
-				"empty provider name",
-				"providers:\n  '':\n    preset: openrouter\n",
-				"provider names must not be empty",
-			},
-			{
-				"provider name with slash",
-				"providers:\n  'a/b':\n    preset: openrouter\n",
-				"must not contain a slash",
-			},
-			{
-				"preset and protocol together",
-				"providers:\n  p:\n    preset: openrouter\n    protocol: openai_chat_completions\n    base_url: http://127.0.0.1:8080/v1\n",
-				"mutually exclusive",
-			},
-			{
-				"missing preset and protocol",
-				"providers:\n  p:\n    base_url: http://127.0.0.1:8080/v1\n",
-				"preset or protocol is required",
-			},
-			{"unknown preset", "providers:\n  p:\n    preset: nope\n", "unknown preset"},
-			{
-				"unknown protocol",
-				"providers:\n  p:\n    protocol: gemini\n    base_url: http://127.0.0.1:8080/v1\n",
-				"unknown protocol",
-			},
-			{
-				"protocol without base url",
-				"providers:\n  p:\n    protocol: openai_chat_completions\n",
-				"base_url is required",
-			},
-			{
-				"invalid session header",
-				"providers:\n  p:\n    preset: openrouter\n    session_header: 'not a header'\n",
-				"is not a valid HTTP header name",
-			},
-			{
-				"empty model alias",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      '': {}\n",
-				"model aliases must not be empty",
-			},
-			{
-				"negative context window",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        context_window: -1\n",
-				"context_window must not be negative",
-			},
-			{
-				"negative max tokens",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        max_tokens: -1\n",
-				"max_tokens must not be negative",
-			},
-			{
-				"temperature below range",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        temperature: -0.1\n",
-				"temperature -0.1 must be between 0 and 2",
-			},
-			{
-				"temperature above range",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        temperature: 2.1\n",
-				"temperature 2.1 must be between 0 and 2",
-			},
-			{
-				"top_p below range",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        top_p: -0.1\n",
-				"top_p -0.1 must be between 0 and 1",
-			},
-			{
-				"top_p above range",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        top_p: 1.1\n",
-				"top_p 1.1 must be between 0 and 1",
-			},
-			{
-				"negative thinking max tokens",
-				"providers:\n  p:\n    preset: openrouter\n    models:\n      m:\n        thinking_max_tokens: -1\n",
-				"thinking_max_tokens must not be negative",
-			},
-			{
-				"unknown compaction key",
-				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  other: true\n",
-				"invalid configuration",
-			},
-			{
-				"negative compaction reserve",
-				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  reserve_tokens: -1\n",
-				"reserve_tokens must not be negative",
-			},
-			{
-				"negative compaction tail",
-				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  keep_recent_tokens: -1\n",
-				"keep_recent_tokens must not be negative",
-			},
-			{
-				"unknown compaction model",
-				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  model: p/ghost\n",
-				`compaction: unknown model "ghost" in provider "p"`,
-			},
-			{
-				"malformed compaction model reference",
-				"providers:\n  p:\n    preset: openrouter\ncompaction:\n  model: ghost\n",
-				"must have the form provider/model",
-			},
-		}
-
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				_, err := Parse([]byte(tc.data))
-
-				require.ErrorContains(t, err, tc.want)
-			})
-		}
-	})
-}
-
+// TestLoad verifies the reading of the configuration file: every block the
+// file may declare, the documented defaults, and the refusal of the removed
+// providers block.
 func TestLoad(t *testing.T) {
-	t.Run("reads and parses a configuration file", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		require.NoError(
-			t,
-			os.WriteFile(path, []byte("providers:\n  local:\n    preset: ollama\n"), 0o600),
-		)
+	t.Run("missing file holds the defaults", func(t *testing.T) {
+		cfg, err := Load(filepath.Join(t.TempDir(), "nope.yaml"))
+		require.NoError(t, err)
+		require.Equal(t, Compaction{
+			Enabled:          DefaultCompactionEnabled,
+			ReserveTokens:    DefaultCompactionReserveTokens,
+			KeepRecentTokens: DefaultCompactionKeepRecentTokens,
+		}, cfg.Compaction)
+	})
 
+	t.Run("empty file holds the defaults", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(""), 0o600))
 		cfg, err := Load(path)
-
 		require.NoError(t, err)
-		require.Contains(t, cfg.Providers, "local")
+		require.True(t, cfg.Compaction.Enabled)
 	})
 
-	t.Run("reports a missing file with a clear message", func(t *testing.T) {
+	t.Run("a full file round-trips", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "config.yaml")
-
-		_, err := Load(path)
-
-		require.ErrorContains(t, err, path)
-		require.ErrorContains(t, err, "does not exist")
-	})
-
-	t.Run("reports an unreadable path", func(t *testing.T) {
-		dir := t.TempDir()
-
-		_, err := Load(dir)
-
-		require.ErrorContains(t, err, "read")
-		require.ErrorContains(t, err, dir)
-	})
-
-	t.Run("reports the path when the content is invalid", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		require.NoError(
-			t,
-			os.WriteFile(path, []byte("providers:\n  p:\n    preset: nope\n"), 0o600),
-		)
-
-		_, err := Load(path)
-
-		require.ErrorContains(t, err, path)
-		require.ErrorContains(t, err, "unknown preset")
-	})
-}
-
-func TestDefaultPath(t *testing.T) {
-	t.Run("appends the rienda configuration file to the home directory", func(t *testing.T) {
-		home := filepath.Join("home", "tester")
-		t.Setenv("HOME", home)
-		t.Setenv("USERPROFILE", home)
-
-		path, err := DefaultPath()
-
+		require.NoError(t, os.WriteFile(path, []byte(
+			"compaction:\n  enabled: false\n  reserve_tokens: 4096\n"+
+				"config:\n  guard:\n    route: strict\n",
+		), 0o600))
+		cfg, err := Load(path)
 		require.NoError(t, err)
-		require.Equal(t, filepath.Join(home, ".rienda", "config.yaml"), path)
+		require.False(t, cfg.Compaction.Enabled)
+		require.Equal(t, 4096, cfg.Compaction.ReserveTokens)
+		require.Equal(t, DefaultCompactionKeepRecentTokens, cfg.Compaction.KeepRecentTokens)
+		require.Equal(t, "strict", cfg.Config["guard"]["route"])
 	})
 
-	t.Run("fails when the home directory is unknown", func(t *testing.T) {
-		t.Setenv("HOME", "")
-		t.Setenv("USERPROFILE", "")
-
-		_, err := DefaultPath()
-
-		require.Error(t, err)
-	})
-}
-
-// TestModelRefs verifies the roster of models a front end offers.
-func TestModelRefs(t *testing.T) {
-	t.Run("returns every model as a sorted reference", func(t *testing.T) {
-		cfg := mustParse(t, `
-providers:
-  zeta:
-    preset: openrouter
-    models:
-      second: {}
-      first: {}
-  alpha:
-    preset: openrouter
-    models:
-      only: {}
-`)
-
-		require.Equal(t, []string{"alpha/only", "zeta/first", "zeta/second"}, cfg.ModelRefs())
+	t.Run("the removed providers block is refused with the pointer", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(
+			"providers:\n  fake:\n    protocol: openai_chat_completions\n",
+		), 0o600))
+		_, err := Load(path)
+		require.ErrorContains(t, err, "providers are no longer declared here")
+		require.ErrorContains(t, err, "provider modules")
 	})
 
-	t.Run("returns every reference Resolve accepts", func(t *testing.T) {
-		cfg := mustParse(t, `
-providers:
-  fake:
-    preset: openrouter
-    models:
-      one: {}
-      two: {}
-`)
-
-		refs := cfg.ModelRefs()
-		require.Len(t, refs, 2)
-		for _, ref := range refs {
-			_, err := cfg.Resolve(ref)
-			require.NoError(t, err, "the roster only offers references that resolve")
-		}
+	t.Run("the removed compaction model is refused by the strict decoder", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(
+			"compaction:\n  model: fake/summarizer\n",
+		), 0o600))
+		_, err := Load(path)
+		require.ErrorContains(t, err, "field model not found")
 	})
 
-	t.Run("returns nothing for a configuration without models", func(t *testing.T) {
-		cfg := mustParse(t, `
-providers:
-  fake:
-    preset: openrouter
-`)
+	t.Run("an unknown key is refused", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte("unknown: true\n"), 0o600))
+		_, err := Load(path)
+		require.ErrorContains(t, err, "field unknown not found")
+	})
 
-		require.Empty(t, cfg.ModelRefs())
+	t.Run("a malformed file names its path", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte("compaction: ["), 0o600))
+		_, err := Load(path)
+		require.ErrorContains(t, err, path)
 	})
 }
 
-func TestProviderNames(t *testing.T) {
-	t.Run("returns the configured names in sorted order", func(t *testing.T) {
-		cfg := mustParse(t, `
-providers:
-  zeta:
-    preset: openrouter
-  alpha:
-    preset: openrouter
-  middle:
-    preset: openrouter
-`)
-
-		require.Equal(t, []string{"alpha", "middle", "zeta"}, cfg.ProviderNames())
-	})
-}
-
-func TestParseConfigBlock(t *testing.T) {
-	t.Run("parses a valid block", func(t *testing.T) {
-		cfg := mustParse(
-			t,
-			"providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig:\n  guard:\n    level: strict\n",
-		)
-		require.Equal(t, map[string]map[string]any{
-			"guard": {"level": "strict"},
-		}, cfg.Config)
-	})
-
-	t.Run("defaults to absent", func(t *testing.T) {
-		cfg := mustParse(t, "providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\n")
-		require.Nil(t, cfg.Config)
-	})
-
-	t.Run("rejects a scalar", func(t *testing.T) {
-		_, err := Parse(
-			[]byte("providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig: foo\n"),
-		)
-		require.ErrorContains(t, err, "config")
-	})
-
-	t.Run("rejects a list", func(t *testing.T) {
-		_, err := Parse(
-			[]byte(
-				"providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig:\n  - a\n",
-			),
-		)
-		require.ErrorContains(t, err, "config")
-	})
-
-	t.Run("rejects a nested scalar", func(t *testing.T) {
-		_, err := Parse(
-			[]byte(
-				"providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig:\n  guard: strict\n",
-			),
-		)
-		require.ErrorContains(t, err, `config "guard"`)
-	})
-
-	t.Run("data returns the declared document", func(t *testing.T) {
-		cfg := mustParse(
-			t,
-			"providers:\n  p:\n    preset: ollama\n    models:\n      m: {}\nconfig:\n  guard:\n    level: strict\n",
-		)
+// TestData verifies the document view the extension runtime reads.
+func TestData(t *testing.T) {
+	t.Run("returns the declared snake_case document", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(
+			"config:\n  guard:\n    route: strict\n",
+		), 0o600))
+		cfg, err := Load(path)
+		require.NoError(t, err)
 		data := cfg.Data()
-		require.Equal(t, "strict", nested(t, data, "config", "guard", "level"))
-		require.Equal(t, "ollama", nested(t, data, "providers", "p", "preset"))
-		requireObjectAt(t, data, "config")["guard"] = nil
-		require.Equal(t, "strict", cfg.Config["guard"]["level"])
+		outer, ok := data["config"].(map[string]any)
+		require.True(t, ok)
+		inner, ok := outer["guard"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "strict", inner["route"])
 	})
-}
 
-// requireObjectAt returns the plain object at the given top-level field.
-func requireObjectAt(t *testing.T, data map[string]any, field string) map[string]any {
-	t.Helper()
-	table, ok := data[field].(map[string]any)
-	require.True(t, ok, "expected an object at %q", field)
-	return table
-}
-
-// nested reads a nested string field of plain data.
-func nested(t *testing.T, data map[string]any, fields ...string) string {
-	t.Helper()
-	var current any = data
-	for _, field := range fields {
-		table, ok := current.(map[string]any)
-		require.True(t, ok, "expected an object at %q", field)
-		current, ok = table[field]
-		require.True(t, ok, "expected a field %q", field)
-	}
-	text, ok := current.(string)
-	require.True(t, ok, "expected a string")
-	return text
+	t.Run("an absent document is empty, never nil", func(t *testing.T) {
+		cfg, err := Load(filepath.Join(t.TempDir(), "nope.yaml"))
+		require.NoError(t, err)
+		require.NotNil(t, cfg.Data())
+		require.Empty(t, cfg.Data())
+	})
 }

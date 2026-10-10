@@ -18,7 +18,6 @@ func plannerAgent() harness.Agent {
 	return harness.Agent{
 		ID:           "planner",
 		Description:  "Plans the work",
-		Model:        harness.FakeModelRef,
 		SystemPrompt: "You plan the work.",
 	}
 }

@@ -2,8 +2,9 @@
 // Anthropic Messages, OpenAI Chat Completions and OpenAI Responses.
 //
 // Protocol names a wire protocol, Config holds the connection settings, New
-// builds the client for a protocol and Preset supplies the protocol and the
-// endpoint of well-known services. The package is the single home for vendor
+// builds the client for a protocol. The provider modules under
+// internal/providermod declare the connections and the rosters; this package
+// stays the single home for vendor
 // knowledge: request and response translation, authentication conventions and
 // error classification.
 package provider

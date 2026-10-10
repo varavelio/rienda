@@ -16,11 +16,6 @@ const (
 	// frontmatterDelimiter separates the YAML frontmatter from the Markdown
 	// body of a definition.
 	frontmatterDelimiter = "---"
-	// configFileName is the file name of the configuration file.
-	configFileName = "config.yaml"
-	// agentsDirName is the directory inside the rienda directory that holds
-	// the agent definitions.
-	agentsDirName = "agents"
 )
 
 // Agent describes one agent definition written into the global agents
@@ -32,9 +27,6 @@ type Agent struct {
 
 	// Description explains what the agent does. The binary requires it.
 	Description string
-
-	// Model is the model reference the agent runs, in provider/model form.
-	Model string
 
 	// Tools lists the names of the tools available to the agent.
 	Tools []string
@@ -75,7 +67,6 @@ func (a Agent) write(t *testing.T, dir string) {
 
 	frontmatter, err := yaml.Marshal(agentFrontmatter{
 		Description: a.Description,
-		Model:       a.Model,
 		Tools:       a.Tools,
 		Hooks:       a.Hooks,
 		Config:      a.Config,
@@ -92,7 +83,6 @@ func (a Agent) write(t *testing.T, dir string) {
 // agentFrontmatter mirrors the YAML frontmatter of an agent definition.
 type agentFrontmatter struct {
 	Description string                    `yaml:"description"`
-	Model       string                    `yaml:"model"`
 	Tools       []string                  `yaml:"tools,omitempty"`
 	Hooks       []string                  `yaml:"hooks,omitempty"`
 	Config      map[string]map[string]any `yaml:"config,omitempty"`

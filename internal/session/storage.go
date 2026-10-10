@@ -119,6 +119,27 @@ func (s storedAgent) entry() Entry {
 // from it under another model. It stores the reference the user named, never
 // the credentials the configuration resolves for it, and the reference the
 // selection replaced, so the transition reads off the line alone.
+// storedThinking is the file form of a thinking selection.
+type storedThinking struct {
+	Kind          Kind      `json:"kind"`
+	ID            string    `json:"id"`
+	ParentID      string    `json:"parentId,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
+	ThinkingLevel string    `json:"thinkingLevel"`
+}
+
+// entry converts a stored thinking selection into its in-memory form.
+func (s storedThinking) entry() Entry {
+	return Entry{
+		ID:            s.ID,
+		ParentID:      s.ParentID,
+		CreatedAt:     s.CreatedAt,
+		Kind:          KindThinking,
+		ThinkingLevel: s.ThinkingLevel,
+	}
+}
+
+// storedModel is the file form of a model selection.
 type storedModel struct {
 	Kind             Kind      `json:"kind"`
 	ID               string    `json:"id"`
@@ -438,6 +459,16 @@ func decode(data []byte) (storedHeader, []Entry, string, string, error) {
 			leaf = entry.ID
 			lastWasLeaf = false
 
+		case KindThinking:
+			entry, err := decodeThinking(lineNumber, line, known)
+			if err != nil {
+				return storedHeader{}, nil, "", "", err
+			}
+			known[entry.ID] = len(entries)
+			entries = append(entries, entry)
+			leaf = entry.ID
+			lastWasLeaf = false
+
 		default:
 			// Entries written by newer versions are ignored so that an old
 			// binary keeps loading the session.
@@ -611,6 +642,29 @@ func decodeModel(lineNumber int, line []byte, known map[string]int) (Entry, erro
 		)
 	case strings.TrimSpace(stored.ModelRef) == "":
 		return Entry{}, fmt.Errorf("line %d: the model reference is required", lineNumber)
+	}
+	return stored.entry(), nil
+}
+
+// decodeThinking decodes one thinking selection of a session file.
+func decodeThinking(lineNumber int, line []byte, known map[string]int) (Entry, error) {
+	var stored storedThinking
+	if err := json.Unmarshal(line, &stored); err != nil {
+		return Entry{}, fmt.Errorf("line %d: %w", lineNumber, err)
+	}
+
+	if _, duplicate := known[stored.ID]; duplicate {
+		return Entry{}, fmt.Errorf("line %d: duplicate entry id %q", lineNumber, stored.ID)
+	}
+	if _, hasParent := known[stored.ParentID]; stored.ParentID != "" && !hasParent {
+		return Entry{}, fmt.Errorf(
+			"line %d: parent %q is not an earlier entry",
+			lineNumber,
+			stored.ParentID,
+		)
+	}
+	if strings.TrimSpace(stored.ThinkingLevel) == "" {
+		return Entry{}, fmt.Errorf("line %d: the thinking level is required", lineNumber)
 	}
 	return stored.entry(), nil
 }

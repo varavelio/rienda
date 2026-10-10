@@ -44,10 +44,13 @@ type Options struct {
 	// the inherited ones.
 	Env []string
 
-	// Catalog lists the context windows the fake model catalog serves, keyed by
-	// the model identifier of the database. Every instance gets its own
-	// catalog endpoint, so no test in the suite reaches models.dev.
-	Catalog map[string]int
+	// ProvidersDir replaces the provider directory of the instance, for tests
+	// that need an installation with no providers at all, or with only their
+	// own modules. Empty uses the directory under the home of the instance.
+	// The built-in module always runs: it is part of the binary by contract.
+	// A test that needs the roster of its own fixtures only writes a fixture
+	// module that shadows the built-in name, exactly as a user module does.
+	ProvidersDir string
 }
 
 // Harness is one isolated rienda installation driven by a single test: a home
@@ -55,11 +58,11 @@ type Options struct {
 // directory, and a fake provider that answers the requests of the compiled
 // binary.
 type Harness struct {
-	home     string
-	workdir  string
-	env      []string
-	provider *FakeProvider
-	catalog  *fakeCatalog
+	home      string
+	workdir   string
+	env       []string
+	provider  *FakeProvider
+	providers string
 }
 
 // New starts a fresh instance for one test: it creates the home directory of
@@ -75,14 +78,19 @@ func New(t *testing.T, opts Options) *Harness {
 		env:      slices.Clone(opts.Env),
 		provider: provider,
 	}
-	instance.catalog = newFakeCatalog(t, instance.home, opts.Catalog)
 
+	providersDir := instance.ProvidersDir()
+	if opts.ProvidersDir != "" {
+		providersDir = opts.ProvidersDir
+	}
+	instance.providers = providersDir
 	if !opts.SkipConfigFile {
 		cfg := DefaultConfig()
 		if opts.Config != nil {
 			cfg = *opts.Config
 		}
-		cfg.write(t, instance.ConfigPath(), provider.BaseURL())
+		instance.install(t, cfg, providersDir)
+		writeInstanceConfig(t, instance.ConfigPath(), cfg)
 	}
 	for _, definition := range opts.Agents {
 		definition.write(t, instance.AgentsDir())
@@ -144,7 +152,7 @@ func (h *Harness) RunEnv(t *testing.T, env []string, args ...string) *Result {
 func (h *Harness) environment(additions []string) []string {
 	env := make([]string, 0, len(h.env)+2+len(additions))
 	env = append(env, h.env...)
-	env = append(env, "HOME="+h.home, catalogEnvVar+"="+h.catalog.URL())
+	env = append(env, "HOME="+h.home, providersEnv+"="+h.providers)
 	return append(env, additions...)
 }
 
@@ -152,9 +160,4 @@ func (h *Harness) environment(additions []string) []string {
 // not the instance declares it, so tests can assert the failures that name it.
 func (h *Harness) AgentPath(id string) string {
 	return filepath.Join(h.AgentsDir(), Agent{ID: id}.FileName())
-}
-
-// CatalogURL returns the endpoint of the fake model catalog of the instance.
-func (h *Harness) CatalogURL() string {
-	return h.catalog.URL()
 }

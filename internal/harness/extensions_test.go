@@ -82,7 +82,7 @@ func TestExtensions(t *testing.T) {
 			t,
 			env,
 			"coder",
-			"description: A test agent\nmodel: fake/test-model\ntools: [word-count]\n",
+			"description: A test agent\ntools: [word-count]\n",
 			"You answer briefly.",
 		)
 
@@ -142,7 +142,7 @@ func TestExtensions(t *testing.T) {
 			t,
 			env,
 			"coder",
-			"description: A test agent\nmodel: fake/test-model\ntools: [shell]\nhooks: [guard]\n",
+			"description: A test agent\ntools: [shell]\nhooks: [guard]\n",
 			"You answer briefly.",
 		)
 
@@ -162,7 +162,7 @@ func TestExtensions(t *testing.T) {
 			t,
 			env,
 			"coder",
-			"description: A test agent\nmodel: fake/test-model\nhooks: [ghost]\n",
+			"description: A test agent\nhooks: [ghost]\n",
 			"You answer briefly.",
 		)
 
@@ -192,7 +192,7 @@ func TestExtensions(t *testing.T) {
 			t,
 			env,
 			"coder",
-			"description: A test agent\nmodel: fake/test-model\ntools: [asker]\n",
+			"description: A test agent\ntools: [asker]\n",
 			"You answer briefly.",
 		)
 
@@ -217,7 +217,7 @@ func TestExtensions(t *testing.T) {
 			t,
 			env,
 			"coder",
-			"description: A test agent\nmodel: fake/test-model\ntools: [asker]\n",
+			"description: A test agent\ntools: [asker]\n",
 			"You answer briefly.",
 		)
 
@@ -243,7 +243,7 @@ func TestExtensions(t *testing.T) {
 			t,
 			env,
 			"coder",
-			"description: A test agent\nmodel: fake/test-model\ntools: [asker]\n",
+			"description: A test agent\ntools: [asker]\n",
 			"You answer briefly.",
 		)
 

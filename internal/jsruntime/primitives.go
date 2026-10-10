@@ -2,6 +2,7 @@ package jsruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -20,9 +21,19 @@ import (
 	"github.com/varavelio/rienda/internal/workdir"
 )
 
-// outputCap caps the payload a primitive hands to a script, matching the tool
+// defaultOutputCap caps the payload a primitive hands to a script, matching the tool
 // output cap.
-const outputCap = 256 << 10
+const defaultOutputCap = 256 << 10
+
+// outputCap returns the payload cap of the invocation: the option the
+// extension declares when its primitive payloads are larger than the default,
+// for example a provider module reading a large model catalog.
+func outputCap(rt *Runtime) int64 {
+	if rt.opts.MaxOutputBytes > 0 {
+		return rt.opts.MaxOutputBytes
+	}
+	return defaultOutputCap
+}
 
 // installContext builds the ctx object of one invocation and sets it on the
 // virtual machine.
@@ -100,7 +111,6 @@ func (rt *Runtime) agentInfo(ctx context.Context) map[string]any {
 	return map[string]any{
 		"name":         definition.ID,
 		"description":  definition.Description,
-		"model":        definition.Model,
 		"tools":        definition.Tools,
 		"hooks":        definition.Hooks,
 		"config":       config,
@@ -233,7 +243,9 @@ func (rt *Runtime) fileObject(ctx context.Context) (*goja.Object, error) {
 }
 
 // resolvePath resolves a path argument against the workspace. An empty path
-// means the workspace itself.
+// means the workspace itself. When the extension declares a FileRoot, the
+// path is confined to it: relative paths resolve against the root and
+// absolute ones or ones escaping it through ".." are refused.
 func (rt *Runtime) resolvePath(
 	ctx context.Context,
 	primitive string,
@@ -241,11 +253,32 @@ func (rt *Runtime) resolvePath(
 	index int,
 ) string {
 	path := requiredString(rt, primitive, call, index, "path")
+	if root := rt.opts.FileRoot; root != "" {
+		resolved, err := confine(root, path)
+		if err != nil {
+			rt.raise("%s: %s", primitive, err.Error())
+		}
+		return resolved
+	}
 	base, err := workdir.Base(ctx, rt.opts.Workdir)
 	if err != nil {
 		rt.raise("%s: %s", primitive, err.Error())
 	}
 	return workdir.Resolve(base, path)
+}
+
+// confine resolves path against root and reports whether it stays inside it.
+// An absolute path is refused: a confined extension addresses the world only
+// through relative paths.
+func confine(root, path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return "", errors.New("absolute paths are not allowed for a confined extension")
+	}
+	resolved := filepath.Clean(filepath.Join(root, path))
+	if resolved != root && !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes the confined directory", path)
+	}
+	return resolved, nil
 }
 
 // fileRead reads a file as text, replacing invalid UTF-8 instead of raising.
@@ -440,12 +473,13 @@ func (rt *Runtime) httpFetch(ctx context.Context, call goja.FunctionCall) goja.V
 		rt.raise("ctx.http.fetch: %s", err.Error())
 	}
 	defer func() { _ = response.Body.Close() }()
-	data, err := io.ReadAll(io.LimitReader(response.Body, outputCap+1))
+	limit := outputCap(rt)
+	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
 		rt.raise("ctx.http.fetch: %s", err.Error())
 	}
-	if len(data) > outputCap {
-		data = data[:outputCap]
+	if len(data) > int(limit) {
+		data = data[:limit]
 	}
 	lowered := map[string]any{}
 	for k, values := range response.Header {
@@ -524,7 +558,7 @@ func (rt *Runtime) systemExec(ctx context.Context, call goja.FunctionCall) goja.
 		Argv:      []string{"sh", "-c", cmdline},
 		Dir:       dir,
 		Timeout:   timeout,
-		MaxOutput: outputCap,
+		MaxOutput: int(outputCap(rt)),
 		Env:       env,
 		Stream:    execStream{rt: rt},
 	})

@@ -99,21 +99,19 @@ func TestRunReportsInvalidDefinitions(t *testing.T) {
 		message    string
 	}{
 		"without a description": {
-			definition: harness.Agent{ID: "coder", Model: harness.FakeModelRef, SystemPrompt: "hi"},
+			definition: harness.Agent{ID: "coder", SystemPrompt: "hi"},
 			message:    "description is required",
 		},
-		"without a model": {
-			definition: harness.Agent{ID: "coder", Description: "A test agent"},
-			message:    "model is required",
-		},
-		"with a model reference that names no provider": {
-			definition: modelFor("ghost"),
-			message:    "must have the form provider/model",
+		"with a forbidden model key": {
+			definition: harness.Agent{ID: "coder", Raw: "---\n" +
+				"description: A test agent\n" +
+				"model: " + harness.FakeModelRef + "\n" +
+				"---\nYou answer briefly.\n"},
+			message: "field model not found",
 		},
 		"with an unknown generation setting": {
 			definition: harness.Agent{ID: "coder", Raw: "---\n" +
 				"description: A test agent\n" +
-				"model: " + harness.FakeModelRef + "\n" +
 				"temperature: 0.5\n" +
 				"---\nYou answer briefly.\n"},
 			message: "field temperature not found",
@@ -129,7 +127,6 @@ func TestRunReportsInvalidDefinitions(t *testing.T) {
 		"with an unknown frontmatter field": {
 			definition: harness.Agent{ID: "coder", Raw: "---\n" +
 				"description: A test agent\n" +
-				"model: " + harness.FakeModelRef + "\n" +
 				"unknown: value\n" +
 				"---\nYou answer briefly.\n"},
 			message: "field unknown not found",

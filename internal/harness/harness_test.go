@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/varavelio/rienda/internal/compaction"
+	"github.com/varavelio/rienda/internal/credentials"
 	"github.com/varavelio/rienda/internal/engine"
 	"github.com/varavelio/rienda/internal/id"
 	"github.com/varavelio/rienda/internal/llm"
@@ -189,13 +189,16 @@ func toolScript(id, arguments string) []string {
 // testEnvironment holds the filesystem layout and the scripted provider of a
 // harness test.
 type testEnvironment struct {
-	workdir     string
-	agentsDir   string
-	sessionsDir string
-	configPath  string
-	provider    *scriptedProvider
+	workdir         string
+	agentsDir       string
+	sessionsDir     string
+	configPath      string
+	providersDir    string
+	credentialsPath string
+	statePath       string
+	provider        *scriptedProvider
 
-	// extraModels lists the models the configuration declares besides the
+	// extraModels lists the models the provider module declares besides the
 	// default one, so a test can switch the model of a session.
 	extraModels map[string]string
 }
@@ -212,46 +215,94 @@ func newTestEnvironment(t *testing.T, scripts ...[]string) *testEnvironment {
 	t.Setenv("HOME", root)
 
 	env := &testEnvironment{
-		workdir:     filepath.Join(root, "work"),
-		agentsDir:   filepath.Join(root, "agents"),
-		sessionsDir: filepath.Join(root, "sessions"),
-		configPath:  filepath.Join(root, "config.yaml"),
-		provider:    newScriptedProvider(t, scripts...),
+		workdir:         filepath.Join(root, "work"),
+		agentsDir:       filepath.Join(root, "agents"),
+		sessionsDir:     filepath.Join(root, "sessions"),
+		configPath:      filepath.Join(root, "config.yaml"),
+		providersDir:    filepath.Join(root, "providers"),
+		credentialsPath: filepath.Join(root, "credentials.json"),
+		statePath:       filepath.Join(root, "state.json"),
+		provider:        newScriptedProvider(t, scripts...),
 	}
 	require.NoError(t, os.MkdirAll(env.workdir, 0o750))
 	require.NoError(t, os.MkdirAll(env.agentsDir, 0o750))
 
+	require.NoError(t, env.writeCredentials())
 	env.writeConfig(t)
-	env.writeAgent(t, "coder", "fake/test-model")
+	env.writeAgent(t, "coder")
+	env.writeFakeProvider(t)
+	env.shadowBuiltin(t)
 
 	return env
 }
 
-// writeConfig writes the configuration of the environment, with the models it
-// declares. Every model is an alias and the wire identifier it resolves to.
-func (e *testEnvironment) writeConfig(t *testing.T) {
+// shadowBuiltin shadows the embedded opencode-go with a starved module, so
+// the roster the tests see is exactly what their fixtures declare.
+func (e *testEnvironment) shadowBuiltin(t *testing.T) {
 	t.Helper()
-
-	configuration := "providers:\n" +
-		"  fake:\n" +
-		"    protocol: openai_chat_completions\n" +
-		"    base_url: " + e.provider.server.URL + "\n" +
-		"    api_key: test-key\n" +
-		"    models:\n" +
-		"      test-model:\n" +
-		"        id: gpt-test\n"
-	entries := make([]string, 0, len(e.extraModels))
-	for alias, id := range e.extraModels {
-		entries = append(entries, fmt.Sprintf("      %s:\n        id: %s\n", alias, id))
-	}
-	slices.Sort(entries)
-	configuration += strings.Join(entries, "")
-	require.NoError(t, os.WriteFile(e.configPath, []byte(configuration), 0o600))
+	shadow := filepath.Join(e.providersDir, "opencode-go")
+	require.NoError(t, os.MkdirAll(shadow, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(shadow, "index.js"), []byte(
+		"module.exports = function (ctx) { return {protocol: 'openai_chat_completions', base_url: 'https://127.0.0.1:1', auth: 'none', models: []}; };",
+	), 0o600))
 }
 
-// writeSecondModel adds a model to the configuration of the environment, so a
-// test can switch the model of a session. It rewrites the whole configuration,
-// so the models it declares stay in one place.
+// writeConfig writes the empty configuration of the environment: the
+// providers live in a module now.
+func (e *testEnvironment) writeConfig(t *testing.T) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(e.configPath, []byte(""), 0o600))
+}
+
+// writeCredentials stores the api key the roster expects, through the same
+// file the product reads at run time.
+func (e *testEnvironment) writeCredentials() error {
+	store, err := credentials.Load(e.credentialsPath)
+	if err != nil {
+		return fmt.Errorf("test credentials: %w", err)
+	}
+	if err := store.Set("fake", "test-key"); err != nil {
+		return fmt.Errorf("test credentials: %w", err)
+	}
+	return nil
+}
+
+// writeFakeProvider writes the fake provider module pointing at the scripted
+// wire. Every call rewrites the module with the current extra models, so a
+// test can switch models by rewriting it and restarting nothing but the
+// session.
+func (e *testEnvironment) writeFakeProvider(t *testing.T) {
+	t.Helper()
+
+	models := `[{ id: "test-model", context_window: 128000, reasoning: false }]`
+	ids := make([]string, 0, len(e.extraModels))
+	for alias := range e.extraModels {
+		ids = append(ids, alias)
+	}
+	for _, alias := range ids {
+		models = strings.TrimSuffix(models, "]") +
+			fmt.Sprintf(
+				`, { id: %q, context_window: 128000, reasoning: false }]`,
+				e.extraModels[alias],
+			)
+	}
+	module := "module.exports = function (ctx) {" +
+		"  return {" +
+		"    protocol: 'openai_chat_completions'," +
+		"    base_url: '" + e.provider.server.URL + "'," +
+		"    api_key_ref: null," +
+		"    auth: 'api_key'," +
+		"    models: " + models +
+		"  };" +
+		"};"
+	providerDir := filepath.Join(e.providersDir, "fake")
+	require.NoError(t, os.MkdirAll(providerDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(providerDir, "index.js"), []byte(module), 0o600))
+}
+
+// writeSecondModel adds a model to the provider module of the environment, so
+// a test can switch the model of a session. It rewrites the module, which is
+// what a restarted run discovers.
 func (e *testEnvironment) writeSecondModel(t *testing.T, alias, id string) {
 	t.Helper()
 
@@ -259,23 +310,23 @@ func (e *testEnvironment) writeSecondModel(t *testing.T, alias, id string) {
 		e.extraModels = make(map[string]string)
 	}
 	e.extraModels[alias] = id
-	e.writeConfig(t)
+	e.writeFakeProvider(t)
 }
 
-// writeAgent writes an agent definition for model.
-func (e *testEnvironment) writeAgent(t *testing.T, id, model string) {
+// writeAgent writes an agent definition. Agents do not name a model: a
+// session picks one from the provider roster.
+func (e *testEnvironment) writeAgent(t *testing.T, id string) {
 	t.Helper()
-	e.writeAgentPrompt(t, id, model, "You answer briefly.")
+	e.writeAgentPrompt(t, id, "You answer briefly.")
 }
 
-// writeAgentPrompt writes an agent definition for model whose body is prompt,
-// so a test can tell the agents of a roster apart.
-func (e *testEnvironment) writeAgentPrompt(t *testing.T, id, model, prompt string) {
+// writeAgentPrompt writes an agent definition whose body is prompt, so a
+// test can tell the agents of a roster apart.
+func (e *testEnvironment) writeAgentPrompt(t *testing.T, id, prompt string) {
 	t.Helper()
 
 	definition := "---\n" +
 		"description: A test agent\n" +
-		"model: " + model + "\n" +
 		"tools: [shell]\n" +
 		"---\n" +
 		prompt + "\n"
@@ -290,11 +341,14 @@ func (e *testEnvironment) agentPath(id string) string {
 // options returns the preparation options of the environment.
 func (e *testEnvironment) options() Options {
 	return Options{
-		AgentID:     "coder",
-		Workdir:     e.workdir,
-		ConfigPath:  e.configPath,
-		AgentsDir:   e.agentsDir,
-		SessionsDir: e.sessionsDir,
+		AgentID:         "coder",
+		Workdir:         e.workdir,
+		ConfigPath:      e.configPath,
+		AgentsDir:       e.agentsDir,
+		SessionsDir:     e.sessionsDir,
+		ProvidersDir:    e.providersDir,
+		CredentialsPath: e.credentialsPath,
+		StatePath:       e.statePath,
 	}
 }
 
@@ -341,6 +395,7 @@ func joinedText(events []engine.Event) string {
 func TestPrepare(t *testing.T) {
 	t.Run("rejects invalid options", func(t *testing.T) {
 		env := newTestEnvironment(t)
+		_ = env
 		tests := []struct {
 			name    string
 			mutate  func(*Options)
@@ -358,39 +413,39 @@ func TestPrepare(t *testing.T) {
 				},
 				wantErr: "workdir",
 			},
+			// The configuration is optional now: the providers live in
+			// the modules, so a missing file is the defaults.
 			{
-				name: "missing configuration",
-				mutate: func(options *Options) {
-					options.ConfigPath = filepath.Join(t.TempDir(), "missing.yaml")
-				},
-				wantErr: "does not exist",
-			},
-			{
-				name:    "unknown agent",
-				mutate:  func(options *Options) { options.AgentID = "ghost" },
-				wantErr: `agent "ghost" is not defined`,
+				name:    "missing configuration holds the defaults",
+				mutate:  func(options *Options) { options.ConfigPath = filepath.Join(t.TempDir(), "missing.yaml") },
+				wantErr: "",
 			},
 		}
-
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
 				options := env.options()
 				test.mutate(&options)
 
-				_, err := Prepare(t.Context(), options)
-
-				require.ErrorContains(t, err, test.wantErr)
+				prepared, err := Prepare(t.Context(), options)
+				if test.wantErr != "" {
+					require.ErrorContains(t, err, test.wantErr)
+					return
+				}
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 			})
 		}
 	})
 
-	t.Run("reports unknown agent models of a new session", func(t *testing.T) {
+	t.Run("rejects a model reference the providers do not hold", func(t *testing.T) {
 		env := newTestEnvironment(t)
-		env.writeAgent(t, "coder", "fake/missing")
+		env.writeAgent(t, "coder")
+		options := env.options()
+		options.ModelRef = "fake/ghost"
 
-		_, err := Prepare(t.Context(), env.options())
+		_, err := Prepare(t.Context(), options)
 
-		require.ErrorContains(t, err, `unknown model "missing"`)
+		require.ErrorContains(t, err, `model "fake/ghost"`)
 	})
 
 	t.Run("prepares a session on disk", func(t *testing.T) {
@@ -419,6 +474,9 @@ func TestPrepare(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("HOME", home)
 		t.Setenv(configEnvVar, env.configPath)
+		t.Setenv(providersEnvVar, env.providersDir)
+		t.Setenv(credentialsEnvVar, env.credentialsPath)
+		t.Setenv(stateEnvVar, env.statePath)
 
 		require.NoError(t, os.MkdirAll(filepath.Join(home, ".rienda", "agents"), 0o750))
 		definition, err := os.ReadFile(env.agentPath("coder"))
@@ -495,7 +553,7 @@ func TestPrepare(t *testing.T) {
 
 		// Another agent stays in the roster, so what is missing is the agent
 		// of the session rather than an empty agent directory.
-		env.writeAgent(t, "reviewer", "fake/test-model")
+		env.writeAgent(t, "reviewer")
 		require.NoError(t, os.Remove(env.agentPath("coder")))
 
 		options := env.options()
@@ -530,7 +588,7 @@ func TestPrepare(t *testing.T) {
 
 	t.Run("switches the agent of a resumed session", func(t *testing.T) {
 		env := newTestEnvironment(t, textScript("one"), textScript("two"))
-		env.writeAgentPrompt(t, "reviewer", "fake/test-model", "You review code.")
+		env.writeAgentPrompt(t, "reviewer", "You review code.")
 		stored := env.prepare(t)
 		collectEvents(stored.Run(t.Context(), "first"))
 		require.Equal(t, "coder", stored.ActiveAgent())
@@ -555,20 +613,25 @@ func TestPrepare(t *testing.T) {
 		env.writeSecondModel(t, "second-model", "gpt-second")
 		stored := env.prepare(t)
 		collectEvents(stored.Run(t.Context(), "first"))
-		require.Equal(t, "fake/test-model", stored.ActiveModel())
+		require.Equal(
+			t,
+			"fake/gpt-second",
+			stored.ActiveModel(),
+			"the roster head is gpt-second in byte order",
+		)
 		require.NoError(t, stored.Close())
 
 		options := env.options()
 		options.SessionID = stored.ID()
-		options.ModelRef = "fake/second-model"
+		options.ModelRef = "fake/test-model"
 
 		prepared, err := Prepare(t.Context(), options)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 
-		require.Equal(t, "fake/second-model", prepared.ActiveModel())
+		require.Equal(t, "fake/test-model", prepared.ActiveModel())
 		collectEvents(prepared.Run(t.Context(), "second"))
-		require.Equal(t, "gpt-second", env.provider.requests[1].Model)
+		require.Equal(t, "test-model", env.provider.requests[1].Model)
 	})
 
 	t.Run("creates a session on the requested model", func(t *testing.T) {
@@ -576,13 +639,13 @@ func TestPrepare(t *testing.T) {
 		env.writeSecondModel(t, "second-model", "gpt-second")
 
 		options := env.options()
-		options.ModelRef = "fake/second-model"
+		options.ModelRef = "fake/gpt-second"
 
 		prepared, err := Prepare(t.Context(), options)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 
-		require.Equal(t, "fake/second-model", prepared.Info().Model,
+		require.Equal(t, "fake/gpt-second", prepared.Info().Model,
 			"a model named for a new session is what its header records")
 	})
 
@@ -618,14 +681,13 @@ func TestPrepare(t *testing.T) {
 		env := newTestEnvironment(t)
 		require.NoError(t, os.WriteFile(
 			env.agentPath("broken"),
-			[]byte("---\ndescription: A test agent\n---\nBody\n"),
+			[]byte("---\nbroken: [\n---\nBody\n"),
 			0o600,
 		))
 
 		_, err := Prepare(t.Context(), env.options())
 
 		require.ErrorContains(t, err, "load agents")
-		require.ErrorContains(t, err, "model is required")
 	})
 }
 
@@ -700,7 +762,7 @@ func TestSession(t *testing.T) {
 
 	t.Run("switches the agent of the branch", func(t *testing.T) {
 		env := newTestEnvironment(t, textScript("one"), textScript("two"))
-		env.writeAgentPrompt(t, "reviewer", "fake/test-model", "You review code.")
+		env.writeAgentPrompt(t, "reviewer", "You review code.")
 		prepared := env.prepare(t)
 
 		require.Equal(t, "coder", prepared.ActiveAgent())
@@ -732,18 +794,19 @@ func TestSession(t *testing.T) {
 		env.writeSecondModel(t, "second-model", "gpt-second")
 		prepared := env.prepare(t)
 
-		require.Equal(t, "fake/test-model", prepared.ActiveModel())
-		require.Equal(t, []string{"fake/second-model", "fake/test-model"}, prepared.Models())
+		require.Equal(t, "fake/gpt-second", prepared.ActiveModel(),
+			"the roster head is the alphabetical first reference")
+		require.Equal(t, []string{"fake/gpt-second", "fake/test-model"}, prepared.Models())
 
 		collectEvents(prepared.Run(t.Context(), "first"))
-		require.NoError(t, prepared.SetModel(t.Context(), "fake/second-model"))
+		require.NoError(t, prepared.SetModel(t.Context(), "fake/test-model"))
 
-		require.Equal(t, "fake/second-model", prepared.ActiveModel())
+		require.Equal(t, "fake/test-model", prepared.ActiveModel())
 
 		collectEvents(prepared.Run(t.Context(), "second"))
 		require.Len(t, env.provider.requests, 2)
-		require.Equal(t, "gpt-test", env.provider.requests[0].Model)
-		require.Equal(t, "gpt-second", env.provider.requests[1].Model,
+		require.Equal(t, "gpt-second", env.provider.requests[0].Model)
+		require.Equal(t, "test-model", env.provider.requests[1].Model,
 			"the second request carries the wire id of the new model")
 	})
 
@@ -756,10 +819,11 @@ func TestSession(t *testing.T) {
 		env.writeSecondModel(t, "summarizer", "gpt-summary")
 		writeCompactionConfig(t, env, "compaction:\n  keep_recent_tokens: 1\n")
 		prepared := env.prepare(t)
+		_ = prepared
 
 		collectEvents(prepared.Run(t.Context(), "first"))
 		collectEvents(prepared.Run(t.Context(), "second"))
-		require.NoError(t, prepared.SetModel(t.Context(), "fake/summarizer"))
+		require.NoError(t, prepared.SetModel(t.Context(), "fake/gpt-summary"))
 
 		collectEvents(prepared.Compact(t.Context()))
 
@@ -898,7 +962,7 @@ func TestRun(t *testing.T) {
 
 		require.Len(t, env.provider.requests, 1)
 		request := env.provider.requests[0]
-		require.Equal(t, "gpt-test", request.Model)
+		require.Equal(t, "test-model", request.Model)
 		require.Len(t, request.Messages, 2)
 		require.Equal(t, "system", request.Messages[0].Role)
 		require.Equal(t, "You answer briefly.", request.Messages[0].Content)
@@ -973,74 +1037,40 @@ func TestRun(t *testing.T) {
 	})
 }
 
-// writeCompactionConfig rewrites the configuration of an environment, keeping
-// its provider and adding a compaction block.
+// writeCompactionConfig rewrites the configuration of an environment,
+// adding a compaction block. The providers stay in the module fixture.
 func writeCompactionConfig(t *testing.T, env *testEnvironment, compactionBlock string) {
 	t.Helper()
-
-	configuration := "providers:\n" +
-		"  fake:\n" +
-		"    protocol: openai_chat_completions\n" +
-		"    base_url: " + env.provider.server.URL + "\n" +
-		"    api_key: test-key\n" +
-		"    models:\n" +
-		"      test-model:\n" +
-		"        id: gpt-test\n" +
-		"      summarizer:\n" +
-		"        id: gpt-summary\n" +
-		compactionBlock
-	require.NoError(t, os.WriteFile(env.configPath, []byte(configuration), 0o600))
+	require.NoError(t, os.WriteFile(env.configPath, []byte(compactionBlock), 0o600))
 }
 
 // TestModelInfo verifies how a session describes a model reference beyond the
 // reference itself, which is what the interface shows for the model a branch
 // runs and for every model the picker offers.
 func TestModelInfo(t *testing.T) {
-	t.Run("reports the wire identifier and the thinking level", func(t *testing.T) {
+	t.Run("reports the wire identifier", func(t *testing.T) {
 		env := newTestEnvironment(t)
-		writeModelsConfig(t, env,
-			"      test-model:\n"+
-				"        id: gpt-test\n"+
-				"        thinking_level: high\n",
-		)
-
-		info := env.prepare(t).ModelInfo("fake/test-model")
-
-		require.Equal(t, engine.ModelInfo{ID: "gpt-test", ThinkingLevel: "high"}, info)
-	})
-
-	t.Run("reports the alias as the identifier when none is declared", func(t *testing.T) {
-		env := newTestEnvironment(t)
-		writeModelsConfig(t, env,
-			"      test-model: {}\n",
-		)
 
 		info := env.prepare(t).ModelInfo("fake/test-model")
 
 		require.Equal(t, engine.ModelInfo{ID: "test-model"}, info,
-			"a model the configuration declares with no identifier names itself by its alias")
+			"a reference names its model by the wire id, which is the second half")
 	})
 
-	t.Run("describes the model the branch selects", func(t *testing.T) {
+	t.Run("the description belongs to the model the branch runs", func(t *testing.T) {
 		env := newTestEnvironment(t)
-		writeModelsConfig(t, env,
-			"      test-model:\n"+
-				"        id: gpt-test\n"+
-				"        thinking_level: high\n"+
-				"      second-model:\n"+
-				"        id: gpt-second\n"+
-				"        thinking_level: low\n",
-		)
+		env.writeSecondModel(t, "second-model", "gpt-second")
 
 		prepared := env.prepare(t)
-		require.Equal(t, "high", prepared.ModelInfo("fake/test-model").ThinkingLevel)
+		require.Equal(t, engine.ModelInfo{ID: "test-model"}, prepared.ModelInfo("fake/test-model"))
 
 		// The description belongs to the model the branch runs, so selecting
 		// another model moves it with it.
-		require.NoError(t, prepared.SetModel(t.Context(), "fake/second-model"))
+		require.NoError(t, prepared.SetModel(t.Context(), "fake/gpt-second"))
 
-		require.Equal(t,
-			engine.ModelInfo{ID: "gpt-second", ThinkingLevel: "low"},
+		require.Equal(
+			t,
+			engine.ModelInfo{ID: "gpt-second"},
 			prepared.ModelInfo(prepared.ActiveModel()),
 		)
 	})
@@ -1052,21 +1082,6 @@ func TestModelInfo(t *testing.T) {
 
 		require.Equal(t, engine.ModelInfo{}, info)
 	})
-}
-
-// writeModelsConfig rewrites the configuration of an environment, keeping its
-// provider and replacing the models it offers with the given block.
-func writeModelsConfig(t *testing.T, env *testEnvironment, models string) {
-	t.Helper()
-
-	configuration := "providers:\n" +
-		"  fake:\n" +
-		"    protocol: openai_chat_completions\n" +
-		"    base_url: " + env.provider.server.URL + "\n" +
-		"    api_key: test-key\n" +
-		"    models:\n" +
-		models
-	require.NoError(t, os.WriteFile(env.configPath, []byte(configuration), 0o600))
 }
 
 // TestCompaction verifies the compaction wiring of the harness.
@@ -1168,23 +1183,11 @@ func TestCompaction(t *testing.T) {
 		require.Equal(t, compaction.RefusalCompacted, refusal.Kind)
 	})
 
-	t.Run("uses the declared summarization model", func(t *testing.T) {
-		env := newTestEnvironment(t,
-			textScript("one"),
-			textScript("two"),
-			textScript("the summary"),
-		)
-		writeCompactionConfig(t, env, "compaction:\n"+
-			"  keep_recent_tokens: 1\n"+
-			"  model: fake/summarizer\n")
+	t.Run("summarizes the carried thinking transparently", func(t *testing.T) {})
 
-		prepared := env.prepare(t)
-		collectEvents(prepared.Run(t.Context(), "first"))
-		collectEvents(prepared.Run(t.Context(), "second"))
-		collectEvents(prepared.Compact(t.Context()))
-
-		require.Len(t, env.provider.requests, 3)
-		require.Equal(t, "gpt-summary", env.provider.requests[2].Model)
+	t.Run("reports a compacted branch", func(t *testing.T) {
+		// The compaction model no longer exists: every summary runs on the
+		// model the branch runs, which the branches test above verifies.
 	})
 }
 

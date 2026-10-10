@@ -19,7 +19,6 @@ func writeAgent(t *testing.T, dir, id string) {
 
 	definition := "---\n" +
 		"description: A test agent\n" +
-		"model: fake/test-model\n" +
 		"---\n" +
 		"You answer briefly.\n"
 	require.NoError(

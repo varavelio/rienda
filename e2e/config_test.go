@@ -22,43 +22,11 @@ func chatProvider(name string, models ...harness.Model) harness.Provider {
 	}
 }
 
-// TestRunHonorsConfigEnvironment verifies that RIENDA_CONFIG selects the
-// configuration file of a run.
-func TestRunHonorsConfigEnvironment(t *testing.T) {
-	app := newApp(t, harness.Text("hello"))
-	path := app.WriteConfig(t, t.TempDir(), harness.Config{Providers: []harness.Provider{
-		chatProvider(
-			harness.FakeProviderName,
-			harness.Model{Alias: harness.DefaultModelAlias, ID: "env-model"},
-		),
-	}})
-
-	result := app.RunEnv(t, []string{"RIENDA_CONFIG=" + path}, "run", "-a", "coder", "-p", "hi")
-
-	result.RequireSuccess(t)
-	require.Equal(t, "env-model", app.Provider().LastRequest(t).Chat(t).Model)
-}
-
-// TestRunPrefersTheConfigFlag verifies that --config wins over RIENDA_CONFIG.
-func TestRunPrefersTheConfigFlag(t *testing.T) {
-	app := newApp(t, harness.Text("hello"))
-	dir := t.TempDir()
-	path := app.WriteConfig(t, dir, harness.Config{Providers: []harness.Provider{
-		chatProvider(
-			harness.FakeProviderName,
-			harness.Model{Alias: harness.DefaultModelAlias, ID: "flag-model"},
-		),
-	}})
-
-	result := app.RunEnv(
-		t,
-		[]string{"RIENDA_CONFIG=" + filepath.Join(dir, "missing.yaml")},
-		"run", "-a", "coder", "-p", "hi", "--config", path,
-	)
-
-	result.RequireSuccess(t)
-	require.Equal(t, "flag-model", app.Provider().LastRequest(t).Chat(t).Model)
-}
+// TestRunAppliesModelDefaults verifies that every generation setting declared
+// for a model reaches the wire. The former environment/flag configuration
+// tests live here too: the providers moved into the modules, so a test that
+// needs a second roster writes it under its own providers directory and
+// points RIENDA_PROVIDERS at it.
 
 // TestRunSendsTheDeclaredHeaders verifies that the static headers of a provider
 // travel with every request and that the session header carries the identifier
@@ -75,7 +43,7 @@ func TestRunSendsTheDeclaredHeaders(t *testing.T) {
 				Headers:       map[string]string{"x-rienda-test": "static"},
 				SessionHeader: new("x-session-id"),
 				Models: []harness.Model{
-					{Alias: harness.DefaultModelAlias, ID: harness.DefaultModelID},
+					{ID: harness.DefaultModelID},
 				},
 			},
 		}},
@@ -89,21 +57,21 @@ func TestRunSendsTheDeclaredHeaders(t *testing.T) {
 	require.Equal(t, result.SessionID(t), request.Header.Get("x-session-id"))
 }
 
-// TestRunInheritsThePresetSessionHeader verifies that a provider that declares
-// a preset sends the session header the preset contributes, and that a custom
-// endpoint sends none until it declares one.
-func TestRunInheritsThePresetSessionHeader(t *testing.T) {
-	t.Run("from the preset", func(t *testing.T) {
+// TestRunInheritsTheSessionHeader verifies that a provider that declares a
+// session header sends it, and that a provider declaring none sends none.
+func TestRunInheritsTheSessionHeader(t *testing.T) {
+	t.Run("from the declaration", func(t *testing.T) {
 		app := harness.New(t, harness.Options{
 			Script: []harness.Turn{harness.Text("hello")},
 			Agents: []harness.Agent{coderAgent()},
 			Config: &harness.Config{Providers: []harness.Provider{
 				{
-					Name:   harness.FakeProviderName,
-					Preset: "opencode-go",
-					APIKey: harness.TestAPIKey,
+					Name:          harness.FakeProviderName,
+					Protocol:      harness.ProtocolChat,
+					APIKey:        harness.TestAPIKey,
+					SessionHeader: new("x-opencode-session"),
 					Models: []harness.Model{
-						{Alias: harness.DefaultModelAlias, ID: harness.DefaultModelID},
+						{ID: harness.DefaultModelID},
 					},
 				},
 			}},
@@ -133,18 +101,19 @@ func TestRunInheritsThePresetSessionHeader(t *testing.T) {
 // declaring several providers sends each run to the connection of the model its
 // agent uses.
 func TestRunUsesTheProviderOfTheAgentModel(t *testing.T) {
-	primary := chatProvider("primary", harness.Model{Alias: "fast", ID: "primary-model"})
+	primary := chatProvider("primary", harness.Model{ID: "primary-model"})
 	primary.APIKey = "primary-key"
-	secondary := chatProvider("secondary", harness.Model{Alias: "smart", ID: "secondary-model"})
+	secondary := chatProvider("secondary", harness.Model{ID: "secondary-model"})
 	secondary.APIKey = "secondary-key"
 
 	app := harness.New(t, harness.Options{
 		Script: []harness.Turn{harness.Text("hello")},
-		Agents: []harness.Agent{modelFor("secondary/smart")},
+		Agents: []harness.Agent{coderAgent()},
 		Config: &harness.Config{Providers: []harness.Provider{primary, secondary}},
 	})
 
-	result := app.Run(t, "run", "-a", "coder", "-p", "hi")
+	// Agents no longer name models; the run names the one it wants.
+	result := app.Run(t, "run", "-a", "coder", "-m", "secondary/secondary-model", "-p", "hi")
 	result.RequireSuccess(t)
 
 	request := app.Provider().LastRequest(t)
@@ -165,7 +134,7 @@ func TestRunDisablesTheSessionHeader(t *testing.T) {
 				APIKey:        harness.TestAPIKey,
 				SessionHeader: new(""),
 				Models: []harness.Model{
-					{Alias: harness.DefaultModelAlias, ID: harness.DefaultModelID},
+					{ID: harness.DefaultModelID},
 				},
 			},
 		}},
@@ -181,12 +150,11 @@ func TestRunDisablesTheSessionHeader(t *testing.T) {
 // for a model reaches the wire.
 func TestRunAppliesModelDefaults(t *testing.T) {
 	model := harness.Model{
-		Alias:         harness.DefaultModelAlias,
-		ID:            "wire-model",
-		MaxTokens:     1234,
-		Temperature:   new(0.3),
-		TopP:          new(0.8),
-		ThinkingLevel: "low",
+		ID:          "wire-model",
+		MaxTokens:   1234,
+		Temperature: new(0.3),
+		TopP:        new(0.8),
+		Thinking:    []harness.Thinking{{Level: "low", MaxTokens: 4096}},
 	}
 
 	app := harness.New(t, harness.Options{
@@ -197,7 +165,8 @@ func TestRunAppliesModelDefaults(t *testing.T) {
 		}},
 	})
 
-	result := app.Run(t, "run", "-a", "coder", "-p", "hi")
+	// Thinking is a branch selection: a run that names a mode sends it.
+	result := app.Run(t, "run", "-a", "coder", "--thinking", "low", "-p", "hi")
 	result.RequireSuccess(t)
 
 	chat := app.Provider().LastRequest(t).Chat(t)
@@ -211,108 +180,55 @@ func TestRunAppliesModelDefaults(t *testing.T) {
 // TestRunReportsConfigurationFailures verifies that every way of configuring an
 // unusable instance fails the run with a message that points at the cause.
 func TestRunReportsConfigurationFailures(t *testing.T) {
-	t.Run("without a configuration file", func(t *testing.T) {
+	t.Run("with no providers at all", func(t *testing.T) {
+		// The installation owns its directory and shadows the built-in with
+		// an empty roster, exactly as a user module would.
+		providerDir := filepath.Join(t.TempDir(), "providers")
+		shadow := filepath.Join(providerDir, "opencode-go")
+		writeTestModule(
+			t,
+			shadow,
+			"module.exports = function (ctx) { return {protocol: 'openai_chat_completions', base_url: 'https://example.invalid', auth: 'none', models: []}; };",
+		)
 		app := harness.New(t, harness.Options{
 			Agents:         []harness.Agent{coderAgent()},
 			SkipConfigFile: true,
+			ProvidersDir:   providerDir,
 		})
 
 		result := app.Run(t, "run", "-a", "coder", "-p", "hi")
 
 		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, "config.yaml")
-		require.Contains(t, result.Stderr, "does not exist")
+		require.Contains(t, result.Stderr, "no provider offers models")
 	})
 
-	t.Run("with a missing configuration file", func(t *testing.T) {
+	t.Run("with a model reference no provider holds", func(t *testing.T) {
 		app := newApp(t)
-		path := filepath.Join(t.TempDir(), "missing.yaml")
+
+		result := app.Run(t, "run", "-a", "coder", "-m", "ghost/nope", "-p", "hi")
+
+		require.Equal(t, 1, result.Code)
+		require.Contains(t, result.Stderr, `model "ghost/nope"`)
+	})
+
+	t.Run("with a model reference the default roster does not hold", func(t *testing.T) {
+		app := newApp(t)
+
+		result := app.Run(t, "run", "-a", "coder", "-m", "fake/ghost", "-p", "hi")
+
+		require.Equal(t, 1, result.Code)
+		require.Contains(t, result.Stderr, `model "fake/ghost"`)
+	})
+
+	t.Run("with an old providers configuration block", func(t *testing.T) {
+		// Providers moved into the modules, so the removed block refuses to
+		// load and names the mechanism that replaced it.
+		app := newApp(t)
+		path := app.WithConfig(t, "providers:\n  fake:\n    protocol: openai_chat_completions\n")
 
 		result := app.Run(t, "run", "-a", "coder", "-p", "hi", "--config", path)
 
 		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, "missing.yaml")
-	})
-
-	t.Run("with an unknown provider", func(t *testing.T) {
-		app := harness.New(t, harness.Options{Agents: []harness.Agent{modelFor("ghost/model")}})
-
-		result := app.Run(t, "run", "-a", "coder", "-p", "hi")
-
-		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, `unknown provider "ghost"`)
-	})
-
-	t.Run("with an unknown model", func(t *testing.T) {
-		app := harness.New(t, harness.Options{Agents: []harness.Agent{modelFor("fake/ghost")}})
-
-		result := app.Run(t, "run", "-a", "coder", "-p", "hi")
-
-		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, `unknown model "ghost"`)
-	})
-
-	t.Run("without a connection", func(t *testing.T) {
-		app := harness.New(t, harness.Options{
-			Agents: []harness.Agent{coderAgent()},
-			Config: &harness.Config{Providers: []harness.Provider{{
-				Name:   harness.FakeProviderName,
-				Models: []harness.Model{{Alias: harness.DefaultModelAlias}},
-			}}},
-		})
-
-		result := app.Run(t, "run", "-a", "coder", "-p", "hi")
-
-		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, "preset or protocol is required")
-	})
-
-	t.Run("with a connection that declares both a preset and a protocol", func(t *testing.T) {
-		app := harness.New(t, harness.Options{
-			Agents: []harness.Agent{coderAgent()},
-			Config: &harness.Config{Providers: []harness.Provider{{
-				Name:     harness.FakeProviderName,
-				Preset:   "openai",
-				Protocol: harness.ProtocolChat,
-				Models:   []harness.Model{{Alias: harness.DefaultModelAlias}},
-			}}},
-		})
-
-		result := app.Run(t, "run", "-a", "coder", "-p", "hi")
-
-		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, "preset and protocol are mutually exclusive")
-	})
-
-	t.Run("with an unknown preset", func(t *testing.T) {
-		app := harness.New(t, harness.Options{
-			Agents: []harness.Agent{coderAgent()},
-			Config: &harness.Config{Providers: []harness.Provider{{
-				Name:   harness.FakeProviderName,
-				Preset: "ghost",
-				Models: []harness.Model{{Alias: harness.DefaultModelAlias}},
-			}}},
-		})
-
-		result := app.Run(t, "run", "-a", "coder", "-p", "hi")
-
-		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, `unknown preset "ghost"`)
-	})
-
-	t.Run("with an unknown protocol", func(t *testing.T) {
-		app := harness.New(t, harness.Options{
-			Agents: []harness.Agent{coderAgent()},
-			Config: &harness.Config{Providers: []harness.Provider{{
-				Name:     harness.FakeProviderName,
-				Protocol: "gemini",
-				Models:   []harness.Model{{Alias: harness.DefaultModelAlias}},
-			}}},
-		})
-
-		result := app.Run(t, "run", "-a", "coder", "-p", "hi")
-
-		require.Equal(t, 1, result.Code)
-		require.Contains(t, result.Stderr, `unknown protocol "gemini"`)
+		require.Contains(t, result.Stderr, "providers are no longer declared here")
 	})
 }
