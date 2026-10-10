@@ -98,6 +98,16 @@ func planDatabase(api map[string]any) map[string]any {
 			"reasoning": true,
 			"limit":     map[string]any{"context": 9000, "output": 900},
 		},
+		"gpt-5.1": map[string]any{
+			"name":   "GPT-5.1",
+			"status": "deprecated",
+			"limit":  map[string]any{"context": 400000, "output": 64000},
+		},
+		"grok-beta": map[string]any{
+			"name":   "Grok Beta",
+			"status": "beta",
+			"limit":  map[string]any{"context": 131072, "output": 16384},
+		},
 	}
 	return map[string]any{"opencode-go": provider}
 }
@@ -132,7 +142,7 @@ func TestOpencodeGoDiscoversThePlan(t *testing.T) {
 		"claude-haiku-5-5": "anthropic",
 		"gpt-5.6-luna":     "openai_responses",
 		"untitled":         "openai_chat_completions",
-	}, ids, "the unmapped gemini model is excluded")
+	}, ids, "the unmapped gemini model and the gated ones are excluded")
 	require.Equal(
 		t,
 		1000000,

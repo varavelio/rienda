@@ -1,31 +1,29 @@
 // opencode-go is the built-in OpenCode Go provider of Rienda. It serves the
 // models of the OpenCode Go plan over the endpoint the plan publishes, and
-// derives its roster from the models.dev database: every model whose adapter
-// is one Rienda speaks, mapped to the wire protocol that adapter names,
-// carrying the display names and the thinking levels models.dev documents.
+// derives its model catalogue from the models.dev database
 //
 // The catalog is cached through ctx.cache under "models.dev", shared with
-// every other provider that reads the database. The cache owns the age: the
-// module stores the document with a four-hour time to live, and the runtime
-// serves it only while it lasts, so the database is fetched at most once per
-// window. A stale document never reaches a run: past the window the entry is
-// gone, and a failed fetch leaves the roster empty until the next start
-// finds either a cache or a live database. Refreshing the roster is
-// restarting Rienda.
+// every other provider that reads the database.
 module.exports = function(ctx) {
-  var BASE_URL = "https://opencode.ai/zen/go/v1";
-  var SESSION_HEADER = "x-opencode-session";
-  var MODELS_DEV = "https://models.dev/api.json";
-  var CACHE_KEY = "models.dev";
-  var FETCH_TIMEOUT_MS = 30000;
+  let BASE_URL = "https://opencode.ai/zen/go/v1";
+  let SESSION_HEADER = "x-opencode-session";
+  let MODELS_DEV = "https://models.dev/api.json";
+  let CACHE_KEY = "models.dev";
+  let FETCH_TIMEOUT_MS = 30000;
 
   // The catalog is refetched once in this window; between refetches the
   // cache answers alone.
-  var REFRESH_AFTER_MS = 4 * 60 * 60 * 1000;
+  let REFRESH_AFTER_MS = 4 * 60 * 60 * 1000;
+
+  // A model carries a status only while it is not fully live: "alpha",
+  // "beta" or "deprecated" (the models.dev schema declares exactly these).
+  // A model whose status is present, then, is one the plan does not serve
+  // the way it serves the rest, so it is skipped.
+  let GATED_STATUSES = { alpha: true, beta: true, deprecated: true };
 
   // The adapters Rienda speaks, mapped to the wire protocol each names.
   // Anything else is out of reach of the current clients and is skipped.
-  var PROTOCOLS = {
+  let PROTOCOLS = {
     "@ai-sdk/openai": "openai_responses",
     "@ai-sdk/openai-compatible": "openai_chat_completions",
     "@ai-sdk/anthropic": "anthropic",
@@ -34,7 +32,7 @@ module.exports = function(ctx) {
   // The thinking levels every provider documents on its effort option, minus
   // the ones Rienda reserves: "off" and "none" name the picker entry that
   // sends nothing, so a database level either of those names is skipped.
-  var RESERVED_LEVELS = { off: true, none: true };
+  let RESERVED_LEVELS = { off: true, none: true };
 
   // cacheSet wraps set so a cache that cannot be stored is logged and
   // dropped: the next start fetches again.
@@ -48,7 +46,7 @@ module.exports = function(ctx) {
 
   // fetchCatalog fetches the models.dev document and returns its text.
   function fetchCatalog() {
-    var res = ctx.http.fetch(MODELS_DEV, { timeout_ms: FETCH_TIMEOUT_MS });
+    let res = ctx.http.fetch(MODELS_DEV, { timeout_ms: FETCH_TIMEOUT_MS });
     if (res.status !== 200) throw new Error("models.dev returned " + res.status);
     return res.body;
   }
@@ -57,7 +55,7 @@ module.exports = function(ctx) {
   // (the runtime drops the entry the moment it expires), the live fetch
   // otherwise. Without either, the roster stays empty until the next start.
   function catalog() {
-    var cached = null;
+    let cached = null;
     try {
       cached = ctx.cache.get(CACHE_KEY);
     } catch (err) {
@@ -74,7 +72,7 @@ module.exports = function(ctx) {
     }
 
     try {
-      var live = fetchCatalog();
+      let live = fetchCatalog();
       cacheSet(live);
       return JSON.parse(live);
     } catch (err) {
@@ -97,7 +95,7 @@ module.exports = function(ctx) {
   // declares when it does, the adapter of the provider otherwise. Null when
   // the effective adapter is not one Rienda speaks.
   function protocolOf(providerNpm, model) {
-    var modelNpm = model.provider && model.provider.npm;
+    let modelNpm = model.provider && model.provider.npm;
     return PROTOCOLS[modelNpm || providerNpm] || null;
   }
 
@@ -109,13 +107,13 @@ module.exports = function(ctx) {
   // only, and a model with fewer than one speakable level reads as fixed
   // reasoning the provider decides alone.
   function thinkingModes(model) {
-    var options = model.reasoning_options || [];
-    for (var i = 0; i < options.length; i++) {
+    let options = model.reasoning_options || [];
+    for (let i = 0; i < options.length; i++) {
       if (options[i].type !== "effort") continue;
-      var modes = [];
-      var values = options[i].values || [];
-      for (var j = 0; j < values.length; j++) {
-        var level = values[j];
+      let modes = [];
+      let values = options[i].values || [];
+      for (let j = 0; j < values.length; j++) {
+        let level = values[j];
         if (RESERVED_LEVELS[level]) continue;
         modes.push({ level: level, max_tokens: 0 });
       }
@@ -126,18 +124,19 @@ module.exports = function(ctx) {
 
   // roster maps the models.dev models of the plan to the canonical shape.
   function roster(db) {
-    var plan = db["opencode-go"];
-    var models = [];
+    let plan = db["opencode-go"];
+    let models = [];
     if (!plan || !plan.models) return models;
-    var npm = plan.npm;
+    let npm = plan.npm;
     // Ascending id order, so the roster reads the same on every start.
-    var ids = Object.keys(plan.models).sort();
-    for (var i = 0; i < ids.length; i++) {
-      var id = ids[i];
-      var entry = plan.models[id];
-      var protocol = protocolOf(npm, entry);
+    let ids = Object.keys(plan.models).sort();
+    for (let i = 0; i < ids.length; i++) {
+      let id = ids[i];
+      let entry = plan.models[id];
+      if (GATED_STATUSES[entry.status]) continue;
+      let protocol = protocolOf(npm, entry);
       if (!protocol) continue;
-      var limit = entry.limit || {};
+      let limit = entry.limit || {};
       models.push({
         id: id,
         name: entry.name || "",
