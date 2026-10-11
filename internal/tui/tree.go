@@ -40,13 +40,12 @@ const treeRootLabel = "Tree root"
 // message never floods the tree however wide the terminal is.
 const treeMessageMax = 96
 
-// treeWindowMargin returns the number of rows the tree keeps visible below the
-// highlighted turn: half the rows it shows at once, rounded down, so the
-// highlight rests in the middle of the screen and the reader sees as many turns
-// before it as after it. The margin is given up near the end of the tree, where
-// there are no turns left to reveal, so the tree still fills the screen with
-// turns.
-func treeWindowMargin(rows int) int {
+// listWindowMargin returns the number of rows a list keeps visible below the
+// highlight: half the rows it shows at once, rounded down, so the highlight
+// rests in the middle of the screen and the reader sees as many entries before
+// it as after it. The margin is given up near the end of the list, where there
+// are no entries left to reveal, so the list still fills the screen.
+func listWindowMargin(rows int) int {
 	return rows / 2
 }
 

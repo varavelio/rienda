@@ -100,6 +100,37 @@ func TestPickerMarks(t *testing.T) {
 			"the pinned model leads the list")
 	})
 
+	t.Run("holds the highlight in the middle of a long list", func(t *testing.T) {
+		scripted := newFakeSession()
+		for index := range 30 {
+			scripted.models = append(scripted.models, fmt.Sprintf("fake/model-%02d", index))
+		}
+		scripted.activeModel = "fake/model-00"
+		m := newTestModel(
+			t,
+			[]agent.Agent{{ID: "coder", Description: "A test agent"}},
+			0,
+			func(string) (Session, error) { return scripted, nil },
+		)
+		run(t, m, m.Init())
+		update(t, m, windowMsg(80, 24))
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+		require.Equal(t, phasePicker, m.phase)
+
+		// The highlight stands in the middle of the roster, where the margin
+		// holds on both sides exactly like the tree.
+		m.picker.cursor = len(m.picker.shown) / 2
+		first, last := m.picker.window()
+		rows := m.listRows()
+		margin := listWindowMargin(rows)
+
+		require.Equal(t, first, m.picker.cursor-rows+1+margin,
+			"the window follows the highlight once it passes the margin")
+		require.Equal(t, margin, last-1-m.picker.cursor,
+			"the models after the highlight stay visible")
+	})
+
 	t.Run("every row starts at the same column", func(t *testing.T) {
 		view := plain(modelPicker(t, []string{"fake/c"}).render())
 
@@ -2222,7 +2253,7 @@ func TestTreeScrollMargin(t *testing.T) {
 		// holds on both sides.
 		m.tree.filter.cursor = len(m.tree.nodes) / 2
 		first, last := m.tree.filter.window()
-		margin := treeWindowMargin(rows)
+		margin := listWindowMargin(rows)
 
 		require.Equal(t, first, m.tree.filter.cursor-rows+1+margin,
 			"the window follows the highlight once it passes the margin")

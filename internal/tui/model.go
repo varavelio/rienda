@@ -2482,17 +2482,21 @@ func (m *model) resize(width, height int) {
 	m.rename.SetWidth(max(1, width-renamePromptWidth))
 	m.tree.setWidth(width)
 
-	// The lists window their entries to the rows the terminal leaves them, so
-	// the tree can keep the margin of turns the reader needs to see what comes
-	// next. The lists of the other phases show the same rows without a margin,
-	// so their highlight rests on the bottom edge as before.
+	// The lists window their entries to the rows the terminal leaves them,
+	// keeping half of them below the highlight the way the tree does, so the
+	// reader sees which entries come next and feels the end of the list coming
+	// when the highlight leaves the middle.
 	rows := m.listRows()
+	margin := listWindowMargin(rows)
 	m.start.setWindowRows(rows)
+	m.start.setWindowMargin(margin)
 	m.picker.setWindowRows(rows)
+	m.picker.setWindowMargin(margin)
 	m.commands.setWindowRows(rows)
+	m.commands.setWindowMargin(margin)
 	treeRows := m.treeRows()
 	m.tree.filter.setWindowRows(treeRows)
-	m.tree.filter.setWindowMargin(treeWindowMargin(treeRows))
+	m.tree.filter.setWindowMargin(listWindowMargin(treeRows))
 
 	m.syncInputHeight()
 	m.invalidateTranscript()

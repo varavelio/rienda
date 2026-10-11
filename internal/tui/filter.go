@@ -44,8 +44,8 @@ type filter struct {
 	windowRows int
 
 	// windowMargin is the number of rows the window keeps visible below the
-	// highlight, so the reader sees which entries come next. It is zero until
-	// the screen sets it, which keeps the highlight at the bottom edge.
+	// highlight, so the reader sees which entries come next. The screen sets
+	// it to half the rows shown, which holds the highlight in the middle.
 	windowMargin int
 }
 
