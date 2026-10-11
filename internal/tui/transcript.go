@@ -207,6 +207,30 @@ func (t *transcript) finishTurn(elapsed time.Duration) {
 	t.touch(last)
 }
 
+// displayAgent returns the agent in effect where the displayed branch starts:
+// the agent the newest selection before its first entry chose, or the agent
+// the session was created with when the branch chose none. A compaction drops
+// the turns it summarizes together with the agent selections among them, so
+// seeding the conversation with the creation agent would label the turns it
+// shows with an agent the branch left behind, while the header reads the one
+// the branch runs.
+func displayAgent(branch, displayed []session.Entry, initial string) string {
+	if len(displayed) == 0 {
+		return initial
+	}
+	start := displayed[0].ID
+	agent := initial
+	for _, entry := range branch {
+		if entry.ID == start {
+			break
+		}
+		if entry.Kind == session.KindAgent {
+			agent = entry.AgentID
+		}
+	}
+	return agent
+}
+
 // load seeds the transcript with the entries of a stored conversation, oldest
 // first, closing every completed turn with the time it took. The duration is
 // not stored: it is derived from the moment the turn opened, the user message

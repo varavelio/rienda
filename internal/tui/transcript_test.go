@@ -791,3 +791,75 @@ func TestCollapseSwitches(t *testing.T) {
 		require.Equal(t, "m1", folded[1].ParentID, "the turn hangs from the switch that remains")
 	})
 }
+
+func TestDisplayAgent(t *testing.T) {
+	agentEntry := func(id, parent, agent string) session.Entry {
+		return session.Entry{ID: id, ParentID: parent, Kind: session.KindAgent, AgentID: agent}
+	}
+
+	t.Run("reads the agent the session was created with when it chose none", func(t *testing.T) {
+		branch := []session.Entry{
+			{ID: "m1", Kind: session.KindMessage},
+		}
+
+		require.Equal(t, "coder", displayAgent(branch, branch, "coder"))
+	})
+
+	t.Run("reads the selection a compaction dropped", func(t *testing.T) {
+		branch := []session.Entry{
+			{ID: "m1", Kind: session.KindMessage},
+			agentEntry("a1", "m1", "reviewer"),
+			{ID: "m2", ParentID: "a1", Kind: session.KindMessage},
+		}
+		displayed := branch[2:]
+
+		require.Equal(t, "reviewer", displayAgent(branch, displayed, "coder"),
+			"the turns after the checkpoint run on the dropped selection")
+	})
+
+	t.Run("leaves the selections the conversation shows to the fold", func(t *testing.T) {
+		branch := []session.Entry{
+			{ID: "m1", Kind: session.KindMessage},
+			agentEntry("a1", "m1", "reviewer"),
+			agentEntry("a2", "a1", "coder"),
+			{ID: "m2", ParentID: "a2", Kind: session.KindMessage},
+		}
+
+		require.Equal(t, "coder", displayAgent(branch, branch[1:], "coder"),
+			"the seed stops where the displayed branch starts")
+	})
+
+	t.Run("labels the turns after a checkpoint with the agent the branch runs", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		require.NoError(t, stored.store.SetAgent(t.Context(), "reviewer"))
+		_, err := stored.store.Append(
+			t.Context(),
+			session.Entry{Message: textMessage(llm.RoleUser, "again")},
+		)
+		require.NoError(t, err)
+		kept := stored.store.Branch()[len(stored.store.Branch())-1]
+		_, err = stored.store.AppendCompaction(
+			t.Context(),
+			"the summary",
+			kept.ID,
+			1,
+			"m",
+			llm.Usage{},
+		)
+		require.NoError(t, err)
+
+		m.reloadTranscript()
+
+		require.Equal(t, "reviewer", m.identity.agent,
+			"the header reads the agent the branch runs")
+		for _, entry := range m.transcript.entries {
+			if entry.kind == entryAssistant || entry.kind == entryUser {
+				require.Equal(t, "reviewer", entry.agent,
+					"a turn the checkpoint spared runs on the dropped selection")
+			}
+		}
+	})
+}

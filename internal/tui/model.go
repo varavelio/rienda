@@ -2636,7 +2636,10 @@ func (m *model) reloadTranscript() {
 	m.identity = identityFrom(m.session)
 	m.refreshRunnable()
 	m.transcript = transcript{}
-	m.transcript.load(m.session.DisplayedBranch(), m.session.Info().Agent, m.modelNamer())
+	branch := m.session.Branch()
+	displayed := m.session.DisplayedBranch()
+	seed := displayAgent(branch, displayed, m.session.Info().Agent)
+	m.transcript.load(displayed, seed, m.modelNamer())
 	m.invalidateTranscript()
 	m.refreshTranscript()
 }
