@@ -1,2 +1,2 @@
-// Package id generates identifiers across all the project.
+// Package id generates identifiers across the project.
 package id
