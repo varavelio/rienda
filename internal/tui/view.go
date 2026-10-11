@@ -138,16 +138,29 @@ func brandVersion() string {
 	return "v" + number
 }
 
-// headerRows returns the rows that open a phase: the identity line, the
-// separator under it and the padding below the separator.
-func (m *model) headerRows(identity string) []string {
-	return []string{m.clip(identity), m.ruleLine(m.styles.separator), ""}
+// headerRows returns the rows that open a phase: the identity the phase shows,
+// wrapped to the terminal width and trimmed to what it affords, the separator
+// under it and the padding below the separator.
+func (m *model) headerRows() []string {
+	rows := m.cappedIdentity()
+	rows = append(rows, m.ruleLine(m.styles.separator), "")
+	return rows
 }
 
 // footerRows returns the rows that close a phase: the separator between two
 // blank rows and the hints of the phase.
 func (m *model) footerRows(hints string) []string {
 	return []string{"", m.ruleLine(m.styles.separator), "", m.footerHints(hints)}
+}
+
+// startHints names the keys the start list answers with, so the list shows
+// them and its measurement reads the same text.
+func (m *model) startHints() string {
+	hint := "type to filter · ↑/↓ move · enter open"
+	if m.session != nil {
+		hint += " · esc back"
+	}
+	return hint + " · ctrl+p settings · ctrl+c quit"
 }
 
 // footerHints renders the closing hint row of a phase: the hints the phase
@@ -158,7 +171,9 @@ func (m *model) footerHints(hints string) string {
 	if row, pending := m.pendingQuitRow(); pending {
 		return row
 	}
-	return m.clip(m.styles.footer.Render(hints))
+	lines := wrapChrome(m.styles.footer.Render(hints), m.width)
+	limit := len(m.cappedHints())
+	return strings.Join(lines[:min(len(lines), limit)], "\n")
 }
 
 // pendingQuitRow renders the row that asks for the press that leaves the
@@ -167,18 +182,27 @@ func (m *model) footerHints(hints string) string {
 // close without one, like the preparation screen, show it on its own. It names
 // the key that armed the request, so the reader is asked for the press of the
 // key that is already under their finger.
+// quitRowText names the press that leaves the interface while a quit request
+// waits for it, so the row that asks for it and its measurement read the
+// same text.
+func (m *model) quitRowText() string {
+	return m.confirm.key + " again to quit"
+}
+
 func (m *model) pendingQuitRow() (string, bool) {
 	if m.confirm.action != confirmQuit {
 		return "", false
 	}
-	return m.clip(m.styles.notice.Render(m.confirm.key + " again to quit")), true
+	lines := wrapChrome(m.styles.notice.Render(m.quitRowText()), m.width)
+	limit := len(m.cappedHints())
+	return strings.Join(lines[:min(len(lines), limit)], "\n"), true
 }
 
 // viewStart renders the list that opens the interface: the offer to begin a
 // new session and the previous sessions of the workspace, narrowed by the
 // query typed into the list.
 func (m *model) viewStart() string {
-	rows := m.headerRows(m.brandIdentity())
+	rows := m.headerRows()
 	rows = append(rows, "Start a new session or continue a previous one", "")
 	rows = append(rows, m.filterRow(&m.start), "")
 
@@ -192,11 +216,7 @@ func (m *model) viewStart() string {
 
 	// The list only returns to the conversation it was opened over when there
 	// is one to return to.
-	hint := "type to filter · ↑/↓ move · enter open"
-	if m.session != nil {
-		hint += " · esc back"
-	}
-	rows = append(rows, m.footerRows(hint+" · ctrl+p settings · ctrl+c quit")...)
+	rows = append(rows, m.footerRows(m.startHints())...)
 	return strings.Join(rows, "\n")
 }
 
@@ -301,10 +321,46 @@ func (m *model) pinPrefix(entry string) string {
 	return strings.Repeat(" ", utf8.RuneCountInString(pinMark)+1)
 }
 
-// listRows returns the list rows that fit on screen outside the fixed lines of
-// the list phases.
+// listRows returns the list rows that fit on screen outside the chrome of the
+// list phase in progress, measured at the terminal width.
 func (m *model) listRows() int {
-	return max(1, m.height-listChrome)
+	chrome := m.headerBlockRows() + listPromptRows + listFilterRows +
+		listFooterFixedRows + m.hintLines()
+	return max(1, m.height-chrome)
+}
+
+// listIdentity returns the identity the list phase in progress shows, so the
+// list measures the header it renders.
+func (m *model) listIdentity() string {
+	switch m.phase {
+	case phasePicker:
+		return m.pickerIdentity()
+	case phaseSettings:
+		return m.settingsIdentity()
+	case phaseTree:
+		return m.treeIdentity()
+	case phaseConfirm:
+		return m.confirmIdentity()
+	default:
+		return m.brandIdentity()
+	}
+}
+
+// listHints returns the hints the list phase in progress shows, so the list
+// measures the footer it renders.
+func (m *model) listHints() string {
+	switch m.phase {
+	case phasePicker:
+		return m.pickerHints()
+	case phaseSettings:
+		return m.settingsHints()
+	case phaseTree:
+		return m.treeHints()
+	case phaseConfirm:
+		return confirmHints
+	default:
+		return m.startHints()
+	}
 }
 
 // treeRows returns the list rows the tree shows at once: the rows that fit
@@ -364,7 +420,7 @@ func formatElapsed(d time.Duration) string {
 // choosing the agent of a new session, changing the agent of the open
 // conversation, or changing its model.
 func (m *model) viewPicker() string {
-	rows := m.headerRows(m.pickerIdentity())
+	rows := m.headerRows()
 	rows = append(rows, m.pickerTitle(), "")
 	rows = append(rows, m.filterRow(&m.picker), "")
 
@@ -379,14 +435,7 @@ func (m *model) viewPicker() string {
 	// The picker only returns to the start list when it was opened from it,
 	// which is the case whenever the workspace holds a previous session and
 	// the list is not changing what the open conversation runs.
-	hint := "type to filter · ↑/↓ move · enter select"
-	if m.pickerMode == pickerModel {
-		hint += " · ctrl+x p pin/unpin"
-	}
-	if m.pickerMode == pickerNewAgent && len(m.starts) > 1 {
-		hint += " · esc back"
-	}
-	rows = append(rows, m.footerRows(hint+" · ctrl+p settings · ctrl+c quit")...)
+	rows = append(rows, m.footerRows(m.pickerHints())...)
 	return strings.Join(rows, "\n")
 }
 
@@ -401,6 +450,19 @@ func (m *model) pickerIdentity() string {
 	header := m.styles.header
 	return m.brandIdentity() + header.Render(" · ") +
 		pinMark + header.Render(" pinned model")
+}
+
+// pickerHints names the keys the picker answers with, so the list shows
+// them and its measurement reads the same text.
+func (m *model) pickerHints() string {
+	hint := "type to filter · ↑/↓ move · enter select"
+	if m.pickerMode == pickerModel {
+		hint += " · ctrl+x p pin/unpin"
+	}
+	if m.pickerMode == pickerNewAgent && len(m.starts) > 1 {
+		hint += " · esc back"
+	}
+	return hint + " · ctrl+p settings · ctrl+c quit"
 }
 
 // pickerTitle names what the picker is asking for, so the reader never doubts
@@ -539,7 +601,7 @@ func modelDescription(info engine.ModelInfo) string {
 // viewSettings renders the command center: the screens it opens, the options
 // of the harness and the state of those options.
 func (m *model) viewSettings() string {
-	rows := m.headerRows(m.settingsIdentity())
+	rows := m.headerRows()
 	rows = append(rows, "Command center", "")
 	rows = append(rows, m.settingsInputRow(), "")
 
@@ -619,7 +681,7 @@ func (m *model) commandLine(position int) string {
 // the branch they belong to, the tags that label them and the turn the session
 // is at.
 func (m *model) viewTree() string {
-	rows := m.headerRows(m.treeIdentity())
+	rows := m.headerRows()
 	rows = append(rows, "Session tree", "")
 	rows = append(rows, m.treeInputRow(), "")
 
@@ -856,7 +918,7 @@ func (m *model) treeGutter(node treeNode) string {
 // being opened through the label recorded when the preparation started, so it
 // never indexes a selection that may not exist.
 func (m *model) viewPreparing() string {
-	rows := m.headerRows(m.brandIdentity())
+	rows := m.headerRows()
 	mark := m.styles.dim.Render(m.spinner.View())
 	rows = append(rows, mark+" preparing the session of "+m.preparing, "")
 	if row, pending := m.pendingQuitRow(); pending {
@@ -869,7 +931,7 @@ func (m *model) viewPreparing() string {
 // and the footer of the chat.
 func (m *model) viewChat() string {
 	parts := []string{
-		strings.Join(m.headerRows(m.chatIdentity()), "\n"),
+		strings.Join(m.headerRows(), "\n"),
 		m.conversation.view(),
 	}
 	// A status block the terminal cannot afford contributes no row at all.
@@ -1060,7 +1122,7 @@ func (m *model) chatIdentity() string {
 // answers with enter. It is a screen of its own rather than a dialog over the
 // chat, so the answer is deliberate and the run visibly waits.
 func (m *model) viewConfirm() string {
-	rows := m.headerRows(m.confirmIdentity())
+	rows := m.headerRows()
 	rows = append(rows, m.confirmScreen.title, "")
 	for line := range strings.SplitSeq(wrap(m.confirmScreen.body, max(1, m.width-2)), "\n") {
 		rows = append(rows, m.clip(line))
@@ -1071,9 +1133,13 @@ func (m *model) viewConfirm() string {
 		rows = append(rows, m.row(index == m.confirmScreen.cursor, choice))
 	}
 
-	rows = append(rows, m.footerRows("↑/↓ move · enter select · esc deny · ctrl+c quit")...)
+	rows = append(rows, m.footerRows(confirmHints)...)
 	return strings.Join(rows, "\n")
 }
+
+// confirmHints names the keys the question screen answers with, so it shows
+// them and its measurement reads the same text.
+const confirmHints = "↑/↓ move · enter select · esc deny · ctrl+c quit"
 
 // confirmIdentity renders the identity of the question screen.
 func (m *model) confirmIdentity() string {
@@ -1089,6 +1155,12 @@ func (m *model) viewInput() string {
 // figure and the keys the interface listens to. The run in flight is reported
 // by the activity line above the input, not here.
 func (m *model) chatFooter() string {
+	return m.footerHints(m.chatFooterText())
+}
+
+// chatFooterText joins the segments the chat footer shows, so the footer shows
+// them and its measurement reads the same text.
+func (m *model) chatFooterText() string {
 	parts := make([]string, 0, 3)
 	if !m.conversation.atBottom() {
 		parts = append(parts, "↑ scrolled")
@@ -1103,7 +1175,7 @@ func (m *model) chatFooter() string {
 		"@ files · enter send · ctrl+x select · ctrl+t tree · ctrl+p · ctrl+c quit",
 	)
 
-	return m.footerHints(strings.Join(parts, " · "))
+	return strings.Join(parts, " · ")
 }
 
 // contextLabel renders the live context figure of the active branch, colored
@@ -1389,4 +1461,227 @@ func wrap(text string, width int) string {
 		return text
 	}
 	return ansi.Wrap(text, width, "")
+}
+
+// fullIdentityLines wraps the chat identity to the terminal width with no
+// affordability trim, so the room checks that decide what the terminal gives
+// up measure the full need without calling back into the capped chrome,
+// which would recurse through the caps.
+func (m *model) fullIdentityLines() []string {
+	return wrapChrome(m.chatIdentity(), m.width)
+}
+
+// fullHintLines wraps the chat hints to the terminal width with no
+// affordability trim, following the pending-quit row exactly as the render
+// does, for the same reason the full identity lines exist.
+func (m *model) fullHintLines() []string {
+	if m.confirm.action == confirmQuit {
+		return wrapChrome(m.quitRowText(), m.width)
+	}
+	return wrapChrome(m.chatFooterText(), m.width)
+}
+
+// chromeSource returns the identity and hints the phase in progress shows, so
+// the render and the measurement of the chrome read the same text.
+func (m *model) chromeSource() (identity, hints string) {
+	if m.phase == phaseChat {
+		return m.chatIdentity(), m.chatFooterText()
+	}
+	return m.listIdentity(), m.listHints()
+}
+
+// chromeCaps trims the wrapped identity and hint needs to what the terminal
+// affords: the full need while it fits, fewer only when the chrome plus the
+// content floors outgrow the screen. The content floors (one transcript or
+// list row, the input) win over the chrome, so a tiny terminal trims the
+// chrome instead of pushing the prompt off screen. Both caps keep at least
+// one line, which the rows the chrome renders always spend.
+func (m *model) chromeCaps(identityWant, hintWant int) (identityCap, hintCap int) {
+	fixed := listPromptRows + listFilterRows + listFooterFixedRows + 1
+	if m.phase == phaseChat {
+		fixed = inputBoxRows + m.input.Height() + 1 + m.activityHeight() + m.mentionHeight()
+	}
+	room := m.height - fixed
+	identityCap = min(identityWant, max(1, room-headerFixedRows-1))
+	identityCap = max(1, identityCap)
+	hintCap = min(hintWant, max(1, room-(identityCap+headerFixedRows)))
+	hintCap = max(1, hintCap)
+	return identityCap, hintCap
+}
+
+// cappedChrome wraps the identity and hints the phase shows to the terminal
+// width, trimmed to what it affords, so the render and the measurement share
+// the exact lines. While a quit request waits, the hints give way to the quit
+// row here exactly as they do in the render.
+func (m *model) cappedChrome() (identityLines, hintLines []string) {
+	identity, hints := m.chromeSource()
+	if m.confirm.action == confirmQuit {
+		hints = m.quitRowText()
+	}
+	identityWant := len(wrapChrome(identity, m.width))
+	hintWant := len(wrapChrome(hints, m.width))
+	identityCap, hintCap := m.chromeCaps(identityWant, hintWant)
+	return wrapChrome(identity, m.width)[:identityCap],
+		wrapChrome(hints, m.width)[:hintCap]
+}
+
+// cappedIdentity wraps the identity the phase shows, trimmed to what the
+// terminal affords.
+func (m *model) cappedIdentity() []string {
+	lines, _ := m.cappedChrome()
+	return lines
+}
+
+// cappedHints wraps the hints the phase shows, trimmed to what the terminal
+// affords.
+func (m *model) cappedHints() []string {
+	_, lines := m.cappedChrome()
+	return lines
+}
+
+// headerBlockRows returns the rows the header spends at the terminal width:
+// the wrapped identity lines plus the separator and the blank row under it.
+func (m *model) headerBlockRows() int {
+	return len(m.cappedIdentity()) + headerFixedRows
+}
+
+// hintLines returns the rows the footer hints spend at the terminal width,
+// following the pending-quit row when it takes the hints' place.
+func (m *model) hintLines() int {
+	return len(m.cappedHints())
+}
+
+// chromeSeparator joins the segments of a header identity or a footer hint.
+const chromeSeparator = " · "
+
+// wrapChrome wraps one styled chrome line (a header identity or a footer hint)
+// into screen lines. It folds whole segments at their separators before
+// breaking inside words, so a narrow terminal reads complete entries on their
+// own lines. A segment longer than the width still hard-breaks, so the wrap
+// always terminates however narrow the terminal is. The styles travel with
+// their segments, and the separators keep the styling they were rendered
+// with, so a wrapped line reads as the same identity. A width of zero or less
+// keeps the text whole, which leaves the terminal to clip it.
+func wrapChrome(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	parts := splitChrome(text)
+	var lines []string
+	var line strings.Builder
+	lineWidth := 0
+	flush := func() {
+		if line.Len() > 0 {
+			lines = append(lines, line.String())
+			line.Reset()
+			lineWidth = 0
+		}
+	}
+	for index := 0; index < len(parts); index += 2 {
+		segment := parts[index]
+		prefix := ""
+		if lineWidth > 0 {
+			prefix = parts[index-1]
+		}
+		if lineWidth > 0 &&
+			lineWidth+ansi.StringWidth(prefix)+ansi.StringWidth(segment) > width {
+			flush()
+			prefix = ""
+		}
+		if line.Len() == 0 && ansi.StringWidth(segment) > width {
+			for hard := range strings.SplitSeq(ansi.Wrap(segment, width, ""), "\n") {
+				lines = append(lines, hard)
+			}
+			if index+1 < len(parts) {
+				line.WriteString(parts[index+1])
+				lineWidth = ansi.StringWidth(parts[index+1])
+			}
+			continue
+		}
+		line.WriteString(prefix)
+		line.WriteString(segment)
+		lineWidth += ansi.StringWidth(prefix) + ansi.StringWidth(segment)
+	}
+	flush()
+	if len(lines) == 0 {
+		return []string{text}
+	}
+	return lines
+}
+
+// splitChrome cuts a styled chrome line at its segment separators, returning
+// alternating segments and separators with their raw text, styles included,
+// so the wrap folds whole segments and rejoins them byte-identical. The cut
+// positions come from the plain text, mapped back onto the raw string, so a
+// separator is found even when escape sequences run through it.
+func splitChrome(text string) []string {
+	plain, raw := stripChrome(text)
+	marks := strings.Split(plain, chromeSeparator)
+	parts := make([]string, 0, len(marks)*2-1)
+	offset := 0
+	previous := 0
+	for index, mark := range marks {
+		end := offset + len(mark)
+		// The slice opens where the previous one closed rather than where its
+		// plain text starts, so the escape sequences between them stay with
+		// the part that follows instead of falling out of the rejoin.
+		parts = append(parts, text[previous:raw[end]])
+		previous = raw[end]
+		offset = end
+		if index+1 < len(marks) {
+			end += len(chromeSeparator)
+			parts = append(parts, text[previous:raw[end]])
+			previous = raw[end]
+			offset = end
+		}
+	}
+	return parts
+}
+
+// stripChrome returns the plain text of a styled chrome line and, for every
+// byte of it, the byte offset of that same content in the raw string, so
+// positions found in the plain text map back onto the raw one.
+func stripChrome(text string) (string, []int) {
+	var plain strings.Builder
+	var raw []int
+	rest := text
+	offset := 0
+	for len(rest) > 0 {
+		if rest[0] == 0x1b && len(rest) > 1 {
+			end := 2
+			switch rest[1] {
+			case '[':
+				for end < len(rest) && (rest[end] < 0x40 || rest[end] > 0x7e) {
+					end++
+				}
+				end++
+			case ']':
+				for end < len(rest) && rest[end] != 0x07 {
+					if rest[end] == 0x1b && end+1 < len(rest) && rest[end+1] == 0x5c {
+						end += 2
+						break
+					}
+					end++
+				}
+				if end < len(rest) && rest[end] == 0x07 {
+					end++
+				}
+			}
+			offset += end
+			rest = rest[end:]
+			continue
+		}
+		size := 1
+		for size < len(rest) && !utf8.RuneStart(rest[size]) {
+			size++
+		}
+		plain.WriteString(rest[:size])
+		for range size {
+			raw = append(raw, offset)
+		}
+		offset += size
+		rest = rest[size:]
+	}
+	raw = append(raw, offset)
+	return plain.String(), raw
 }

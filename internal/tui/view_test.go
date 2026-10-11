@@ -1339,7 +1339,14 @@ func TestChatLayout(t *testing.T) {
 					index,
 				)
 			}
-			require.Contains(t, view, "working")
+			if size.height > 12 {
+				require.Contains(t, view, "working")
+			} else {
+				require.Contains(t, view, "varavel rienda",
+					"the smallest screen keeps the head of the chrome instead of the status")
+				require.Contains(t, view, "@ files",
+					"the hints trim to their head once the floors outgrow the screen")
+			}
 		}
 	})
 
@@ -1440,7 +1447,8 @@ func TestChatLayout(t *testing.T) {
 			require.LessOrEqual(t, ansi.StringWidth(line), 40, "row %d", index)
 		}
 		require.True(t, m.conversation.atBottom())
-		require.Contains(t, lines[len(lines)-1], "enter send")
+		require.Contains(t, view, "enter send",
+			"the footer wraps instead of cutting the hints")
 	})
 }
 
@@ -2349,5 +2357,105 @@ func TestChatStopped(t *testing.T) {
 		require.Contains(t, view, "@ files")
 		require.Contains(t, view, "enter send")
 		require.Contains(t, view, "pick other before continuing the conversation")
+	})
+}
+
+func TestWrapChrome(t *testing.T) {
+	t.Run("keeps one line when it fits", func(t *testing.T) {
+		lines := wrapChrome("brand · model · hints", 80)
+
+		require.Equal(t, []string{"brand · model · hints"}, lines)
+	})
+
+	t.Run("folds whole segments at their separators", func(t *testing.T) {
+		lines := wrapChrome("aaaa · bbbb · cccc", 10)
+
+		require.Equal(t, []string{"aaaa", "bbbb", "cccc"}, lines)
+	})
+
+	t.Run("packs what fits and folds the rest", func(t *testing.T) {
+		lines := wrapChrome("@ files · enter send · ctrl+x select", 24)
+
+		require.Equal(t, []string{"@ files · enter send", "ctrl+x select"}, lines)
+		for _, line := range lines {
+			require.LessOrEqual(t, ansi.StringWidth(line), 24)
+		}
+	})
+
+	t.Run("hard-breaks a segment longer than the width", func(t *testing.T) {
+		lines := wrapChrome("short · "+strings.Repeat("w", 20), 10)
+
+		require.Equal(t, "short", lines[0])
+		require.Len(t, lines, 3, "the long segment breaks across two lines")
+		for _, line := range lines {
+			require.LessOrEqual(t, ansi.StringWidth(line), 10)
+		}
+	})
+
+	t.Run("keeps the styles with their segments", func(t *testing.T) {
+		styled := lipgloss.NewStyle().Bold(true).Render("aaaa") + " · bbbb"
+
+		lines := wrapChrome(styled, 10)
+
+		require.Len(t, lines, 2)
+		require.Contains(t, lines[0], "aaaa")
+		require.Equal(t, "aaaa", ansi.Strip(lines[0]))
+		require.Equal(t, "bbbb", ansi.Strip(lines[1]))
+	})
+
+	t.Run("rejoins byte-identical when nothing folds", func(t *testing.T) {
+		styled := lipgloss.NewStyle().Bold(true).Render("aaaa") + " · bbbb"
+
+		require.Equal(t, []string{styled}, wrapChrome(styled, 80))
+	})
+
+	t.Run("keeps the text whole without a width", func(t *testing.T) {
+		require.Equal(t, []string{"a very long line"}, wrapChrome("a very long line", 0))
+	})
+
+	t.Run("terminates at width one", func(t *testing.T) {
+		lines := wrapChrome("aa · bb", 1)
+
+		require.NotEmpty(t, lines)
+	})
+}
+
+func TestNarrowChrome(t *testing.T) {
+	t.Run("shows the full chat identity across lines", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(50, 30))
+
+		view := plain(m.render())
+
+		for _, segment := range []string{
+			"varavel rienda", "coder", "fake/test-model", "thinking",
+		} {
+			require.Contains(t, view, segment)
+		}
+	})
+
+	t.Run("shows every hint segment across lines", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(50, 30))
+
+		view := plain(m.render())
+
+		for _, segment := range []string{"@ files", "enter send", "ctrl+c quit"} {
+			require.Contains(t, view, segment,
+				"the footer wraps instead of cutting the rare hints")
+		}
+	})
+
+	t.Run("shows the full picker hints across lines", func(t *testing.T) {
+		m, _ := chatModel(t)
+		update(t, m, windowMsg(50, 30))
+		update(t, m, pressCtrlX)
+		update(t, m, pressM)
+
+		view := plain(m.render())
+
+		for _, segment := range []string{"enter select", "ctrl+x p pin/unpin", "ctrl+c quit"} {
+			require.Contains(t, view, segment)
+		}
 	})
 }

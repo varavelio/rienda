@@ -39,10 +39,10 @@ const renamePrompt = "name: "
 // prompt.
 const renamePromptWidth = len(renamePrompt)
 
-// brandRows is the number of rows the identity region of every phase
-// occupies: the identity line, the separator under it and the padding below
-// the separator.
-const brandRows = 3
+// headerFixedRows is the number of rows the header spends outside the
+// identity itself: the separator under it and the padding below the separator.
+// The identity wraps to the terminal width above them.
+const headerFixedRows = 2
 
 // inputBoxRows is the number of rows the input box occupies outside the input:
 // its two borders and its vertical padding.
@@ -61,10 +61,6 @@ const activityRows = 4
 // second blank row above the line, which the run keeps for the spinner.
 const noticeRows = 3
 
-// chatFooterRows is the number of rows the chat footer occupies under the
-// input box.
-const chatFooterRows = 1
-
 // wheelRows is the number of rows one notch of the mouse wheel scrolls the
 // conversation, matching the step a common mouse sends per detent so the wheel
 // reads like the arrows do.
@@ -78,17 +74,10 @@ const listPromptRows = 2
 // that narrows it and the blank row after it.
 const listFilterRows = 2
 
-// listFooterRows is the number of rows that close a list phase: the blank row,
-// the separator, the blank row after it and the hints.
-const listFooterRows = 4
-
-// chatChrome is the number of rows the chat phase reserves outside the
-// transcript and the input.
-const chatChrome = brandRows + activityRows + inputBoxRows + chatFooterRows
-
-// listChrome is the number of rows the list phases (the start list, the agent
-// picker and the command center) reserve outside their rows.
-const listChrome = brandRows + listPromptRows + listFilterRows + listFooterRows
+// listFooterFixedRows is the number of rows that close a list phase outside
+// the hints themselves: the blank row, the separator and the blank row after
+// it. The hints wrap to the terminal width below them.
+const listFooterFixedRows = 3
 
 // inputGutterWidth is the number of columns the input box spends on its border
 // and padding.
@@ -1298,6 +1287,7 @@ func (m *model) openSwitchPicker(mode pickerMode) tea.Cmd {
 		m.selectPickerEntry(index)
 	}
 	m.phase = phasePicker
+	m.syncListWindows()
 	m.input.Blur()
 	return nil
 }
@@ -1482,6 +1472,7 @@ func (m *model) selectStart() tea.Cmd {
 func (m *model) startNewSession() tea.Cmd {
 	if m.selected < 0 {
 		m.phase = phasePicker
+		m.syncListWindows()
 		return nil
 	}
 	m.phase = phasePreparing
@@ -1494,6 +1485,7 @@ func (m *model) startNewSession() tea.Cmd {
 func (m *model) openStart() tea.Cmd {
 	m.start.reset()
 	m.phase = phaseStart
+	m.syncListWindows()
 	return m.scanSessionsCmd()
 }
 
@@ -1644,6 +1636,7 @@ func (m *model) toggleSettings() tea.Cmd {
 
 	m.returnPhase = m.phase
 	m.phase = phaseSettings
+	m.syncListWindows()
 	m.commands.clear()
 	m.clearRename()
 	m.mention = mention{}
@@ -1656,6 +1649,7 @@ func (m *model) closeSettings() tea.Cmd {
 	m.clearRename()
 	if m.returnPhase != phaseChat {
 		m.phase = m.returnPhase
+		m.syncListWindows()
 		return nil
 	}
 	return m.showChat()
@@ -1857,6 +1851,7 @@ func (m *model) openTree() tea.Cmd {
 
 	m.buildTree()
 	m.phase = phaseTree
+	m.syncListWindows()
 	m.clearRename()
 	m.mention = mention{}
 	m.input.Blur()
@@ -2024,6 +2019,8 @@ func (m *model) rewind() tea.Cmd {
 // interface was away, and focuses the prompt.
 func (m *model) showChat() tea.Cmd {
 	m.phase = phaseChat
+	m.syncListWindows()
+	m.syncLayout()
 	m.refreshTranscript()
 	return m.input.Focus()
 }
@@ -2486,6 +2483,19 @@ func (m *model) resize(width, height int) {
 	// keeping half of them below the highlight the way the tree does, so the
 	// reader sees which entries come next and feels the end of the list coming
 	// when the highlight leaves the middle.
+	m.syncListWindows()
+
+	m.syncInputHeight()
+	m.invalidateTranscript()
+	m.refreshTranscript()
+}
+
+// syncListWindows fits every filter list to the rows the terminal leaves the
+// phase in progress at the current width. It runs on resize and on every
+// arrival at a list phase, because opening a phase with taller chrome than
+// the one measured before would otherwise window its entries to rows that no
+// longer fit.
+func (m *model) syncListWindows() {
 	rows := m.listRows()
 	margin := listWindowMargin(rows)
 	m.start.setWindowRows(rows)
@@ -2497,10 +2507,6 @@ func (m *model) resize(width, height int) {
 	treeRows := m.treeRows()
 	m.tree.filter.setWindowRows(treeRows)
 	m.tree.filter.setWindowMargin(listWindowMargin(treeRows))
-
-	m.syncInputHeight()
-	m.invalidateTranscript()
-	m.refreshTranscript()
 }
 
 // syncInputHeight caps the visible rows of the prompt input so a long prompt
@@ -2508,7 +2514,8 @@ func (m *model) resize(width, height int) {
 // with its content up to maxInputRows, or fewer on a short terminal where even
 // that would leave no room for the transcript.
 func (m *model) syncInputHeight() {
-	room := m.height - chatChrome - minTranscriptRows
+	room := m.height - m.headerBlockRows() - activityRows - inputBoxRows -
+		m.hintLines() - minTranscriptRows
 	m.input.MaxHeight = max(minInputRows, min(maxInputRows, room))
 }
 
@@ -2527,8 +2534,8 @@ func (m *model) syncLayout() {
 func (m *model) transcriptHeight() int {
 	return max(
 		1,
-		m.height-brandRows-m.activityHeight()-m.mentionHeight()-inputBoxRows-chatFooterRows-
-			m.input.Height(),
+		m.height-m.headerBlockRows()-m.activityHeight()-m.mentionHeight()-inputBoxRows-
+			m.hintLines()-m.input.Height(),
 	)
 }
 
@@ -2546,7 +2553,8 @@ func (m *model) activityHeight() int {
 	case m.runnable != nil, m.rewound:
 		want = noticeRows
 	}
-	room := m.height - brandRows - inputBoxRows - chatFooterRows - m.input.Height() - minInputRows
+	room := m.height - len(m.fullIdentityLines()) - headerFixedRows - inputBoxRows -
+		len(m.fullHintLines()) - m.input.Height() - minInputRows
 	if room >= want {
 		return want
 	}
@@ -2563,8 +2571,12 @@ func (m *model) mentionHeight() int {
 		return 0
 	}
 
-	room := m.height - brandRows - m.activityHeight() - inputBoxRows - chatFooterRows -
-		m.input.Height() - minTranscriptRows
+	room := m.height - len(
+		m.fullIdentityLines(),
+	) - headerFixedRows - m.activityHeight() - inputBoxRows -
+		len(
+			m.fullHintLines(),
+		) - m.input.Height() - minTranscriptRows
 	if room <= 0 {
 		return 0
 	}
