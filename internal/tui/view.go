@@ -364,7 +364,7 @@ func formatElapsed(d time.Duration) string {
 // choosing the agent of a new session, changing the agent of the open
 // conversation, or changing its model.
 func (m *model) viewPicker() string {
-	rows := m.headerRows(m.brandIdentity())
+	rows := m.headerRows(m.pickerIdentity())
 	rows = append(rows, m.pickerTitle(), "")
 	rows = append(rows, m.filterRow(&m.picker), "")
 
@@ -388,6 +388,19 @@ func (m *model) viewPicker() string {
 	}
 	rows = append(rows, m.footerRows(hint+" · ctrl+p settings · ctrl+c quit")...)
 	return strings.Join(rows, "\n")
+}
+
+// pickerIdentity renders the identity of the picker screen, closing it with
+// the legend of the pin mark while it lists models. The legend writes the
+// mark the way the rows show it, so the reader meets the same glyph in both
+// places instead of guessing what opens a pinned row.
+func (m *model) pickerIdentity() string {
+	if m.pickerMode != pickerModel {
+		return m.brandIdentity()
+	}
+	header := m.styles.header
+	return m.brandIdentity() + header.Render(" · ") +
+		pinMark + header.Render(" pinned model")
 }
 
 // pickerTitle names what the picker is asking for, so the reader never doubts

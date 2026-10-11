@@ -131,6 +131,13 @@ func TestPickerMarks(t *testing.T) {
 			"the models after the highlight stay visible")
 	})
 
+	t.Run("the header legends the pin mark", func(t *testing.T) {
+		view := plain(modelPicker(t, nil).render())
+
+		require.Contains(t, view, "● pinned model",
+			"the model list reads what the mark opens with, like the tree does")
+	})
+
 	t.Run("every row starts at the same column", func(t *testing.T) {
 		view := plain(modelPicker(t, []string{"fake/c"}).render())
 
@@ -152,10 +159,13 @@ func TestPickerMarks(t *testing.T) {
 		require.Contains(t, lineOf(view, "fake: b-real"), "current")
 	})
 
-	t.Run("an unpinned list shows no pin mark", func(t *testing.T) {
+	t.Run("an unpinned list shows no pin mark on its rows", func(t *testing.T) {
 		view := plain(modelPicker(t, nil).render())
 
-		require.NotContains(t, view, "●")
+		for _, ref := range []string{"fake: a-real", "fake: b-real", "fake: c-real"} {
+			require.NotContains(t, lineOf(view, ref), "●",
+				"no row opens with the mark, though the header still legends it")
+		}
 	})
 
 	t.Run("the model list names the pin chord", func(t *testing.T) {
