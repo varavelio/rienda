@@ -19,6 +19,7 @@ import (
 	"github.com/varavelio/rienda/internal/filecomplete"
 	"github.com/varavelio/rienda/internal/llm"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/slash"
 	"github.com/varavelio/rienda/internal/tokens"
 )
 
@@ -623,6 +624,13 @@ type modelConfig struct {
 	// scanFiles reads the project paths that complete a mention, or nil when
 	// the interface offers no completion.
 	scanFiles fileScanner
+
+	// slashCommands lists the custom command definitions the prompt expands.
+	slashCommands []slash.Command
+
+	// slashDiagnostics reports the command files skipped at startup, shown as
+	// notices so a broken file never blocks the interface.
+	slashDiagnostics []string
 }
 
 // model is the Bubble Tea model of the interactive interface.
@@ -765,6 +773,16 @@ type model struct {
 	// against, read again whenever a mention opens.
 	candidates []filecomplete.Suggestion
 
+	// slashCommands lists the custom command definitions the prompt expands.
+	slashCommands []slash.Command
+
+	// slashDiagnostics reports the command files skipped at startup. They
+	// reseed the transcript on every reload, so a rebuild never drops them.
+	slashDiagnostics []string
+
+	// slash is the state of the command completion the prompt opens with a /.
+	slash slashMenu
+
 	// interactor answers the questions the extensions of a run ask the user
 	// and shows their notices. A question moves the interface to its own
 	// screen; a notice lands in the transcript.
@@ -810,23 +828,25 @@ func newModel(cfg modelConfig) *model {
 	input.SetHeight(minInputRows)
 
 	built := &model{
-		agents:        cfg.agents,
-		selected:      cfg.selected,
-		workspace:     cfg.workspace,
-		phase:         startPhase(cfg),
-		preparing:     selectedAgentID(cfg),
-		preferences:   defaultPreferences(),
-		input:         input,
-		rename:        newRenameInput(styles, defaultDarkBackground),
-		conversation:  newConversation(),
-		hasDarkBG:     defaultDarkBackground,
-		newSession:    cfg.newSession,
-		resumeSession: cfg.resumeSession,
-		newRunContext: cfg.newRunContext,
-		scanFiles:     cfg.scanFiles,
-		scanSessions:  cfg.scanSessions,
-		styles:        styles,
-		interactor:    cfg.interactorOrDetached(),
+		agents:           cfg.agents,
+		selected:         cfg.selected,
+		workspace:        cfg.workspace,
+		phase:            startPhase(cfg),
+		preparing:        selectedAgentID(cfg),
+		preferences:      defaultPreferences(),
+		input:            input,
+		rename:           newRenameInput(styles, defaultDarkBackground),
+		conversation:     newConversation(),
+		hasDarkBG:        defaultDarkBackground,
+		newSession:       cfg.newSession,
+		resumeSession:    cfg.resumeSession,
+		newRunContext:    cfg.newRunContext,
+		scanFiles:        cfg.scanFiles,
+		scanSessions:     cfg.scanSessions,
+		styles:           styles,
+		interactor:       cfg.interactorOrDetached(),
+		slashCommands:    cfg.slashCommands,
+		slashDiagnostics: cfg.slashDiagnostics,
 	}
 	built.tree = newTreeScreen(built.treeText, styles, defaultDarkBackground)
 	built.buildLists(cfg.sessions)
@@ -2078,6 +2098,9 @@ func (m *model) activateCommand(index int) tea.Cmd {
 
 // handleChatKey submits prompts, interrupts runs and scrolls the transcript.
 func (m *model) handleChatKey(key tea.KeyPressMsg) tea.Cmd {
+	if cmd, handled := m.handleSlashKey(key); handled {
+		return cmd
+	}
 	if cmd, handled := m.handleMentionKey(key); handled {
 		return cmd
 	}
@@ -2238,15 +2261,46 @@ func (m *model) enterChat(prepared Session) tea.Cmd {
 	return m.input.Focus()
 }
 
-// submit sends the prompt held by the input to the agent.
+// resolveSlash expands a leading-slash prompt through the loaded custom
+// commands. It reports false for unknown commands after recording a notice,
+// so the caller sends nothing to the engine.
+func (m *model) resolveSlash(prompt string) (string, bool) {
+	name, argsRaw, ok := slash.ParseInvocation(prompt)
+	if !ok {
+		m.transcript.addNotice("unknown command " + prompt)
+		return "", false
+	}
+	for _, cmd := range m.slashCommands {
+		if cmd.ID == name {
+			return slash.Expand(cmd.Template, argsRaw), true
+		}
+	}
+	m.transcript.addNotice("unknown command /" + name)
+	return "", false
+}
+
 func (m *model) submit() tea.Cmd {
 	prompt := strings.TrimSpace(m.input.Value())
 	if prompt == "" || m.running || m.session == nil || m.runnable != nil {
 		return nil
 	}
 
+	if strings.HasPrefix(prompt, "/") {
+		expanded, ok := m.resolveSlash(prompt)
+		if !ok {
+			m.input.Reset()
+			m.mention = mention{}
+			m.slash = slashMenu{}
+			m.syncLayout()
+			m.refreshTranscript()
+			return nil
+		}
+		prompt = expanded
+	}
+
 	m.input.Reset()
 	m.mention = mention{}
+	m.slash = slashMenu{}
 	m.rewound = false
 	m.fork = false
 	m.status = ""
@@ -2534,7 +2588,7 @@ func (m *model) syncLayout() {
 func (m *model) transcriptHeight() int {
 	return max(
 		1,
-		m.height-m.headerBlockRows()-m.activityHeight()-m.mentionHeight()-inputBoxRows-
+		m.height-m.headerBlockRows()-m.activityHeight()-m.mentionHeight()-m.slashHeight()-inputBoxRows-
 			m.hintLines()-m.input.Height(),
 	)
 }
@@ -2652,6 +2706,9 @@ func (m *model) reloadTranscript() {
 	displayed := m.session.DisplayedBranch()
 	seed := displayAgent(branch, displayed, m.session.Info().Agent)
 	m.transcript.load(displayed, seed, m.modelNamer())
+	for _, diagnostic := range m.slashDiagnostics {
+		m.transcript.addNotice(diagnostic)
+	}
 	m.invalidateTranscript()
 	m.refreshTranscript()
 }

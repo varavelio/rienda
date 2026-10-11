@@ -108,6 +108,7 @@ func (m *model) syncMention() tea.Cmd {
 // conversation. It is called once the prompt may have changed.
 func (m *model) syncPrompt() tea.Cmd {
 	cmd := m.syncMention()
+	m.syncSlash()
 	m.syncLayout()
 	return cmd
 }

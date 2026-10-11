@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/varavelio/rienda/internal/harness"
+	"github.com/varavelio/rienda/internal/slash"
 )
 
 // Run executes the run command: it prepares one session, either a new one
@@ -63,6 +64,18 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("a prompt is required: use --prompt")
 	}
 
+	// A leading slash resolves a custom command the same way the interface
+	// resolves it: known commands expand to final text, unknown ones fail
+	// without a run so scripts notice the typo instead of sending it.
+	prompt = strings.TrimSpace(prompt)
+	if strings.HasPrefix(prompt, "/") {
+		expanded, err := resolveSlash(prompt, stderr)
+		if err != nil {
+			return err
+		}
+		prompt = expanded
+	}
+
 	// Cancellation reaches the engine, which closes the run cleanly and
 	// leaves the session ready to resume.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -84,6 +97,37 @@ func Run(args []string, stdout, stderr io.Writer) error {
 
 	_, _ = fmt.Fprintf(stderr, "session: %s\n", session.ID())
 	return render(session.Run(ctx, prompt), stdout, stderr)
+}
+
+// resolveSlash expands a leading-slash prompt through the global custom
+// commands. Broken files surface as warnings on stderr without blocking the
+// run; an unknown command is an error and runs nothing.
+func resolveSlash(prompt string, stderr io.Writer) (string, error) {
+	name, argsRaw, ok := slash.ParseInvocation(prompt)
+	if !ok {
+		return "", fmt.Errorf("run: unknown command %s", prompt)
+	}
+	dir, err := slash.DefaultDir()
+	if err != nil {
+		return "", fmt.Errorf("run: %w", err)
+	}
+	commands, loadErr := slash.LoadAll(dir)
+	if loadErr != nil {
+		type joiner interface{ Unwrap() []error }
+		if joined, ok := loadErr.(joiner); ok {
+			for _, err := range joined.Unwrap() {
+				_, _ = fmt.Fprintf(stderr, "warning: %s\n", err.Error())
+			}
+		} else {
+			_, _ = fmt.Fprintf(stderr, "warning: %s\n", loadErr.Error())
+		}
+	}
+	for _, cmd := range commands {
+		if cmd.ID == name {
+			return slash.Expand(cmd.Template, argsRaw), nil
+		}
+	}
+	return "", fmt.Errorf("run: unknown command /%s", name)
 }
 
 // runUsage prints the flags of the run command.

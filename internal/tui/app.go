@@ -15,6 +15,7 @@ import (
 	"github.com/varavelio/rienda/internal/files"
 	"github.com/varavelio/rienda/internal/harness"
 	"github.com/varavelio/rienda/internal/session"
+	"github.com/varavelio/rienda/internal/slash"
 	"github.com/varavelio/rienda/internal/workdir"
 )
 
@@ -46,6 +47,14 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 
+	slashCommands, slashErr := slash.LoadAll(mustSlashDir())
+	var slashDiagnostics []string
+	if slashErr != nil {
+		for _, err := range splitJoined(slashErr) {
+			slashDiagnostics = append(slashDiagnostics, err.Error())
+		}
+	}
+
 	// The interactor answers the questions the extensions of a run ask the
 	// user and shows their notices. It attaches to the program once it
 	// exists; with auto-approve the harness answers without asking.
@@ -64,12 +73,14 @@ func Run(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 
 	app := newModel(modelConfig{
-		interactor: interactor,
-		agents:     definitions,
-		selected:   selected,
-		requested:  opts.AgentID != "",
-		workspace:  workspaceName(opts),
-		sessions:   listSessions(opts),
+		interactor:       interactor,
+		agents:           definitions,
+		slashCommands:    slashCommands,
+		slashDiagnostics: slashDiagnostics,
+		selected:         selected,
+		requested:        opts.AgentID != "",
+		workspace:        workspaceName(opts),
+		sessions:         listSessions(opts),
 		scanSessions: func() []session.Info {
 			return listSessions(opts)
 		},
@@ -135,6 +146,27 @@ func newFileScanner(opts options) fileScanner {
 	return func() ([]filecomplete.Suggestion, error) {
 		return filecomplete.List(listing)
 	}
+}
+
+// mustSlashDir returns the global commands directory, or empty when the home
+// directory cannot be located, in which case no command is offered and the
+// interface still opens.
+func mustSlashDir() string {
+	dir, err := slash.DefaultDir()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// splitJoined flattens a joined error into its members, so diagnostics read
+// one file per line in stable order.
+func splitJoined(err error) []error {
+	type joiner interface{ Unwrap() []error }
+	if joined, ok := err.(joiner); ok {
+		return joined.Unwrap()
+	}
+	return []error{err}
 }
 
 // loadAgents returns the agent definitions available to the interface. It

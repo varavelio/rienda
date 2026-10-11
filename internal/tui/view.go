@@ -938,8 +938,12 @@ func (m *model) viewChat() string {
 	if m.activityHeight() > 0 {
 		parts = append(parts, m.activityBlock())
 	}
-	// The completion popup shares the rows of the conversation, so it only
-	// takes the ones the terminal can spare.
+	// The completion popups share the rows of the conversation, so they only
+	// take the ones the terminal can spare. Only one popup is ever active:
+	// the slash token completes on whitespace and hands the prompt to mentions.
+	if height := m.slashHeight(); height > 0 {
+		parts = append(parts, m.slashList(height))
+	}
 	if height := m.mentionHeight(); height > 0 {
 		parts = append(parts, m.mentionList(height))
 	}
@@ -1499,7 +1503,11 @@ func (m *model) chromeSource() (identity, hints string) {
 func (m *model) chromeCaps(identityWant, hintWant int) (identityCap, hintCap int) {
 	fixed := listPromptRows + listFilterRows + listFooterFixedRows + 1
 	if m.phase == phaseChat {
-		fixed = inputBoxRows + m.input.Height() + 1 + m.activityHeight() + m.mentionHeight()
+		// Completion popups share the rows of the conversation, never the
+		// rows of the chrome: they shrink the transcript through
+		// transcriptHeight, so counting them here would trim the footer
+		// every time a popup opens.
+		fixed = inputBoxRows + m.input.Height() + 1 + m.activityHeight()
 	}
 	room := m.height - fixed
 	identityCap = min(identityWant, max(1, room-headerFixedRows-1))

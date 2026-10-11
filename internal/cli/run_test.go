@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -107,4 +108,52 @@ func TestRun(t *testing.T) {
 
 		require.ErrorContains(t, err, "is not defined")
 	})
+}
+
+// TestResolveSlash verifies slash expansion of non-interactive prompts.
+func TestResolveSlash(t *testing.T) {
+	t.Run("expands a known command", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		writeSlash(t, home, "test", "Run tests", "Run tests: $*")
+		got, err := resolveSlash("/test --coverage", &strings.Builder{})
+		require.NoError(t, err)
+		require.Equal(t, "Run tests: --coverage", got)
+	})
+	t.Run("fails unknown without a run", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		_, err := resolveSlash("/nope x", &strings.Builder{})
+		require.ErrorContains(t, err, "unknown command /nope")
+	})
+	t.Run("rejects a lone slash", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		_, err := resolveSlash("/", &strings.Builder{})
+		require.ErrorContains(t, err, "unknown command")
+	})
+	t.Run("warns on broken files and still expands", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		writeSlash(t, home, "good", "Good", "Good $*")
+		writeBrokenSlash(t, home, "bad")
+		var stderr strings.Builder
+		got, err := resolveSlash("/good x", &stderr)
+		require.NoError(t, err)
+		require.Equal(t, "Good x", got)
+		require.Contains(t, stderr.String(), "bad.md")
+	})
+}
+
+func writeSlash(t *testing.T, home, id, description, template string) {
+	t.Helper()
+	dir := filepath.Join(home, ".rienda", "commands")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	contents := "---\ndescription: " + description + "\n---\n" + template + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".md"), []byte(contents), 0o600))
+}
+
+func writeBrokenSlash(t *testing.T, home, id string) {
+	t.Helper()
+	dir := filepath.Join(home, ".rienda", "commands")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".md"), []byte("broken\n"), 0o600))
 }
