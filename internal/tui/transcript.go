@@ -212,8 +212,11 @@ func (t *transcript) finishTurn(elapsed time.Duration) {
 // not stored: it is derived from the moment the turn opened, the user message
 // that started it, and the moment it closed, the assistant message that
 // answered it, so a slow provider that takes minutes to answer is reported
-// like any other turn.
+// like any other turn. The switches of one kind that follow one another are
+// folded into the change they amount to, so a burst of model or thinking
+// changes reads as the single one that matters.
 func (t *transcript) load(entries []session.Entry, agent string, name modelNameFunc) {
+	entries = collapseSwitches(entries)
 	var opened time.Time
 	for _, entry := range entries {
 		// The branch is linear, so the agent of every turn is the one the
@@ -391,6 +394,119 @@ func nameModel(name modelNameFunc, ref string) string {
 		return ref
 	}
 	return name(ref)
+}
+
+// collapseSwitches folds the switches of one kind that follow one another into
+// the single change they amount to: the value the first one left and the value
+// the last one reached. Cycling a model through five options is one change of
+// mind in effect, so the conversation and the tree show the change that matters
+// rather than every step of the cycle. A run that returns to where it started, a
+// model cycled back to itself, changes nothing and leaves no line at all. The
+// entries that remain keep their identifiers and their place, and the turns that
+// hung from a switch the fold dropped hang from the one that remains, so the
+// shape of the conversation survives the fold.
+func collapseSwitches(entries []session.Entry) []session.Entry {
+	// dropped marks the switches the fold removes, and dropTo records, for each
+	// of them, the entry the turns that followed it now hang from.
+	dropped := map[string]bool{}
+	dropTo := map[string]string{}
+	// reached holds, for the switch that opens a folded run, the value the run
+	// reached, which is the one the switch that remains selects.
+	reached := map[string]string{}
+
+	for at := 0; at < len(entries); {
+		entry := entries[at]
+		if !foldsSwitch(entry.Kind) {
+			at++
+			continue
+		}
+		// A run is the switches of one kind that hang from one another in the
+		// order they were written: a turn in between, or a switch of the other
+		// kind, ends it.
+		end := at
+		for end+1 < len(entries) &&
+			entries[end+1].Kind == entry.Kind &&
+			entries[end+1].ParentID == entries[end].ID {
+			end++
+		}
+		left, _ := switchEnds(entry)
+		_, to := switchEnds(entries[end])
+		if left == to {
+			// The run returns to where it started, so it changed nothing: it
+			// leaves no switch, and what followed it hangs from the entry the
+			// run hung from.
+			for index := at; index <= end; index++ {
+				dropped[entries[index].ID] = true
+				dropTo[entries[index].ID] = entry.ParentID
+			}
+		} else {
+			// The run is the one change the switch that opens it records: what
+			// the first left and what the last reached.
+			reached[entry.ID] = to
+			for index := at + 1; index <= end; index++ {
+				dropped[entries[index].ID] = true
+				dropTo[entries[index].ID] = entry.ID
+			}
+		}
+		at = end + 1
+	}
+
+	folded := make([]session.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if dropped[entry.ID] {
+			continue
+		}
+		if to, ok := reached[entry.ID]; ok {
+			setSwitchReach(&entry, to)
+		}
+		entry.ParentID = resolveDrop(dropTo, entry.ParentID)
+		folded = append(folded, entry)
+	}
+	return folded
+}
+
+// resolveDrop resolves the entry a turn hangs from once the fold is applied: it
+// follows the drops the fold recorded until it reaches an entry that remains,
+// so a run folded under another never leaves a turn hanging from a switch that
+// disappeared.
+func resolveDrop(dropTo map[string]string, parent string) string {
+	for {
+		next, found := dropTo[parent]
+		if !found {
+			return parent
+		}
+		parent = next
+	}
+}
+
+// foldsSwitch reports whether the switches of a kind fold into one when they
+// follow one another. A model and a thinking level are settings the reader
+// cycles through, so a burst of them is one change in effect. The agent is the
+// voice that speaks rather than a setting the reader flips, so its switches
+// always stand alone.
+func foldsSwitch(kind session.Kind) bool {
+	return kind == session.KindModel || kind == session.KindThinking
+}
+
+// switchEnds returns the value a foldable switch leaves and the value it
+// reaches: the model references of a model switch, the thinking levels of a
+// thinking one. A folded run reads the leave of its first switch and the reach
+// of its last, so the one change it shows is the change the run really made.
+func switchEnds(entry session.Entry) (left, to string) {
+	if entry.Kind == session.KindThinking {
+		return entry.PreviousThinkingLevel, entry.ThinkingLevel
+	}
+	return entry.PreviousModelRef, entry.ModelRef
+}
+
+// setSwitchReach records the value a folded run reached on the switch that
+// remains, so its transition ends where the run ended.
+func setSwitchReach(entry *session.Entry, to string) {
+	if entry.Kind == session.KindThinking {
+		entry.ThinkingLevel = to
+		return
+	}
+	entry.ModelRef = to
 }
 
 // addTool appends a tool invocation to the transcript. The invocation opens a

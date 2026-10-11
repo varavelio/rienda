@@ -680,4 +680,114 @@ func TestTranscriptSwitch(t *testing.T) {
 	t.Run("keeps a switch out of the stops the reader jumps between", func(t *testing.T) {
 		require.False(t, isTurn(entrySwitch))
 	})
+
+	t.Run("folds the switches that follow one another into one", func(t *testing.T) {
+		var folded transcript
+
+		folded.load([]session.Entry{
+			switchEntry("m1", "u0", session.KindModel, "fake/a", "fake/b"),
+			switchEntry("m2", "m1", session.KindModel, "fake/b", "fake/c"),
+			switchEntry("m3", "m2", session.KindModel, "fake/c", "fake/d"),
+		}, "coder", nil)
+
+		require.Len(t, folded.entries, 1)
+		require.Equal(t, "fake/a → fake/d", folded.entries[0].text(),
+			"a model cycled through three options is one change in effect")
+	})
+}
+
+// switchEntry builds a switch of the given kind that hangs from parent and
+// moves the branch from left to right, the way the session records one.
+func switchEntry(id, parent string, kind session.Kind, left, to string) session.Entry {
+	entry := session.Entry{ID: id, ParentID: parent, Kind: kind}
+	if kind == session.KindThinking {
+		entry.PreviousThinkingLevel = left
+		entry.ThinkingLevel = to
+		return entry
+	}
+	entry.PreviousModelRef = left
+	entry.ModelRef = to
+	return entry
+}
+
+func TestCollapseSwitches(t *testing.T) {
+	t.Run("folds a run of model switches into the change it amounts to", func(t *testing.T) {
+		folded := collapseSwitches([]session.Entry{
+			switchEntry("m1", "u0", session.KindModel, "fake/a", "fake/b"),
+			switchEntry("m2", "m1", session.KindModel, "fake/b", "fake/c"),
+			switchEntry("m3", "m2", session.KindModel, "fake/c", "fake/d"),
+		})
+
+		require.Len(t, folded, 1)
+		require.Equal(t, "m1", folded[0].ID)
+		require.Equal(t, "fake/a", folded[0].PreviousModelRef)
+		require.Equal(t, "fake/d", folded[0].ModelRef)
+	})
+
+	t.Run("drops a run that returns to where it started", func(t *testing.T) {
+		folded := collapseSwitches([]session.Entry{
+			switchEntry("m1", "u0", session.KindModel, "fake/a", "fake/b"),
+			switchEntry("m2", "m1", session.KindModel, "fake/b", "fake/a"),
+			switchEntry("t1", "m2", session.KindThinking, "", "high"),
+		})
+
+		require.Len(t, folded, 1)
+		require.Equal(t, "t1", folded[0].ID, "the run that changed nothing leaves no switch")
+		require.Equal(t, "u0", folded[0].ParentID,
+			"the turn after a dropped run hangs from the entry the run hung from")
+	})
+
+	t.Run("keeps switches of different kinds apart", func(t *testing.T) {
+		folded := collapseSwitches([]session.Entry{
+			switchEntry("m1", "u0", session.KindModel, "fake/a", "fake/b"),
+			switchEntry("t1", "m1", session.KindThinking, "", "high"),
+			switchEntry("m2", "t1", session.KindModel, "fake/b", "fake/c"),
+		})
+
+		require.Len(t, folded, 3, "a thinking switch between two model ones breaks the run")
+	})
+
+	t.Run("starts a new run when a turn comes between", func(t *testing.T) {
+		folded := collapseSwitches([]session.Entry{
+			switchEntry("m1", "u0", session.KindModel, "fake/a", "fake/b"),
+			{
+				ID:       "u1",
+				ParentID: "m1",
+				Kind:     session.KindMessage,
+				Message:  textMessage(llm.RoleUser, "hi"),
+			},
+			switchEntry("m2", "u1", session.KindModel, "fake/b", "fake/c"),
+		})
+
+		require.Len(t, folded, 3)
+		require.Equal(t, "fake/a", folded[0].PreviousModelRef)
+		require.Equal(t, "fake/b", folded[0].ModelRef, "a switch away from a turn is not folded")
+	})
+
+	t.Run("folds a run of thinking switches", func(t *testing.T) {
+		folded := collapseSwitches([]session.Entry{
+			switchEntry("t1", "u0", session.KindThinking, "", "high"),
+			switchEntry("t2", "t1", session.KindThinking, "high", "low"),
+		})
+
+		require.Len(t, folded, 1)
+		require.Equal(t, "", folded[0].PreviousThinkingLevel)
+		require.Equal(t, "low", folded[0].ThinkingLevel)
+	})
+
+	t.Run("re-hangs the turns that followed a folded run", func(t *testing.T) {
+		folded := collapseSwitches([]session.Entry{
+			switchEntry("m1", "u0", session.KindModel, "fake/a", "fake/b"),
+			switchEntry("m2", "m1", session.KindModel, "fake/b", "fake/c"),
+			{
+				ID:       "u1",
+				ParentID: "m2",
+				Kind:     session.KindMessage,
+				Message:  textMessage(llm.RoleUser, "hi"),
+			},
+		})
+
+		require.Len(t, folded, 2)
+		require.Equal(t, "m1", folded[1].ParentID, "the turn hangs from the switch that remains")
+	})
 }

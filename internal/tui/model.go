@@ -1874,8 +1874,8 @@ func (m *model) closeTree() tea.Cmd {
 // query opens clean and the highlight lands on the turn the session is at, so
 // the tree opens where the conversation stands.
 func (m *model) buildTree() {
-	m.tree.entries = m.session.Tree()
-	m.tree.branch = m.session.Branch()
+	m.tree.entries = collapseSwitches(m.session.Tree())
+	m.tree.branch = collapseSwitches(m.session.Branch())
 	m.tree.owner = m.session.Info().Agent
 	m.tree.name = m.modelNamer()
 	m.tree.folded = make(map[string]bool)

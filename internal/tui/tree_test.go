@@ -2,6 +2,7 @@ package tui
 
 import (
 	"maps"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -815,5 +816,24 @@ func TestTreeSwitch(t *testing.T) {
 			"Model switch: Fake Provider · Test Model → Fake Provider · Other Model",
 			"the tree reads the names the interface shows elsewhere",
 		)
+	})
+
+	t.Run("folds the model switches that follow one another into one", func(t *testing.T) {
+		m, stored := treeModel(t,
+			textMessage(llm.RoleUser, "hello"),
+			textMessage(llm.RoleAssistant, "hi"),
+		)
+		initial := stored.store.ActiveModel()
+		require.NoError(t, stored.store.SetModel(t.Context(), "fake/other-model"))
+		require.NoError(t, stored.store.SetModel(t.Context(), "fake/third-model"))
+		m.buildTree()
+		rendered := plain(m.render())
+
+		require.Equal(t, 1, strings.Count(rendered, "Model switch:"),
+			"a model cycled through three options is one change in effect")
+		require.Contains(t, rendered, initial+" → fake/third-model",
+			"the change reads from the model the cycle left to the one it reached")
+		require.NotContains(t, rendered, "fake/other-model",
+			"the model the cycle passed through leaves no step of its own")
 	})
 }

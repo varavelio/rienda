@@ -176,7 +176,12 @@
 // being lost by reading the conversation instead of the tree. Both read as
 // metadata rather than as a voice of the conversation, and the selection
 // records the value it replaced when it is written, so the transition is read
-// off the session file and never replays the branch it belongs to.
+// off the session file and never replays the branch it belongs to. Model and
+// thinking changes are folded when they follow one another: a cycle through
+// several options reads as the single change it amounts to, the value the first
+// left and the one the last reached, and a cycle that returns to where it
+// started leaves no row at all. The agent is the voice that speaks rather than
+// a setting the reader flips, so its switches never fold.
 //
 // An @ in the prompt opens the completion of the files of the project, so the
 // user never has to remember a path to point the model at a file. The
