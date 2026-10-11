@@ -800,7 +800,7 @@ func treeName(node treeNode) string {
 	switch {
 	case node.entry.Kind == session.KindCompaction:
 		return "Compaction:"
-	case node.entry.Kind == session.KindAgent || node.entry.Kind == session.KindModel:
+	case isSelection(node.entry.Kind):
 		return selectionLabel(node.entry.Kind) + ":"
 	case node.entry.Message.Role == llm.RoleUser:
 		return "You:"
@@ -815,9 +815,7 @@ func treeName(node treeNode) string {
 // both take the faint style the conversation also gives them.
 func (m *model) treeNameStyle(entry session.Entry) lipgloss.Style {
 	switch {
-	case entry.Kind == session.KindCompaction,
-		entry.Kind == session.KindAgent,
-		entry.Kind == session.KindModel:
+	case entry.Kind == session.KindCompaction, isSelection(entry.Kind):
 		return m.styles.metadata.title
 	case entry.Message.Role == llm.RoleUser:
 		return m.styles.user.title

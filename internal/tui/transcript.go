@@ -38,8 +38,9 @@ const (
 	// entryCompaction reports that the conversation before it was summarized
 	// into a checkpoint.
 	entryCompaction
-	// entrySwitch reports a selection of what the branch runs, the agent or
-	// the model that changed in the middle of the conversation.
+	// entrySwitch reports a selection of what the branch runs, the agent, the
+	// model or the thinking level that changed in the middle of the
+	// conversation.
 	entrySwitch
 )
 
@@ -241,11 +242,11 @@ func (t *transcript) load(entries []session.Entry, agent string, name modelNameF
 // selection of what the branch runs carry no message of their own, so they are
 // shown for what they are instead of being folded as conversation.
 func (t *transcript) fold(entry session.Entry, agent string, name modelNameFunc) {
-	switch entry.Kind {
-	case session.KindCompaction:
+	switch {
+	case entry.Kind == session.KindCompaction:
 		t.addCompaction()
 		return
-	case session.KindAgent, session.KindModel:
+	case isSelection(entry.Kind):
 		t.addSwitch(entry, name)
 		return
 	}
@@ -293,10 +294,11 @@ func hasBlock(blocks []llm.Block, kind llm.BlockType) bool {
 	return slices.ContainsFunc(blocks, func(block llm.Block) bool { return block.Type == kind })
 }
 
-// addSwitch appends a selection of what the branch runs: the agent or the
-// model that changed in the middle of the conversation. The conversation shows
-// it as a line of metadata between two turns, exactly as the tree shows it as a
-// node of its own, so a switch is never lost by reading one of the two.
+// addSwitch appends a selection of what the branch runs: the agent, the model
+// or the thinking level that changed in the middle of the conversation. The
+// conversation shows it as a line of metadata between two turns, exactly as the
+// tree shows it as a node of its own, so a switch is never lost by reading one
+// of the two.
 func (t *transcript) addSwitch(selection session.Entry, name modelNameFunc) {
 	t.begin()
 	t.push(entry{
@@ -311,29 +313,69 @@ func (t *transcript) addSwitch(selection session.Entry, name modelNameFunc) {
 // "Agent switch". The tree and the conversation both label a switch with it, so
 // it is written once and the two views can never disagree.
 func selectionLabel(kind session.Kind) string {
-	if kind == session.KindModel {
+	switch kind {
+	case session.KindModel:
 		return "Model switch"
+	case session.KindThinking:
+		return "Thinking switch"
+	default:
+		return "Agent switch"
 	}
-	return "Agent switch"
+}
+
+// isSelection reports whether an entry is a selection of what the branch runs:
+// the agent, the model or the thinking level. A selection carries no message of
+// its own: it moves the branch that hangs from it onto another choice, and both
+// the tree and the conversation draw it as the transition it wrote. Writing the
+// kinds once here is what keeps the two views and every check around them in
+// agreement about what a selection is.
+func isSelection(kind session.Kind) bool {
+	return kind == session.KindAgent ||
+		kind == session.KindModel ||
+		kind == session.KindThinking
 }
 
 // selectionText returns the transition a selection wrote, as in
 // "coder → reviewer". The selection records the value it replaced when it is
 // written, so the transition reads off the entry alone. A selection that does
 // not carry it, which is the case of the ones written before the value was
-// recorded, reads as the value it selects. A model transition is named the way
-// the rest of the interface names a model, through name, so the reader never
-// has to decode a raw reference; a nil name leaves the references as they are.
+// recorded, reads as the value it selects.
 func selectionText(selection session.Entry, name modelNameFunc) string {
-	previous, next := selection.PreviousAgentID, selection.AgentID
-	if selection.Kind == session.KindModel {
-		previous, next = nameModel(name, selection.PreviousModelRef),
-			nameModel(name, selection.ModelRef)
-	}
+	previous, next := selectionValues(selection, name)
 	if previous == "" {
 		return next
 	}
 	return previous + " → " + next
+}
+
+// selectionValues returns the two ends of a transition, named the way the
+// interface names a value of the selection's kind: a model through name, a
+// thinking level by its mode, an agent by its identifier. A selection that
+// recorded no previous value returns an empty one, which is what makes the
+// transition read as the value it selects alone.
+func selectionValues(selection session.Entry, name modelNameFunc) (previous, next string) {
+	switch selection.Kind {
+	case session.KindModel:
+		previous = nameModel(name, selection.PreviousModelRef)
+		next = nameModel(name, selection.ModelRef)
+	case session.KindThinking:
+		previous = thinkingLabel(selection.PreviousThinkingLevel)
+		next = thinkingLabel(selection.ThinkingLevel)
+	default:
+		previous = selection.PreviousAgentID
+		next = selection.AgentID
+	}
+	return previous, next
+}
+
+// thinkingLabel names a thinking level for display: the level itself, or the
+// off mode the empty level selects, so a transition reads "off → high" instead
+// of ever showing a blank.
+func thinkingLabel(level string) string {
+	if level == "" {
+		return thinkingOff
+	}
+	return level
 }
 
 // modelNameFunc names a model reference for display. A nil value names a model

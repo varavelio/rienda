@@ -123,8 +123,15 @@ type Entry struct {
 	// ThinkingLevel is the thinking level a KindThinking entry selects, the
 	// wire level the level-based protocols receive and the budget carrier the
 	// budget-based ones resolve. It behaves exactly like ModelRef: it is a
-	// branch-owned selection, and the newest one of the branch wins.
+	// branch-owned selection, and the newest one of the branch wins. An empty
+	// level selects no thinking, the off mode.
 	ThinkingLevel string
+
+	// PreviousThinkingLevel is the thinking level the branch ran before a
+	// KindThinking entry selected ThinkingLevel. It is recorded like
+	// PreviousModelRef, so the transition reads off the entry alone. An empty
+	// level records that the branch ran no thinking before it, the off mode.
+	PreviousThinkingLevel string
 
 	// PreviousModelRef is the provider/model reference the branch ran before a
 	// KindModel entry selected ModelRef. It is recorded like PreviousAgentID,

@@ -35,6 +35,12 @@ type Header struct {
 
 	// Workdir is the absolute path the session runs commands in.
 	Workdir string
+
+	// Thinking is the thinking level the session starts on, empty for off. It
+	// is the state the session opens on, not a switch it made, so it lives here
+	// the way the model it starts on does and never shows as a switch. A change
+	// the branch makes later is a KindThinking entry, which wins over this.
+	Thinking string
 }
 
 // Info describes a stored session.
@@ -56,6 +62,10 @@ type Info struct {
 
 	// Model is the provider/model reference of the session.
 	Model string
+
+	// Thinking is the thinking level the session starts on, empty for off: the
+	// level the header records. The branch runs a newer one once it selects it.
+	Thinking string
 
 	// Workdir is the absolute path the session runs commands in.
 	Workdir string
@@ -124,6 +134,7 @@ func Create(
 ) (*Store, error) {
 	header.Agent = strings.TrimSpace(header.Agent)
 	header.Model = strings.TrimSpace(header.Model)
+	header.Thinking = strings.TrimSpace(header.Thinking)
 	switch {
 	case header.Agent == "":
 		return nil, errors.New("session: agent is required")
@@ -159,6 +170,7 @@ func Create(
 		Agent:     header.Agent,
 		Model:     header.Model,
 		Workdir:   header.Workdir,
+		Thinking:  header.Thinking,
 	})
 	if err != nil {
 		_ = file.Close()
@@ -178,6 +190,7 @@ func Create(
 			ID:        id,
 			Agent:     header.Agent,
 			Model:     header.Model,
+			Thinking:  header.Thinking,
 			Workdir:   header.Workdir,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -779,14 +792,16 @@ func (s *Store) ActiveThinking() string {
 }
 
 // activeThinking resolves the thinking level of the branch, assuming the
-// caller holds the lock.
+// caller holds the lock: the level the newest KindThinking entry selects, or
+// the one the session started on when the branch selects none. It answers the
+// same question activeModel does, in the same way.
 func (s *Store) activeThinking() string {
 	for _, entry := range slices.Backward(s.branch()) {
 		if entry.Kind == KindThinking {
 			return entry.ThinkingLevel
 		}
 	}
-	return ""
+	return s.info.Thinking
 }
 
 // SetThinking selects the thinking level the branch runs from now on. An
@@ -801,21 +816,23 @@ func (s *Store) SetThinking(ctx context.Context, level string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.activeThinking() == level {
+	previous := s.activeThinking()
+	if previous == level {
 		return nil
 	}
 
 	_, err := appendSelection(
 		s,
 		ctx,
-		Entry{Kind: KindThinking, ThinkingLevel: level},
+		Entry{Kind: KindThinking, ThinkingLevel: level, PreviousThinkingLevel: previous},
 		func(entry Entry) storedThinking {
 			return storedThinking{
-				Kind:          KindThinking,
-				ID:            entry.ID,
-				ParentID:      entry.ParentID,
-				CreatedAt:     entry.CreatedAt,
-				ThinkingLevel: entry.ThinkingLevel,
+				Kind:                  KindThinking,
+				ID:                    entry.ID,
+				ParentID:              entry.ParentID,
+				CreatedAt:             entry.CreatedAt,
+				ThinkingLevel:         entry.ThinkingLevel,
+				PreviousThinkingLevel: entry.PreviousThinkingLevel,
 			}
 		},
 	)
@@ -998,6 +1015,7 @@ func infoFrom(header storedHeader, entries []Entry, leaf, title string) Info {
 		Agent:       header.Agent,
 		ActiveAgent: activeAgentOf(header.Agent, entries, leaf),
 		Model:       header.Model,
+		Thinking:    header.Thinking,
 		Workdir:     header.Workdir,
 		Title:       effectiveTitle(title, entries),
 		Named:       title != "",

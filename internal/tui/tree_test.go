@@ -706,6 +706,22 @@ func TestTreeSwitch(t *testing.T) {
 		require.Equal(t, "fake/test-model → fake/other-model", nodes[3].text)
 	})
 
+	t.Run("draws a thinking selection as a node with its transition", func(t *testing.T) {
+		entries := []session.Entry{
+			turnEntry("m1", "", llm.RoleUser, "first"),
+			{ID: "t1", ParentID: "m1", Kind: session.KindThinking, ThinkingLevel: "high"},
+			turnEntry("m2", "t1", llm.RoleAssistant, "one"),
+		}
+
+		nodes := treeNodes(entries, entries, nil, "coder", nil)
+
+		require.Equal(t, []string{"m1", "t1", "m2"},
+			nodesField(nodes, func(node treeNode) string { return node.entry.ID }),
+			"a thinking selection is a node, like a model one")
+		require.Equal(t, "Thinking switch:", treeName(nodes[1]))
+		require.Equal(t, "off → high", nodes[1].text)
+	})
+
 	t.Run("names the models of a switch the way the interface does", func(t *testing.T) {
 		entries := switches()
 		name := func(ref string) string {
@@ -772,6 +788,12 @@ func TestTreeSwitch(t *testing.T) {
 			m.styles.metadata.title,
 			m.treeNameStyle(session.Entry{Kind: session.KindCompaction}),
 			"a checkpoint and a switch share the same faint style in the tree",
+		)
+		require.Equal(
+			t,
+			m.treeNameStyle(session.Entry{Kind: session.KindModel}),
+			m.treeNameStyle(session.Entry{Kind: session.KindThinking}),
+			"a thinking switch reads as secondary metadata, exactly like a model one",
 		)
 	})
 

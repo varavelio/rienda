@@ -677,24 +677,21 @@ func openSession(
 	if model == "" {
 		return nil, errors.New("harness: no model available; no provider offers models")
 	}
-	store, err := session.Create(ctx, place.dir, session.Header{
-		Agent:   definition.ID,
-		Model:   model,
-		Workdir: place.workdir,
-	}, id.NewIDGenerator())
-	if err != nil {
-		return nil, fmt.Errorf("harness: create session: %w", err)
-	}
 	// A new session of a model starts on the thinking level the user last
-	// picked for it, unless the command line named one.
+	// picked for it, unless the command line named one. It is the state the
+	// session opens on, not a switch it made, so it belongs to the header the
+	// way the model does and never shows as a switch in the conversation.
 	if thinkingLevel == "" {
 		thinkingLevel = rememberedThinking(opts, model)
 	}
-	if thinkingLevel != "" {
-		if err := store.SetThinking(ctx, thinkingLevel); err != nil {
-			closeStore(store)
-			return nil, fmt.Errorf("harness: %w", err)
-		}
+	store, err := session.Create(ctx, place.dir, session.Header{
+		Agent:    definition.ID,
+		Model:    model,
+		Workdir:  place.workdir,
+		Thinking: thinkingLevel,
+	}, id.NewIDGenerator())
+	if err != nil {
+		return nil, fmt.Errorf("harness: create session: %w", err)
 	}
 	return store, nil
 }

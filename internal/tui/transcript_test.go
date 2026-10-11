@@ -560,6 +560,27 @@ func TestSelectionText(t *testing.T) {
 
 		require.Equal(t, "coder → reviewer", selectionText(selection, displayName))
 	})
+
+	t.Run("names the thinking levels of a switch by their mode", func(t *testing.T) {
+		on := session.Entry{Kind: session.KindThinking, ThinkingLevel: "high"}
+		require.Equal(t, "off → high", selectionText(on, displayName),
+			"the empty level the branch ran before reads as off")
+
+		off := session.Entry{
+			Kind:                  session.KindThinking,
+			ThinkingLevel:         "",
+			PreviousThinkingLevel: "high",
+		}
+		require.Equal(t, "high → off", selectionText(off, displayName),
+			"turning the thinking off reads as a transition of its own")
+
+		move := session.Entry{
+			Kind:                  session.KindThinking,
+			ThinkingLevel:         "low",
+			PreviousThinkingLevel: "high",
+		}
+		require.Equal(t, "high → low", selectionText(move, displayName))
+	})
 }
 
 // TestTranscriptCompaction verifies the checkpoint block of the conversation.

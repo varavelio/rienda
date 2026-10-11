@@ -188,8 +188,7 @@ type treeNode struct {
 // the value it wrote.
 func (n treeNode) search() string {
 	text := n.text
-	switch n.entry.Kind {
-	case session.KindAgent, session.KindModel:
+	if isSelection(n.entry.Kind) {
 		text = selectionLabel(n.entry.Kind) + " " + text
 	}
 	if n.entry.Tag == "" {
@@ -371,8 +370,7 @@ func currentTurn(branch []session.Entry) string {
 func isTreeNode(entry session.Entry) bool {
 	return opensTurn(entry) || closesTurn(entry) ||
 		entry.Kind == session.KindCompaction ||
-		entry.Kind == session.KindAgent ||
-		entry.Kind == session.KindModel
+		isSelection(entry.Kind)
 }
 
 // nodeText returns the text of one node of the tree on a single line, so a node
@@ -380,10 +378,10 @@ func isTreeNode(entry session.Entry) bool {
 // selection wrote, or the note that names a checkpoint. A model transition is
 // named the way the rest of the interface names a model, through name.
 func nodeText(entry session.Entry, name modelNameFunc) string {
-	switch entry.Kind {
-	case session.KindCompaction:
+	switch {
+	case entry.Kind == session.KindCompaction:
 		return compactionBody
-	case session.KindAgent, session.KindModel:
+	case isSelection(entry.Kind):
 		return selectionText(entry, name)
 	}
 

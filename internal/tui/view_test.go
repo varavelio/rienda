@@ -2158,6 +2158,18 @@ func TestChatSwitch(t *testing.T) {
 		)
 	})
 
+	t.Run("renders a thinking switch as a line of the conversation", func(t *testing.T) {
+		m, stored := storeChat(t,
+			textMessage(llm.RoleUser, "first"),
+			textMessage(llm.RoleAssistant, "one"),
+		)
+		update(t, m, windowMsg(80, 40))
+		require.NoError(t, stored.store.SetThinking(t.Context(), "high"))
+		m.reloadTranscript()
+
+		require.Contains(t, plain(m.render()), "▌ Thinking switch: off → high")
+	})
+
 	t.Run("keeps a long switch inside the row", func(t *testing.T) {
 		m, stored := storeChat(t,
 			textMessage(llm.RoleUser, "first"),

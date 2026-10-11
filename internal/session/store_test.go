@@ -1680,6 +1680,59 @@ func TestThinkingSelection(t *testing.T) {
 		require.Equal(t, "high", reloaded.ActiveThinking())
 	})
 
+	t.Run("starts on the header level and only a change writes an entry", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent:    "coder",
+			Model:    "test/model",
+			Workdir:  dir,
+			Thinking: "high",
+		}, &stubGenerator{})
+		require.NoError(t, err)
+
+		require.Equal(t, "high", store.ActiveThinking(),
+			"the level the session opens on is the state it starts in")
+		require.Empty(t, store.Branch(),
+			"the starting level is the header, not a switch the session made")
+
+		require.NoError(t, store.SetThinking(context.Background(), "low"))
+		require.Equal(t, "low", store.ActiveThinking())
+		branch := store.Branch()
+		require.Len(t, branch, 1, "only the change writes an entry")
+		require.Equal(t, "high", branch[0].PreviousThinkingLevel,
+			"the change reads against the level the session opened on")
+	})
+
+	t.Run("records the level it replaced for the transition", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := Create(t.Context(), dir, Header{
+			Agent:   "coder",
+			Model:   "test/model",
+			Workdir: dir,
+		}, &stubGenerator{})
+		require.NoError(t, err)
+
+		require.NoError(t, store.SetThinking(context.Background(), "high"))
+		require.NoError(t, store.SetThinking(context.Background(), "low"))
+
+		branch := store.Branch()
+		require.Len(t, branch, 2)
+		require.Equal(t, "high", branch[0].ThinkingLevel)
+		require.Equal(t, "", branch[0].PreviousThinkingLevel,
+			"a session starts with no thinking, so the first entry replaced off")
+		require.Equal(t, "low", branch[1].ThinkingLevel)
+		require.Equal(t, "high", branch[1].PreviousThinkingLevel,
+			"the selection records the level it replaced")
+
+		id := store.ID()
+		require.NoError(t, store.Close())
+		reloaded, err := Open(dir, id, &stubGenerator{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reloaded.Close()) })
+		require.Equal(t, "high", reloaded.Entries()[1].PreviousThinkingLevel,
+			"the level it replaced survives reopening")
+	})
+
 	t.Run("off is an entry that turns an earlier level off", func(t *testing.T) {
 		dir := t.TempDir()
 		store, err := Create(t.Context(), dir, Header{

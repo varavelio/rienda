@@ -167,10 +167,11 @@
 // checkpoint that summarizes the oldest turns is a turn like any other: the
 // conversation renders it labeled Compaction where the compaction happened, and
 // the tree draws it as a node, so a branch shows at a glance where it was
-// summarized. A selection of what the branch runs, the agent or the model that
-// changed in the middle of the conversation, is drawn the same way, labeled
-// Agent switch or Model switch with the value it replaced and the one it wrote
-// as its message, so the whole change reads off the row. The conversation shows
+// summarized. A selection of what the branch runs, the agent, the model or the
+// thinking level that changed in the middle of the conversation, is drawn the
+// same way, labeled Agent switch, Model switch or Thinking switch with the
+// value it replaced and the one it wrote as its message, so the whole change
+// reads off the row. The conversation shows
 // it too, as a single faint row between two turns, which keeps a switch from
 // being lost by reading the conversation instead of the tree. Both read as
 // metadata rather than as a voice of the conversation, and the selection
